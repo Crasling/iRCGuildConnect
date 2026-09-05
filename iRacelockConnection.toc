@@ -6,6 +6,7 @@
 ## X-Website: https://github.com/Crasling/iRacelockConnection
 ## IconTexture: Interface\AddOns\iRacelockConnection\Images\Logo_iRC
 ## Category: Roleplay
+## X-Curse-Project-ID: 1682904
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
 ## RequiredDeps: HardcoreAchievements
