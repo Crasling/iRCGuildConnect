@@ -3,7 +3,6 @@
 ## Version: 0.2.3
 ## Notes: |cffff9716Guild-connected race progression|n|cFFFF0000Work in progress.|r
 ## Author: Crasling
-## X-Website: https://github.com/Crasling/iRacelockConnection
 ## IconTexture: Interface\AddOns\iRacelockConnection\Images\Logo_iRC
 ## Category: Roleplay
 ## X-Curse-Project-ID: 1682904
