@@ -1,6 +1,6 @@
 ## Interface: 11509
-## Title: |cffff9716iRacelockConnection |cFF00FF00v0.2.2|r
-## Version: 0.2.2
+## Title: |cffff9716iRacelockConnection |cFF00FF00v0.2.3|r
+## Version: 0.2.3
 ## Notes: |cffff9716Guild-connected race progression|n|cFFFF0000Work in progress.|r
 ## Author: Crasling
 ## X-Website: https://github.com/Crasling/iRacelockConnection
