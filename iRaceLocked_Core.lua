@@ -33,6 +33,13 @@ local DEFAULT_SETTINGS = {
     achievementScale = 1,
 }
 
+iRL.DefaultConnectionRules = {
+    nativeTongueOnly = false,
+    selfFoundOnly = false,
+    allowLevel60WithoutSelfFound = false,
+    sameRaceGroupsOnly = false,
+}
+
 iRL.LDBroker = LibStub and LibStub("LibDataBroker-1.1", true)
 iRL.LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
 
@@ -51,7 +58,7 @@ end
 
 function iRL:NormalizeName(name)
     if type(name) ~= "string" or name == "" then return "" end
-    return string.lower(name)
+    return string.lower((name:match("^([^-]+)") or name))
 end
 
 function iRL:GetSelfFoundState()
@@ -108,12 +115,67 @@ function iRL:GetConnection()
         iRLDB.connections[key] = connection
     end
     connection.members = connection.members or {}
+    connection.rules = connection.rules or {}
+    for key, value in pairs(self.DefaultConnectionRules) do
+        if connection.rules[key] == nil then connection.rules[key] = value end
+    end
     return connection
 end
 
 function iRL:IsGuildAdmin()
     local _, _, rankIndex = GetGuildInfo and GetGuildInfo("player")
     return type(rankIndex) == "number" and rankIndex <= 1
+end
+
+function iRL:IsGuildMaster()
+    local _, _, rankIndex = GetGuildInfo and GetGuildInfo("player")
+    return rankIndex == 0
+end
+
+function iRL:IsGuildMasterName(name)
+    if type(name) ~= "string" or not GetNumGuildMembers or not GetGuildRosterInfo then return false end
+    for index = 1, GetNumGuildMembers(true) do
+        local memberName, _, rankIndex = GetGuildRosterInfo(index)
+        if self:NormalizeName(memberName) == self:NormalizeName(name) then return rankIndex == 0 end
+    end
+    return false
+end
+
+function iRL:IsGuildMemberName(name)
+    if type(name) ~= "string" or not GetNumGuildMembers or not GetGuildRosterInfo then return false end
+    for index = 1, GetNumGuildMembers(true) do
+        local memberName = GetGuildRosterInfo(index)
+        if self:NormalizeName(memberName) == self:NormalizeName(name) then return true end
+    end
+    return false
+end
+
+function iRL:IsGuildOnlyGroup()
+    if not self:IsInGuildConnection() then return false end
+    local inRaid = IsInRaid and IsInRaid()
+    local memberCount = inRaid and (GetNumGroupMembers and GetNumGroupMembers() or 0) or (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0)
+    if memberCount < 1 then return false end
+    for index = 1, memberCount do
+        local unit = inRaid and "raid" .. index or "party" .. index
+        if (not UnitIsUnit or not UnitIsUnit(unit, "player")) and not self:IsGuildMemberName(UnitName(unit)) then return false end
+    end
+    return true
+end
+
+function iRL:GetConnectionRules()
+    local connection = self:GetConnection()
+    return connection and connection.rules or self.DefaultConnectionRules
+end
+
+function iRL:SetConnectionRule(key, value)
+    if not self:IsGuildMaster() or self.DefaultConnectionRules[key] == nil then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.rules[key] = value and true or false
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.Enforcement then self.Enforcement:Refresh() end
+    return true
 end
 
 iRL.Frame:RegisterEvent("ADDON_LOADED")

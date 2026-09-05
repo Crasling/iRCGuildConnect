@@ -194,15 +194,18 @@ function Dashboard:Refresh()
         end
     else
         frame.title:SetText("Connection leaderboard")
-        frame.subtitle:SetText("Ranks iRC members by iRacelockConnection points, then level. Statistics are tracked locally and shared by iRC only.")
-        setHeaders(frame, { "Member", "Points / Level", "Enemies / Bosses", "Jumps" })
+        frame.subtitle:SetText("Ranks iRC and compatible RaceLocked peers by points, then level. The source is shown with each shared statistic.")
+        setHeaders(frame, { "Member", "Points / Level", "Enemies / Dungeons", "Jumps / Source" })
         for _, member in ipairs(iRL:GetLeaderboard()) do
             count = count + 1
-            local stats = member.statistics or {}
+            local score = member.leaderboard or {}
+            local stats = score.statistics or {}
             local selectedMember = member
-            setRow(frame, count, { member.name, member.points .. " / " .. member.level, (stats.enemiesSlain or 0) .. " / " .. (stats.dungeonBosses or 0), tostring(stats.jumps or 0) }, GREEN, function()
-                iRL.AchievementsUI:Open(selectedMember.name)
-                if iRL:NormalizeName(selectedMember.name) ~= iRL:NormalizeName(iRL:GetPlayerName()) then iRL:RequestInspection(selectedMember.name) end
+            setRow(frame, count, { member.name, (score.points or 0) .. " / " .. (score.level or member.level), (stats.enemiesSlain or 0) .. " / " .. (stats.dungeonBosses or 0), tostring(stats.jumps or 0) .. " / " .. (score.source or "iRC") }, GREEN, function()
+                if selectedMember.profile then
+                    iRL.AchievementsUI:Open(selectedMember.name)
+                    if iRL:NormalizeName(selectedMember.name) ~= iRL:NormalizeName(iRL:GetPlayerName()) then iRL:RequestInspection(selectedMember.name) end
+                end
             end)
         end
     end

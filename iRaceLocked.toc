@@ -16,7 +16,10 @@ embeds.xml
 iRaceLocked_Core.lua
 iRaceLocked_Statistics.lua
 iRaceLocked_Connection.lua
+iRaceLocked_Enforcement.lua
+iRaceLocked_Compatibility.lua
 iRaceLocked_Guild.lua
+iRaceLocked_GuildChallenges.lua
 iRaceLocked_Achievements.lua
 iRaceLocked_AchievementsUI.lua
 iRaceLocked_ConnectionDashboard.lua

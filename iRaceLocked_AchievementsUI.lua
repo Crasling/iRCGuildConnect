@@ -93,7 +93,7 @@ local function getCategories()
             categories[#categories + 1] = achievement.category
         end
     end
-    categories[#categories + 1] = "Guild"
+    categories[#categories + 1] = "Guild Members"
     return categories
 end
 
@@ -174,7 +174,7 @@ function UI:Create()
         tab.category = category
         tab:SetScript("OnClick", function(self)
             frame.category = self.category
-            if self.category ~= "Guild" and not frame.subjectName then frame.subjectName = iRL:GetPlayerName() end
+            if self.category ~= "Guild Members" then frame.subjectName = iRL:GetPlayerName() end
             UI:Refresh()
         end)
         frame.tabs[category] = tab
@@ -276,7 +276,7 @@ local function updateMemberRows(frame)
     for _, row in ipairs(frame.achievementRows) do row:Hide() end
     frame.scrollContent:SetHeight(math.max(1, #profiles * 60))
     frame.scroll:SetVerticalScroll(0)
-    frame.contentTitle:SetText("Guild")
+    frame.contentTitle:SetText("Guild Members")
     frame.contentSubtitle:SetText("Select a guild member to inspect their shared achievement progress.")
 end
 
@@ -288,7 +288,7 @@ function UI:Refresh()
     frame.player:SetText(name .. "  " .. iRL.Colors.Gray .. race .. " " .. class .. " · Level " .. level .. iRL.Colors.Reset)
     frame.points.value:SetText(iRL.Achievements:GetPoints(completed))
     for category, tab in pairs(frame.tabs) do setTabAppearance(tab, frame.category == category) end
-    if frame.category == "Guild" then updateMemberRows(frame) else updateAchievementRows(frame, profile, completed) end
+    if frame.category == "Guild Members" then updateMemberRows(frame) else updateAchievementRows(frame, profile, completed) end
 end
 
 function UI:Open(subjectName)

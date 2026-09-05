@@ -171,12 +171,13 @@ end
 
 local generalContainer, generalContent = CreateTabContent()
 local connectionContainer, connectionContent = CreateTabContent()
+local guildRulesContainer, guildRulesContent = CreateTabContent()
 local aboutContainer, aboutContent = CreateTabContent()
 local iWRContainer, iWRContent = CreateTabContent()
 local iNIFContainer, iNIFContent = CreateTabContent()
 local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer }
+local tabContents = { generalContainer, connectionContainer, guildRulesContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer }
 local sidebarButtons = {}
 
 local function ShowTab(index)
@@ -196,18 +197,20 @@ local sidebarItems = {
     { type = "header", label = iRL.DisplayName },
     { type = "tab", label = "General", index = 1 },
     { type = "tab", label = "Connection", index = 2 },
-    { type = "tab", label = "About", index = 3 },
+    { type = "tab", label = "Guild Rules", index = 3 },
+    { type = "tab", label = "About", index = 4 },
     { type = "header", label = "Other Addons" },
-    { type = "tab", label = "iWillRemember", index = 4 },
-    { type = "tab", label = "iNeedIfYouNeed", index = 5 },
-    { type = "tab", label = "iSoundPlayer", index = 6 },
-    { type = "tab", label = "iSealTwist", index = 7 },
+    { type = "tab", label = "iWillRemember", index = 5 },
+    { type = "tab", label = "iNeedIfYouNeed", index = 6 },
+    { type = "tab", label = "iSoundPlayer", index = 7 },
+    { type = "tab", label = "iSealTwist", index = 8 },
 }
 local sidebarY = -6
 for _, item in ipairs(sidebarItems) do
     if item.type == "header" then
         local headerText = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         headerText:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 12, sidebarY - 2)
+        headerText:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
         headerText:SetText(item.label)
         sidebarY = sidebarY - 20
     else
@@ -288,6 +291,27 @@ _, y = CreateSettingsButton(connectionContent, "Broadcast my current status", 21
     iRL:Print("Guild connection status broadcast.")
 end)
 connectionContent:SetHeight(math.abs(y) + 20)
+
+local guildRulesStatus
+local nativeTongueCheck, selfFoundOnlyCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck
+y = -12
+_, y = CreateSectionHeader(guildRulesContent, "Guild Connection Rules", y)
+guildRulesStatus, y = CreateInfoText(guildRulesContent, "", y, "GameFontHighlight")
+_, y = CreateInfoText(guildRulesContent, "Everyone can view these connection rules. Only the Guild Master can change and broadcast them.", y, "GameFontDisableSmall")
+_, y = CreateSectionHeader(guildRulesContent, "Roleplay and Progression", y - 4)
+nativeTongueCheck, y = CreateSettingsCheckbox(guildRulesContent, "Native tongue only", "Forces every chat input to the current character's native racial language while this rule is active.", y,
+    function() return iRL:GetConnectionRules().nativeTongueOnly end,
+    function(value) iRL:SetConnectionRule("nativeTongueOnly", value) end)
+selfFoundOnlyCheck, y = CreateSettingsCheckbox(guildRulesContent, "Self-Found only", "Shows a persistent red warning whenever this character is not in Self-Found mode. Verification status remains visible in the dashboard.", y,
+    function() return iRL:GetConnectionRules().selfFoundOnly end,
+    function(value) iRL:SetConnectionRule("selfFoundOnly", value) end)
+level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(guildRulesContent, "Level 60 does not require Self-Found", "Optional exception: level 60 and higher characters do not receive the Self-Found warning.", y,
+    function() return iRL:GetConnectionRules().allowLevel60WithoutSelfFound end,
+    function(value) iRL:SetConnectionRule("allowLevel60WithoutSelfFound", value) end)
+sameRaceGroupsCheck, y = CreateSettingsCheckbox(guildRulesContent, "Same-race groups only", "When a group includes another race, iRC sends a leave message to the party or raid and immediately leaves the group.", y,
+    function() return iRL:GetConnectionRules().sameRaceGroupsOnly end,
+    function(value) iRL:SetConnectionRule("sameRaceGroupsOnly", value) end)
+guildRulesContent:SetHeight(math.abs(y) + 20)
 
 do
     local y = -15
@@ -370,11 +394,31 @@ local function Refresh()
     else
         connectionStatus:SetText(iRL.Colors.Red .. "No active guild connection." .. iRL.Colors.Reset .. " Join a guild to enable shared progress.")
     end
+    nativeTongueCheck:Refresh()
+    selfFoundOnlyCheck:Refresh()
+    level60SelfFoundExceptionCheck:Refresh()
+    sameRaceGroupsCheck:Refresh()
+    local isGuildMaster = connection and iRL:IsGuildMaster()
+    nativeTongueCheck:SetEnabled(isGuildMaster and true or false)
+    selfFoundOnlyCheck:SetEnabled(isGuildMaster and true or false)
+    level60SelfFoundExceptionCheck:SetEnabled(isGuildMaster and true or false)
+    sameRaceGroupsCheck:SetEnabled(isGuildMaster and true or false)
+    if not connection then
+        guildRulesStatus:SetText(iRL.Colors.Gray .. "No guild connection. Join a guild to view shared rules." .. iRL.Colors.Reset)
+    elseif isGuildMaster then
+        guildRulesStatus:SetText(iRL.Colors.Green .. "Guild Master controls enabled." .. iRL.Colors.Reset .. " Changes are broadcast to the guild connection.")
+    else
+        guildRulesStatus:SetText(iRL.Colors.Yellow .. "Read-only rules." .. iRL.Colors.Reset .. " Only the Guild Master can change them.")
+    end
     for _, addon in ipairs(companionAddons) do
         local loaded = IsAddonLoadedCompat(addon.addonName)
         addon.installedFrame:SetShown(loaded)
         addon.promoFrame:SetShown(not loaded)
     end
+end
+
+iRL.RefreshOptionsIfShown = function()
+    if settingsFrame:IsShown() then Refresh() end
 end
 
 settingsFrame:SetScript("OnShow", Refresh)

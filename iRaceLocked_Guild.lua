@@ -27,6 +27,8 @@ function iRL:GetGuildRosterRows()
         local name, _, rankIndex, level, className, _, _, _, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
         if name then
             local profile = self:FindConnectionProfile(name)
+            local compatibility = self:GetCompatibilityMember(name)
+            local compatibilityStats = self:GetCompatibilityStats(name)
             local race = profile and profile.race or getRaceFromGuid(guid) or "Unknown"
             if self:NormalizeName(name) == self:NormalizeName(selfName) then
                 profile = self:GetLocalProfile()
@@ -35,16 +37,20 @@ function iRL:GetGuildRosterRows()
             end
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
-                level = (profile and profile.level) or level or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
+                level = (profile and profile.level) or (compatibilityStats and compatibilityStats.level) or level or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
                 race = race, online = online and true or false, profile = profile,
-                points = profile and profile.points or 0, selfFound = profile and profile.selfFound or false,
-                addonVersion = profile and profile.addonVersion or nil, statistics = profile and profile.statistics or nil,
+                points = (profile and profile.points) or (compatibilityStats and compatibilityStats.points) or 0,
+                selfFound = (profile and profile.selfFound) or (compatibility and compatibility.selfFound) or false,
+                addonVersion = profile and profile.addonVersion or nil, statistics = (profile and profile.statistics) or (compatibilityStats and compatibilityStats.statistics) or nil,
+                compatibility = compatibility, compatibilityStats = compatibilityStats,
             }
         end
     end
     if #rows == 0 and self:IsInGuildConnection() then
         local profile = self:GetLocalProfile()
-        rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, points = profile.points, selfFound = profile.selfFound, addonVersion = profile.addonVersion, statistics = profile.statistics }
+        local compatibility = self:GetCompatibilityMember(profile.name)
+        local compatibilityStats = self:GetCompatibilityStats(profile.name)
+        rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, points = profile.points, selfFound = profile.selfFound, addonVersion = profile.addonVersion, statistics = profile.statistics, compatibility = compatibility, compatibilityStats = compatibilityStats }
     end
     table.sort(rows, function(a, b) return string.lower(a.name) < string.lower(b.name) end)
     return rows
@@ -94,11 +100,16 @@ end
 function iRL:GetLeaderboard()
     local leaders = {}
     for _, row in ipairs(self:GetGuildRosterRows()) do
-        if row.profile then leaders[#leaders + 1] = row end
+        if row.profile or row.compatibilityStats then
+            row.leaderboard = row.compatibilityStats or {
+                source = "iRC", points = row.points, level = row.level, statistics = row.statistics or {},
+            }
+            leaders[#leaders + 1] = row
+        end
     end
     table.sort(leaders, function(a, b)
-        if a.points ~= b.points then return a.points > b.points end
-        if a.level ~= b.level then return a.level > b.level end
+        if a.leaderboard.points ~= b.leaderboard.points then return a.leaderboard.points > b.leaderboard.points end
+        if a.leaderboard.level ~= b.leaderboard.level then return a.leaderboard.level > b.leaderboard.level end
         return string.lower(a.name) < string.lower(b.name)
     end)
     return leaders

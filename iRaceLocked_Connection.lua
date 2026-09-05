@@ -2,7 +2,7 @@ local iRL = _G.iRaceLocked
 if not iRL then return end
 
 local SEP = "\t"
-local WIRE_VERSION = "2"
+local WIRE_VERSION = "3"
 local requestNumber = 0
 
 local function registerPrefix(prefix)
@@ -24,7 +24,28 @@ end
 
 local function completedFromWire(value)
     if not value or value == "" then return {} end
-    return { strsplit(",", value) }
+    if value:sub(1, 1) ~= "@" then return {} end
+    local catalog = iRL.Achievements and iRL.Achievements.Catalog
+    if not catalog then return {} end
+    local completed = {}
+    local bits = value:sub(2)
+    for index = 1, #bits do
+        if bits:sub(index, index) == "1" and catalog[index] then
+            completed[#completed + 1] = catalog[index].id
+        end
+    end
+    return completed
+end
+
+local function completedToCompactWire(completed)
+    local catalog = iRL.Achievements and iRL.Achievements.Catalog
+    if not catalog then return nil end
+    local completedById, bits = {}, {}
+    for _, id in ipairs(completed or {}) do completedById[id] = true end
+    for index, achievement in ipairs(catalog) do
+        bits[index] = completedById[achievement.id] and "1" or "0"
+    end
+    return "@" .. table.concat(bits)
 end
 
 local function profileWireParts(profile)
@@ -33,18 +54,13 @@ local function profileWireParts(profile)
         iRL.Version, profile.name or "Unknown", profile.guid or "", profile.race or "Unknown", profile.class or "UNKNOWN",
         tostring(profile.level or 1), tostring(profile.points or 0), profile.selfFound and "1" or "0",
         tostring(stats.enemiesSlain or 0), tostring(stats.dungeonBosses or 0), tostring(stats.jumps or 0),
-        table.concat(profile.completed or {}, ","),
+        completedToCompactWire(profile.completed) or "@",
     }
 end
 
 local function addProfileParts(parts, profile)
     for _, value in ipairs(profileWireParts(profile)) do parts[#parts + 1] = value end
-    local message = table.concat(parts, SEP)
-    if #message > 250 then
-        parts[#parts] = ""
-        message = table.concat(parts, SEP)
-    end
-    return message
+    return table.concat(parts, SEP)
 end
 
 local function profileFromWire(parts, startIndex)
@@ -92,6 +108,18 @@ function iRL:SendHello()
     send(self.Prefix, addProfileParts({ "HELLO", WIRE_VERSION }, profile), "GUILD")
 end
 
+function iRL:SendConnectionRules()
+    if not self:IsInGuildConnection() or not self:IsGuildMaster() then return end
+    local rules = self:GetConnectionRules()
+    send(self.Prefix, table.concat({
+        "RULES", WIRE_VERSION,
+        rules.nativeTongueOnly and "1" or "0",
+        rules.selfFoundOnly and "1" or "0",
+        rules.allowLevel60WithoutSelfFound and "1" or "0",
+        rules.sameRaceGroupsOnly and "1" or "0",
+    }, SEP), "GUILD")
+end
+
 function iRL:RequestInspection(targetName)
     if not self:IsInGuildConnection() or type(targetName) ~= "string" or targetName == "" then return false end
     requestNumber = requestNumber + 1
@@ -132,6 +160,21 @@ local function handleMessage(prefix, message, sender)
             profile = { name = parts[3], guid = parts[4], race = parts[5], class = parts[6], level = tonumber(parts[7]) or 1, points = tonumber(parts[8]) or 0, completed = completedFromWire(parts[9]), lastSeen = time() }
         end
         if profile and senderIsKnown(sender) and iRL:NormalizeName(profile.name) == iRL:NormalizeName(sender) then iRL:StoreMemberProfile(profile) end
+    elseif kind == "RULES" and parts[2] == WIRE_VERSION and iRL:IsGuildMasterName(sender) then
+        local connection = iRL:GetConnection()
+        if connection then
+            connection.rules.nativeTongueOnly = parts[3] == "1"
+            connection.rules.selfFoundOnly = parts[4] == "1"
+            if parts[6] ~= nil then
+                connection.rules.allowLevel60WithoutSelfFound = parts[5] == "1"
+                connection.rules.sameRaceGroupsOnly = parts[6] == "1"
+            else
+                connection.rules.allowLevel60WithoutSelfFound = false
+                connection.rules.sameRaceGroupsOnly = parts[5] == "1"
+            end
+            if iRL.RefreshOptionsIfShown then iRL:RefreshOptionsIfShown() end
+            if iRL.Enforcement then iRL.Enforcement:Refresh() end
+        end
     end
 end
 
@@ -142,12 +185,21 @@ frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         registerPrefix(iRL.Prefix)
-        C_Timer.After(2, function() iRL:SendHello() end)
-        if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(60, function() iRL:SendHello() end) end
+        C_Timer.After(2, function()
+            iRL:SendHello()
+            iRL:SendConnectionRules()
+        end)
+        if C_Timer and C_Timer.NewTicker then
+            C_Timer.NewTicker(60, function()
+                iRL:SendHello()
+                iRL:SendConnectionRules()
+            end)
+        end
     elseif event == "PLAYER_GUILD_UPDATE" then
         C_Timer.After(1, function()
             if iRL.Achievements then iRL.Achievements:Evaluate() end
             iRL:SendHello()
+            iRL:SendConnectionRules()
         end)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, _, sender = ...

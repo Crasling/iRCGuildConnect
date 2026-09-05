@@ -18,6 +18,15 @@ v0.2.0 - Guild Connection Dashboard
  [CHANGED] Split Other Addons into the shared per-addon installed and promo tab structure
  [CHANGED] Renamed the visible addon identity to iRacelockConnection and made /irc the primary command
  [CHANGED] Linked the About page and addon metadata to the official GitHub repository
+ [FIX] Applied the iRC accent color to sidebar category headings
+ [NEW] Added a shared Guild Rules tab with Guild Master-only rule controls and iRC rule synchronization
+ [NEW] Added RaceLocked and RaceLockedForkEU compatibility sync for points, level, kills, dungeons, jumps, and ForkEU Self-Found status
+ [CHANGED] Added compatible RaceLocked statistics and their source to the iRC connection leaderboard
+ [NEW] Enforced Native tongue, Self-Found, and same-race group rules from the Guild Rules tab
+ [NEW] Added an optional Guild Master rule that exempts level 60+ characters from the Self-Found requirement
+ [NEW] Added a Guild achievement category for guild-only Classic dungeon completions, boss milestones, and high-level quest expeditions
+ [CHANGED] Moved the guild achievement-profile browser to a separate Guild Members tab
+ [FIX] Compressed achievement completion sync so Guild Members inspection keeps working with a full achievement catalog
 
 v0.1.0 - Initial Development
 --------------------------------------------------------------------------------
