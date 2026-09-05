@@ -1,7 +1,9 @@
-local iRL = _G.iRaceLocked
-if not iRL then return end
+local _, private = ...
+local iRC = private and private.iRC
+if not iRC then return end
+local L = iRC.L
 
-local ORANGE = iRL.ColorValues.Orange
+local ORANGE = iRC.ColorValues.Orange
 local CHECKBOX_TEMPLATE = InterfaceOptionsCheckButtonTemplate and "InterfaceOptionsCheckButtonTemplate" or "UICheckButtonTemplate"
 
 local function IsAddonLoadedCompat(addonName)
@@ -30,9 +32,23 @@ local function CreateSectionHeader(parent, text, yOffset)
     return header, yOffset - 28
 end
 
-local function CreateSettingsCheckbox(parent, label, description, yOffset, getValue, setValue)
+local function SetSimpleTooltip(frame, title, description)
+    frame:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(title or "", 1, 0.82, 0)
+        if description and description ~= "" then GameTooltip:AddLine(description, 1, 1, 1, true) end
+        GameTooltip:Show()
+    end)
+    frame:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
+end
+
+local function CreateSettingsCheckbox(parent, label, description, yOffset, getValue, setValue, indent)
+    indent = indent or 0
     local checkbox = CreateFrame("CheckButton", nil, parent, CHECKBOX_TEMPLATE)
-    checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, yOffset)
+    checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 20 + indent, yOffset)
     if not checkbox.Text then
         checkbox.Text = checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
@@ -41,26 +57,49 @@ local function CreateSettingsCheckbox(parent, label, description, yOffset, getVa
     checkbox.Text:SetFontObject(GameFontHighlight)
     checkbox.Refresh = function() checkbox:SetChecked(getValue() and true or false) end
     checkbox:SetScript("OnClick", function(self) setValue(self:GetChecked() and true or false) end)
+    SetSimpleTooltip(checkbox, label, description)
 
     local nextY = yOffset - 22
     if description and description ~= "" then
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        desc:SetPoint("TOPLEFT", parent, "TOPLEFT", 48, nextY)
-        desc:SetWidth(470)
+        desc:SetPoint("TOPLEFT", parent, "TOPLEFT", 48 + indent, nextY)
+        desc:SetWidth(470 - indent)
         desc:SetJustifyH("LEFT")
         desc:SetText(description)
+        checkbox.description = desc
         local height = math.max(desc:GetStringHeight(), 12)
         nextY = nextY - height - 6
     end
     return checkbox, nextY
 end
 
-local function CreateSettingsButton(parent, text, width, yOffset, onClick)
+local function SetRuleVisualState(checkbox, active)
+    local color = active and iRC.ColorValues.Green or iRC.ColorValues.Gray
+    if checkbox.Text then checkbox.Text:SetTextColor(color[1], color[2], color[3]) end
+    if checkbox.description then checkbox.description:SetTextColor(color[1], color[2], color[3]) end
+    if not checkbox.ruleState then
+        checkbox.ruleState = checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        checkbox.ruleState:SetPoint("LEFT", checkbox.Text, "RIGHT", 9, 0)
+    end
+    checkbox.ruleState:SetText(active and "ACTIVE" or "INACTIVE")
+    checkbox.ruleState:SetTextColor(color[1], color[2], color[3])
+end
+
+local function CreateSubcategoryHeader(parent, text, yOffset)
+    local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    label:SetPoint("TOPLEFT", parent, "TOPLEFT", 34, yOffset)
+    label:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+    label:SetText(text)
+    return label, yOffset - 20
+end
+
+local function CreateSettingsButton(parent, text, width, yOffset, onClick, tooltip)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     button:SetSize(width, 26)
     button:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, yOffset)
     button:SetText(text)
     button:SetScript("OnClick", onClick)
+    if tooltip then SetSimpleTooltip(button, text, tooltip) end
     return button, yOffset - 34
 end
 
@@ -74,7 +113,42 @@ local function CreateInfoText(parent, text, yOffset, fontObject)
     return info, yOffset - height - 6
 end
 
-local settingsFrame = CreateFrame("Frame", "iRaceLockedSettingsFrame", UIParent, "BackdropTemplate")
+local function CreateConnectionStatusCard(parent, yOffset)
+    local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    card:SetHeight(82)
+    card:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, yOffset)
+    card:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -12, yOffset)
+    card:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    card:SetBackdropColor(0.10, 0.08, 0.06, 0.94)
+    card:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.65)
+
+    local accent = card:CreateTexture(nil, "ARTWORK")
+    accent:SetWidth(3)
+    accent:SetPoint("TOPLEFT", card, "TOPLEFT", 5, -7)
+    accent:SetPoint("BOTTOMLEFT", card, "BOTTOMLEFT", 5, 7)
+    accent:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.90)
+
+    local label = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    label:SetPoint("TOPLEFT", card, "TOPLEFT", 18, -12)
+    label:SetText("Connection status")
+
+    local status = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    status:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -6)
+
+    local detail = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    detail:SetPoint("TOPLEFT", status, "BOTTOMLEFT", 0, -5)
+    detail:SetWidth(470)
+    detail:SetJustifyH("LEFT")
+
+    return { status = status, detail = detail }, yOffset - 92
+end
+
+local settingsFrame = CreateFrame("Frame", "iRacelockConnectionSettingsFrame", UIParent, "BackdropTemplate")
 settingsFrame:SetSize(750, 520)
 settingsFrame:SetPoint("CENTER", UIParent, "CENTER")
 settingsFrame:SetBackdrop({
@@ -115,7 +189,7 @@ titleBar:SetBackdrop({
 titleBar:SetBackdropColor(0.07, 0.07, 0.12, 1)
 local title = titleBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
 title:SetPoint("CENTER", titleBar)
-title:SetText(iRL.Colors.iRC .. iRL.DisplayName .. iRL.Colors.Reset .. " " .. iRL.Colors.Green .. "v" .. iRL.Version .. iRL.Colors.Reset)
+title:SetText(iRC.Colors.iRC .. iRC.DisplayName .. iRC.Colors.Reset .. " " .. iRC.Colors.Green .. "v" .. iRC.Version .. iRC.Colors.Reset)
 
 local closeButton = CreateFrame("Button", nil, settingsFrame, "UIPanelCloseButton")
 closeButton:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", 0, 0)
@@ -171,13 +245,13 @@ end
 
 local generalContainer, generalContent = CreateTabContent()
 local connectionContainer, connectionContent = CreateTabContent()
-local guildRulesContainer, guildRulesContent = CreateTabContent()
+local roleplayContainer, roleplayContent = CreateTabContent()
 local aboutContainer, aboutContent = CreateTabContent()
 local iWRContainer, iWRContent = CreateTabContent()
 local iNIFContainer, iNIFContent = CreateTabContent()
 local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, guildRulesContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer }
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer }
 local sidebarButtons = {}
 
 local function ShowTab(index)
@@ -194,10 +268,10 @@ local function ShowTab(index)
 end
 
 local sidebarItems = {
-    { type = "header", label = iRL.DisplayName },
+    { type = "header", label = iRC.DisplayName },
     { type = "tab", label = "General", index = 1 },
-    { type = "tab", label = "Connection", index = 2 },
-    { type = "tab", label = "Guild Rules", index = 3 },
+    { type = "tab", label = "Connection & Rules", index = 2 },
+    { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
     { type = "header", label = "Other Addons" },
     { type = "tab", label = "iWillRemember", index = 5 },
@@ -234,17 +308,29 @@ end
 
 local y = -12
 _, y = CreateSectionHeader(generalContent, "Display Settings", y)
-local notificationCheck
-notificationCheck, y = CreateSettingsCheckbox(generalContent, "Show achievement notifications", "Shows a chat message when this character earns an iRacelockConnection achievement.", y,
-    function() return iRL:GetSettings().showAchievementNotifications end,
-    function(value) iRL:GetSettings().showAchievementNotifications = value end)
+local notificationCheck, debugModeCheck
+notificationCheck, y = CreateSettingsCheckbox(generalContent, "Show achievement notifications", "Show a message when you earn an achievement.", y,
+    function() return iRC:GetSettings().showAchievementNotifications end,
+    function(value) iRC:GetSettings().showAchievementNotifications = value end)
+_, y = CreateSectionHeader(generalContent, "Race Grid", y - 4)
+local globalRaceGridCheck
+globalRaceGridCheck, y = CreateSettingsCheckbox(generalContent, "Share global race-grid data", "Join the iRacelockConnection channel and share a live character summary for the Race Overview. Reports are public to players using this channel.", y,
+    function() return iRC:GetSettings().shareGlobalRaceGrid end,
+    function(value)
+        iRC:GetSettings().shareGlobalRaceGrid = value and true or false
+        if value and iRC.RaceGrid then
+            iRC.RaceGrid:Refresh()
+        elseif iRC.RaceGrid then
+            iRC.RaceGrid:Disable()
+        end
+    end)
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
-minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Toggles the iRacelockConnection minimap button. Position and visibility are stored per account.", y,
-    function() return not iRL:GetSettings().minimapButton.hide end,
+minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
+    function() return not iRC:GetSettings().minimapButton.hide end,
     function(value)
-        iRL:GetSettings().minimapButton.hide = not value
-        if iRL.Minimap then iRL.Minimap:UpdateVisibility() end
+        iRC:GetSettings().minimapButton.hide = not value
+        if iRC.Minimap then iRC.Minimap:UpdateVisibility() end
     end)
 _, y = CreateSectionHeader(generalContent, "Achievement Window", y - 4)
 local scaleLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -253,7 +339,7 @@ scaleLabel:SetText("Achievement window scale")
 local scaleValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 10, 0)
 scaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-local slider = CreateFrame("Slider", "iRaceLockedAchievementScaleSlider", generalContent, "OptionsSliderTemplate")
+local slider = CreateFrame("Slider", "iRacelockConnectionAchievementScaleSlider", generalContent, "OptionsSliderTemplate")
 slider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 slider:SetWidth(240)
 slider:SetMinMaxValues(0.8, 1.2)
@@ -261,74 +347,98 @@ slider:SetValueStep(0.05)
 _G[slider:GetName() .. "Low"]:SetText("80%")
 _G[slider:GetName() .. "High"]:SetText("120%")
 _G[slider:GetName() .. "Text"]:SetText("")
+SetSimpleTooltip(slider, "Achievement window scale", "Make the achievement window smaller or larger.")
 slider:SetScript("OnValueChanged", function(_, value)
     value = math.floor(value * 20 + 0.5) / 20
-    iRL:GetSettings().achievementScale = value
+    iRC:GetSettings().achievementScale = value
     scaleValue:SetText(math.floor(value * 100 + 0.5) .. "%")
-    if iRL.AchievementsUI and iRL.AchievementsUI.frame then iRL.AchievementsUI.frame:SetScale(value) end
+    if iRC.AchievementsUI and iRC.AchievementsUI.frame then iRC.AchievementsUI.frame:SetScale(value) end
 end)
 y = y - 74
-_, y = CreateSettingsButton(generalContent, "Open achievements", 180, y, function() iRL.AchievementsUI:Open() end)
+_, y = CreateSettingsButton(generalContent, "Open achievements", 180, y, function() iRC.AchievementsUI:Open() end, "View your achievements.")
 _, y = CreateSettingsButton(generalContent, "Reset achievement window position", 220, y, function()
-    local achievementFrame = iRL.AchievementsUI:Create()
+    local achievementFrame = iRC.AchievementsUI:Create()
     achievementFrame:ClearAllPoints()
     achievementFrame:SetPoint("CENTER")
-    iRL:Print("Achievement window position reset.")
-end)
+    iRC:Print(L.ACHIEVEMENT_WINDOW_RESET)
+end, "Move the achievement window back to the middle of the screen.")
 generalContent:SetHeight(math.abs(y) + 20)
 
 y = -12
 _, y = CreateSectionHeader(connectionContent, "Guild Connection", y)
-local connectionStatus
-connectionStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
-_, y = CreateSectionHeader(connectionContent, "Shared Progress", y - 4)
-_, y = CreateInfoText(connectionContent, "Your guild is the connection. Members using iRacelockConnection automatically share presence, points, Self-Found status, local statistics, and inspectable achievement progress. No separate invite or local gameplay lock is used.", y, "GameFontDisableSmall")
-_, y = CreateSettingsButton(connectionContent, "Open connection dashboard", 210, y - 6, function()
-    iRL:OpenConnectionDashboard()
-end)
-_, y = CreateSettingsButton(connectionContent, "Broadcast my current status", 210, y - 6, function()
-    iRL:SendHello()
-    iRL:Print("Guild connection status broadcast.")
-end)
-connectionContent:SetHeight(math.abs(y) + 20)
+local connectionCard
+connectionCard, y = CreateConnectionStatusCard(connectionContent, y)
+local connectionStatus, connectionDetail = connectionCard.status, connectionCard.detail
+_, y = CreateInfoText(connectionContent, "Your guild shares progress, stats, and achievements through iRC.", y - 2, "GameFontDisableSmall")
+local connectionActionsY = y - 4
+local dashboardButton = CreateSettingsButton(connectionContent, "Open connection dashboard", 210, connectionActionsY, function()
+    iRC:OpenConnectionDashboard()
+end, "View guild members, shared progress, and addon status.")
+local broadcastButton = CreateSettingsButton(connectionContent, "Broadcast my status", 180, connectionActionsY, function()
+    iRC:SendHello()
+    iRC:Print(L.CONNECTION_STATUS_BROADCAST)
+end, "Send your latest progress to the guild.")
+broadcastButton:ClearAllPoints()
+broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
+y = connectionActionsY - 36
 
 local guildRulesStatus
-local nativeTongueCheck, selfFoundOnlyCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck
+local nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, level60SameRaceExceptionCheck
+y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
+guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
+_, y = CreateInfoText(connectionContent, "These rules apply to the guild. Only the Guild Master can change them.", y, "GameFontDisableSmall")
+_, y = CreateSubcategoryHeader(connectionContent, "Language", y - 2)
+nativeTongueCheck, y = CreateSettingsCheckbox(connectionContent, "Native language chat", "Forces your chat boxes to use your character's racial language when you send a message.", y,
+    function() return iRC:GetConnectionRules().nativeTongueOnly end,
+    function(value) iRC:SetConnectionRule("nativeTongueOnly", value) end)
+_, y = CreateSubcategoryHeader(connectionContent, "Progression", y - 2)
+selfFoundOnlyCheck, y = CreateSettingsCheckbox(connectionContent, "Self-Found only", "Require the game's Self-Found mode while leveling. Self-Found blocks player trading, Auction House use, and most mail.", y,
+    function() return iRC:GetConnectionRules().selfFoundOnly end,
+    function(value) iRC:SetConnectionRule("selfFoundOnly", value) end)
+_, y = CreateSubcategoryHeader(connectionContent, "Level 60 Self-Found Options", y - 2)
+level60GuildFoundCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Guild Found", "At level 60, replace Self-Found with Guild Found. Trade and group only with guild members; iRC blocks the Auction House and non-guild groups.", y,
+    function() return iRC:GetConnectionRules().level60GuildFound end,
+    function(value) iRC:SetConnectionRule("level60GuildFound", value) end, 18)
+level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 SF Exception", "At level 60, iRC stops enforcing Self-Found and Guild Found limits. You may trade, use the Auction House, and group normally.", y,
+    function() return iRC:GetConnectionRules().allowLevel60WithoutSelfFound end,
+    function(value) iRC:SetConnectionRule("allowLevel60WithoutSelfFound", value) end, 18)
+_, y = CreateSubcategoryHeader(connectionContent, "Group Rules", y - 2)
+sameRaceGroupsCheck, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
+    function() return iRC:GetConnectionRules().sameRaceGroupsOnly end,
+    function(value) iRC:SetConnectionRule("sameRaceGroupsOnly", value) end)
+level60SameRaceExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Mixed-Race Exception", "At level 60, allow mixed-race parties and raids. Same-race groups remain required while leveling.", y,
+    function() return iRC:GetConnectionRules().allowLevel60MixedRaceGroups end,
+    function(value) iRC:SetConnectionRule("allowLevel60MixedRaceGroups", value) end, 18)
+connectionContent:SetHeight(math.abs(y) + 20)
+
 y = -12
-_, y = CreateSectionHeader(guildRulesContent, "Guild Connection Rules", y)
-guildRulesStatus, y = CreateInfoText(guildRulesContent, "", y, "GameFontHighlight")
-_, y = CreateInfoText(guildRulesContent, "Everyone can view these connection rules. Only the Guild Master can change and broadcast them.", y, "GameFontDisableSmall")
-_, y = CreateSectionHeader(guildRulesContent, "Roleplay and Progression", y - 4)
-nativeTongueCheck, y = CreateSettingsCheckbox(guildRulesContent, "Native tongue only", "Forces every chat input to the current character's native racial language while this rule is active.", y,
-    function() return iRL:GetConnectionRules().nativeTongueOnly end,
-    function(value) iRL:SetConnectionRule("nativeTongueOnly", value) end)
-selfFoundOnlyCheck, y = CreateSettingsCheckbox(guildRulesContent, "Self-Found only", "Shows a persistent red warning whenever this character is not in Self-Found mode. Verification status remains visible in the dashboard.", y,
-    function() return iRL:GetConnectionRules().selfFoundOnly end,
-    function(value) iRL:SetConnectionRule("selfFoundOnly", value) end)
-level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(guildRulesContent, "Level 60 does not require Self-Found", "Optional exception: level 60 and higher characters do not receive the Self-Found warning.", y,
-    function() return iRL:GetConnectionRules().allowLevel60WithoutSelfFound end,
-    function(value) iRL:SetConnectionRule("allowLevel60WithoutSelfFound", value) end)
-sameRaceGroupsCheck, y = CreateSettingsCheckbox(guildRulesContent, "Same-race groups only", "When a group includes another race, iRC sends a leave message to the party or raid and immediately leaves the group.", y,
-    function() return iRL:GetConnectionRules().sameRaceGroupsOnly end,
-    function(value) iRL:SetConnectionRule("sameRaceGroupsOnly", value) end)
-guildRulesContent:SetHeight(math.abs(y) + 20)
+_, y = CreateSectionHeader(roleplayContent, "Player Settings", y)
+local trollTalkStatus
+trollTalkStatus, y = CreateInfoText(roleplayContent, "", y, "GameFontHighlight")
+_, y = CreateSectionHeader(roleplayContent, "Troll Talk", y - 2)
+local trollTalkCheck
+trollTalkCheck, y = CreateSettingsCheckbox(roleplayContent, "Enable Troll Talk", "Add simple troll wording to your normal chat messages.", y,
+    function() return iRC.Roleplay:GetPlayerSettings().trollTalk end,
+    function(value) iRC.Roleplay:GetPlayerSettings().trollTalk = value and true or false end)
+_, y = CreateInfoText(roleplayContent, "Example: “Do you want to join?” becomes “Do ya wanna join, mon?”", y - 2, "GameFontDisableSmall")
+roleplayContent:SetHeight(math.abs(y) + 20)
 
 do
     local y = -15
     local aboutIcon = aboutContent:CreateTexture(nil, "ARTWORK")
     aboutIcon:SetSize(64, 64)
     aboutIcon:SetPoint("TOP", aboutContent, "TOP", 0, y)
-    aboutIcon:SetTexture(iRL.IconPath)
+    aboutIcon:SetTexture(iRC.IconPath)
     y = y - 70
 
     local aboutTitle = aboutContent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     aboutTitle:SetPoint("TOP", aboutContent, "TOP", 0, y)
-    aboutTitle:SetText(iRL.Colors.iRC .. iRL.DisplayName .. iRL.Colors.Reset .. " " .. iRL.Colors.Green .. "v" .. iRL.Version .. iRL.Colors.Reset)
+    aboutTitle:SetText(iRC.Colors.iRC .. iRC.DisplayName .. iRC.Colors.Reset .. " " .. iRC.Colors.Green .. "v" .. iRC.Version .. iRC.Colors.Reset)
     y = y - 20
 
     local aboutAuthor = aboutContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     aboutAuthor:SetPoint("TOP", aboutContent, "TOP", 0, y)
-    aboutAuthor:SetText("Created by: " .. iRL.Colors.Orange .. "Crasling" .. iRL.Colors.Reset)
+    aboutAuthor:SetText("Created by: " .. iRC.Colors.Orange .. "Crasling" .. iRC.Colors.Reset)
     y = y - 25
 
     local aboutDescription = aboutContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -336,11 +446,15 @@ do
     aboutDescription:SetWidth(470)
     aboutDescription:SetJustifyH("LEFT")
     aboutDescription:SetWordWrap(true)
-    aboutDescription:SetText(iRL.Colors.iRC .. iRL.DisplayName .. " " .. iRL.Colors.Reset .. "is a guild-connected race progression and achievement framework. Guild members using iRC can share progress, verification status, Self-Found state, and local leaderboard statistics.")
+    aboutDescription:SetText(iRC.Colors.iRC .. iRC.DisplayName .. " " .. iRC.Colors.Reset .. "is a guild-connected race progression and achievement framework. Guild members using iRC can share progress, verification status, Self-Found state, and local leaderboard statistics.")
     y = y - aboutDescription:GetStringHeight() - 15
 
     _, y = CreateSectionHeader(aboutContent, "Links", y)
     _, y = CreateInfoText(aboutContent, "GitHub: github.com/Crasling/iRacelockConnection", y, "GameFontDisableSmall")
+    _, y = CreateSectionHeader(aboutContent, L.DEVELOPER_HEADER, y - 6)
+    debugModeCheck, y = CreateSettingsCheckbox(aboutContent, L.ENABLE_DEBUG_MODE, L.ENABLE_DEBUG_MODE_DESC, y,
+        function() return iRC:GetSettings().debugMode end,
+        function(value) iRC:GetSettings().debugMode = value and true or false end)
     aboutContent:SetHeight(math.abs(y) + 20)
 end
 
@@ -358,8 +472,8 @@ for _, addon in ipairs(companionAddons) do
     addon.installedFrame:Hide()
     do
         local y = -12
-        _, y = CreateSectionHeader(addon.installedFrame, iRL.Colors.iRC .. addon.name .. iRL.Colors.Reset, y)
-        _, y = CreateInfoText(addon.installedFrame, iRL.Colors.iRC .. addon.name .. iRL.Colors.Reset .. " is installed. Open its settings to configure the addon.", y, "GameFontHighlight")
+        _, y = CreateSectionHeader(addon.installedFrame, iRC.Colors.iRC .. addon.name .. iRC.Colors.Reset, y)
+        _, y = CreateInfoText(addon.installedFrame, iRC.Colors.iRC .. addon.name .. iRC.Colors.Reset .. " is installed. Open its settings to configure the addon.", y, "GameFontHighlight")
         _, y = CreateSettingsButton(addon.installedFrame, addon.button, 180, y - 6, function()
             local frame = companion.getFrame()
             if not frame then return end
@@ -368,7 +482,7 @@ for _, addon in ipairs(companionAddons) do
             frame:SetPoint(point, UIParent, relativePoint, xOffset, yOffset)
             settingsFrame:Hide()
             frame:Show()
-        end)
+        end, "Open " .. addon.name .. " settings.")
         addon.content:SetHeight(math.abs(y) + 20)
     end
 
@@ -377,7 +491,7 @@ for _, addon in ipairs(companionAddons) do
     addon.promoFrame:Hide()
     do
         local y = -12
-        _, y = CreateSectionHeader(addon.promoFrame, iRL.Colors.iRC .. addon.name .. iRL.Colors.Reset, y)
+        _, y = CreateSectionHeader(addon.promoFrame, iRC.Colors.iRC .. addon.name .. iRC.Colors.Reset, y)
         _, y = CreateInfoText(addon.promoFrame, addon.description, y, "GameFontHighlight")
         _, y = CreateInfoText(addon.promoFrame, "Available on CurseForge: " .. addon.link, y - 4, "GameFontDisableSmall")
         addon.content:SetHeight(math.abs(y) + 20)
@@ -386,29 +500,54 @@ end
 
 local function Refresh()
     notificationCheck:Refresh()
+    if debugModeCheck then debugModeCheck:Refresh() end
+    globalRaceGridCheck:Refresh()
     minimapCheck:Refresh()
-    slider:SetValue(iRL:GetSettings().achievementScale or 1)
-    local connection = iRL:GetConnection()
+    slider:SetValue(iRC:GetSettings().achievementScale or 1)
+    local connection = iRC:GetConnection()
     if connection then
-        connectionStatus:SetText(iRL.Colors.Green .. "Connected" .. iRL.Colors.Reset .. " to " .. connection.guildName .. ".")
+        connectionStatus:SetText(iRC.Colors.Green .. "Connected" .. iRC.Colors.Reset)
+        connectionDetail:SetText("Guild: " .. iRC.Colors.Orange .. connection.guildName .. iRC.Colors.Reset .. "  |  Sharing and checks are active.")
     else
-        connectionStatus:SetText(iRL.Colors.Red .. "No active guild connection." .. iRL.Colors.Reset .. " Join a guild to enable shared progress.")
+        connectionStatus:SetText(iRC.Colors.Red .. "No active guild connection" .. iRC.Colors.Reset)
+        connectionDetail:SetText("Join a guild to use shared progress and rules.")
     end
     nativeTongueCheck:Refresh()
     selfFoundOnlyCheck:Refresh()
+    level60GuildFoundCheck:Refresh()
     level60SelfFoundExceptionCheck:Refresh()
     sameRaceGroupsCheck:Refresh()
-    local isGuildMaster = connection and iRL:IsGuildMaster()
+    level60SameRaceExceptionCheck:Refresh()
+    local isGuildMaster = connection and iRC:IsGuildMaster()
     nativeTongueCheck:SetEnabled(isGuildMaster and true or false)
     selfFoundOnlyCheck:SetEnabled(isGuildMaster and true or false)
-    level60SelfFoundExceptionCheck:SetEnabled(isGuildMaster and true or false)
+    local selfFoundOptionsEnabled = isGuildMaster and iRC:GetConnectionRules().selfFoundOnly
+    level60GuildFoundCheck:SetEnabled(selfFoundOptionsEnabled and true or false)
+    level60SelfFoundExceptionCheck:SetEnabled(selfFoundOptionsEnabled and true or false)
     sameRaceGroupsCheck:SetEnabled(isGuildMaster and true or false)
+    local sameRaceExceptionEnabled = isGuildMaster and iRC:GetConnectionRules().sameRaceGroupsOnly
+    level60SameRaceExceptionCheck:SetEnabled(sameRaceExceptionEnabled and true or false)
+    local rules = iRC:GetConnectionRules()
+    SetRuleVisualState(nativeTongueCheck, rules.nativeTongueOnly)
+    SetRuleVisualState(selfFoundOnlyCheck, rules.selfFoundOnly)
+    SetRuleVisualState(level60GuildFoundCheck, rules.selfFoundOnly and rules.level60GuildFound)
+    SetRuleVisualState(level60SelfFoundExceptionCheck, rules.selfFoundOnly and rules.allowLevel60WithoutSelfFound)
+    SetRuleVisualState(sameRaceGroupsCheck, rules.sameRaceGroupsOnly)
+    SetRuleVisualState(level60SameRaceExceptionCheck, rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
     if not connection then
-        guildRulesStatus:SetText(iRL.Colors.Gray .. "No guild connection. Join a guild to view shared rules." .. iRL.Colors.Reset)
+        guildRulesStatus:SetText(iRC.Colors.Gray .. "Join a guild to see these rules." .. iRC.Colors.Reset)
     elseif isGuildMaster then
-        guildRulesStatus:SetText(iRL.Colors.Green .. "Guild Master controls enabled." .. iRL.Colors.Reset .. " Changes are broadcast to the guild connection.")
+        guildRulesStatus:SetText(iRC.Colors.Green .. "You can change these guild rules." .. iRC.Colors.Reset)
     else
-        guildRulesStatus:SetText(iRL.Colors.Yellow .. "Read-only rules." .. iRL.Colors.Reset .. " Only the Guild Master can change them.")
+        guildRulesStatus:SetText(iRC.Colors.Yellow .. "Only the Guild Master can change these rules." .. iRC.Colors.Reset)
+    end
+    trollTalkCheck:Refresh()
+    local isTroll = iRC.Roleplay and iRC.Roleplay:IsTroll()
+    trollTalkCheck:SetEnabled(isTroll and true or false)
+    if isTroll then
+        trollTalkStatus:SetText(iRC.Colors.Green .. "Troll character detected." .. iRC.Colors.Reset .. " This setting only affects this character.")
+    else
+        trollTalkStatus:SetText(iRC.Colors.Gray .. "Only Troll characters can use Troll Talk." .. iRC.Colors.Reset)
     end
     for _, addon in ipairs(companionAddons) do
         local loaded = IsAddonLoadedCompat(addon.addonName)
@@ -417,19 +556,19 @@ local function Refresh()
     end
 end
 
-iRL.RefreshOptionsIfShown = function()
+iRC.RefreshOptionsIfShown = function()
     if settingsFrame:IsShown() then Refresh() end
 end
 
 settingsFrame:SetScript("OnShow", Refresh)
 ShowTab(1)
-iRL.SettingsFrame = settingsFrame
+iRC.SettingsFrame = settingsFrame
 
-local stubPanel = CreateFrame("Frame", "iRaceLockedOptionsPanel", UIParent)
-stubPanel.name = iRL.DisplayName
+local stubPanel = CreateFrame("Frame", "iRacelockConnectionOptionsPanel", UIParent)
+stubPanel.name = iRC.DisplayName
 local stubTitle = stubPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 stubTitle:SetPoint("TOPLEFT", 16, -16)
-stubTitle:SetText(iRL.Colors.iRC .. iRL.DisplayName .. iRL.Colors.Reset .. " " .. iRL.Colors.Green .. "v" .. iRL.Version .. iRL.Colors.Reset)
+stubTitle:SetText(iRC.Colors.iRC .. iRC.DisplayName .. iRC.Colors.Reset .. " " .. iRC.Colors.Green .. "v" .. iRC.Version .. iRC.Colors.Reset)
 local stubDescription = stubPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 stubDescription:SetPoint("TOPLEFT", stubTitle, "BOTTOMLEFT", 0, -10)
 stubDescription:SetText("Open the full iRacelockConnection settings panel.")
@@ -437,14 +576,25 @@ local stubButton = CreateFrame("Button", nil, stubPanel, "UIPanelButtonTemplate"
 stubButton:SetSize(180, 28)
 stubButton:SetPoint("TOPLEFT", stubDescription, "BOTTOMLEFT", 0, -15)
 stubButton:SetText("Open settings")
-stubButton:SetScript("OnClick", function() settingsFrame:Show() end)
+stubButton:SetScript("OnClick", function() iRC:OpenOptions() end)
 if InterfaceOptions_AddCategory then
     InterfaceOptions_AddCategory(stubPanel)
 elseif Settings and Settings.RegisterCanvasLayoutCategory then
-    local category = Settings.RegisterCanvasLayoutCategory(stubPanel, iRL.DisplayName)
+    local category = Settings.RegisterCanvasLayoutCategory(stubPanel, iRC.DisplayName)
     Settings.RegisterAddOnCategory(category)
 end
 
-function iRL:OpenOptions()
+function iRC:OpenOptions()
+    if self.CloseWindowsExcept then
+        self:CloseWindowsExcept(settingsFrame)
+    end
     settingsFrame:Show()
+end
+
+function iRC:ToggleOptions()
+    if settingsFrame:IsShown() then
+        settingsFrame:Hide()
+    else
+        self:OpenOptions()
+    end
 end

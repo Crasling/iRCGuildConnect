@@ -1,13 +1,14 @@
-local iRL = _G.iRaceLocked
-if not iRL then return end
+local _, private = ...
+local iRC = private and private.iRC
+if not iRC then return end
 
 local Statistics = {}
-iRL.Statistics = Statistics
+iRC.Statistics = Statistics
 
 local function getStorage()
-    iRLCharDB = iRLCharDB or {}
-    iRLCharDB.statistics = iRLCharDB.statistics or {}
-    return iRLCharDB.statistics
+    iRCCharDB = iRCCharDB or {}
+    iRCCharDB.statistics = iRCCharDB.statistics or {}
+    return iRCCharDB.statistics
 end
 
 function Statistics:Initialize()

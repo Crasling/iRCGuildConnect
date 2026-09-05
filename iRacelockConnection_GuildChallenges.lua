@@ -1,8 +1,9 @@
-local iRL = _G.iRaceLocked
-if not iRL then return end
+local _, private = ...
+local iRC = private and private.iRC
+if not iRC then return end
 
 local Challenges = {}
-iRL.GuildChallenges = Challenges
+iRC.GuildChallenges = Challenges
 
 Challenges.Dungeons = {
     { id = "guild_rfc", boss = "Taragaman the Hungerer", npc = 11520, name = "Ragefire Chasm" },
@@ -39,9 +40,9 @@ for _, dungeon in ipairs(Challenges.Dungeons) do
 end
 
 local function getProgress()
-    iRLCharDB = iRLCharDB or {}
-    iRLCharDB.guildChallengeProgress = iRLCharDB.guildChallengeProgress or { bosses = {}, quests = {}, questLevels = {} }
-    local progress = iRLCharDB.guildChallengeProgress
+    iRCCharDB = iRCCharDB or {}
+    iRCCharDB.guildChallengeProgress = iRCCharDB.guildChallengeProgress or { bosses = {}, quests = {}, questLevels = {} }
+    local progress = iRCCharDB.guildChallengeProgress
     progress.bosses = progress.bosses or {}
     progress.quests = progress.quests or {}
     progress.questLevels = progress.questLevels or {}
@@ -55,7 +56,7 @@ local function countEntries(entries)
 end
 
 local function award(id)
-    if iRL.Achievements then iRL.Achievements:Award(id) end
+    if iRC.Achievements then iRC.Achievements:Award(id) end
 end
 
 local function checkThresholds(progress)
@@ -87,7 +88,7 @@ frame:RegisterEvent("QUEST_TURNED_IN")
 frame:RegisterEvent("QUEST_ACCEPTED")
 frame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 frame:SetScript("OnEvent", function(_, event, ...)
-    if not iRL:IsGuildOnlyGroup() then return end
+    if not iRC:IsGuildOnlyGroup() then return end
     local progress = getProgress()
     if event == "BOSS_KILL" then
         local _, encounterName = ...

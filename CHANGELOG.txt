@@ -2,12 +2,29 @@
  iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.1 - Connection & Rules Polish
+--------------------------------------------------------------------------------
+
+ [CHANGED] Combined Connection and Guild Rules into one clearer status-and-rules settings page
+ [CHANGED] Renamed the internal addon API and SavedVariables to iRC
+ [CHANGED] Moved iRC to an embedded AceAddon namespace without a global iRC table
+ [NEW] Added a RaceLockedForkEU compatibility module for guild statistic and Self-Found data exchange with labelled external sources
+ [CHANGED] Improved Achievement window spacing and dynamic row layout for longer text
+ [CHANGED] Simplified the connection leaderboard to Name, Level, Guild, and Source
+ [NEW] Added recorded completion dates to achievement inspection
+ [NEW] Added live guild presence verification for online members running iRacelockConnection
+ [NEW] Added coordinated Guild Master and Officer presence polls with Officer-chat and whisper mismatch alerts
+ [CHANGED] Escalated unresolved five-minute addon mismatches to Guild chat
+ [NEW] Added one-off welcome guidance when a newly invited member is not running iRacelockConnection
+ [NEW] Added a guild rulebook to Connection & Rules with Self-Found, race-lock, addon, community, and level-60 guidance
+ [NEW] Added a per-character Roleplay tab with optional Troll Talk chat flavour
+
 v0.2.0 - Guild Connection Dashboard
 --------------------------------------------------------------------------------
 
  [NEW] Added a dedicated iRC connection dashboard with faction race overview, verification, Champions, and leaderboard views
  [NEW] Added versioned iRC profile sync for addon presence, Self-Found state, achievement points, and local statistics
- [NEW] Added guild roster refresh and member verification without RaceLockedForkEU protocol dependencies
+ [NEW] Added guild roster refresh and member verification
  [NEW] Added local enemy, boss, and jump statistics for iRC leaderboard sharing
  [NEW] Added /irc guild and a Shift-Left Click minimap shortcut for the connection dashboard
  [CHANGED] Kept group composition and chat language as connection information only; iRC does not force client behaviour
@@ -20,8 +37,6 @@ v0.2.0 - Guild Connection Dashboard
  [CHANGED] Linked the About page and addon metadata to the official GitHub repository
  [FIX] Applied the iRC accent color to sidebar category headings
  [NEW] Added a shared Guild Rules tab with Guild Master-only rule controls and iRC rule synchronization
- [NEW] Added RaceLocked and RaceLockedForkEU compatibility sync for points, level, kills, dungeons, jumps, and ForkEU Self-Found status
- [CHANGED] Added compatible RaceLocked statistics and their source to the iRC connection leaderboard
  [NEW] Enforced Native tongue, Self-Found, and same-race group rules from the Guild Rules tab
  [NEW] Added an optional Guild Master rule that exempts level 60+ characters from the Self-Found requirement
  [NEW] Added a Guild achievement category for guild-only Classic dungeon completions, boss milestones, and high-level quest expeditions
@@ -31,7 +46,7 @@ v0.2.0 - Guild Connection Dashboard
 v0.1.0 - Initial Development
 --------------------------------------------------------------------------------
 
- [NEW] Created the initial iRaceLocked foundation
+ [NEW] Created the initial iRacelockConnection foundation
  [NEW] Added a guild-based connection layer with automatic presence and status sync
  [NEW] Added an achievement page with point totals and inspectable guild-member progress
  [NEW] Added initial connection and character-level journey achievements
@@ -39,7 +54,7 @@ v0.1.0 - Initial Development
  [NEW] Added a standalone settings window with General and Connection sections
  [CHANGED] Reworked the achievement page into a WotLK-inspired category, points, and scroll-list layout
  [CHANGED] Reworked the settings window to use the shared iWR/iNIF/iST tabbed panel style
- [FIX] Reserved a distinct iRaceLocked connection prefix to avoid RaceLocked protocol collisions
- [CHANGED] Applied the iWR text color style to iRaceLocked chat output, UI text, and minimap tooltip
- [NEW] Added an iWR-style iRaceLocked loaded message on player login
+ [FIX] Reserved a dedicated iRC connection prefix for guild synchronization
+ [CHANGED] Applied the iWR text color style to iRacelockConnection chat output, UI text, and minimap tooltip
+ [NEW] Added an iWR-style iRacelockConnection loaded message on player login
  [CHANGED] Kept the addon focused on guild connections and achievements
