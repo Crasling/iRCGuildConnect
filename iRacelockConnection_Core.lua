@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.1"
+iRC.Version = "0.2.2"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -125,17 +125,41 @@ function iRC:RecordSelfFoundState()
     history.currentlyActive = active and true or false
 
     if active then
+        -- Self-Found cannot be restored after it is genuinely removed.  An
+        -- active aura therefore proves an older Broken record was a transient
+        -- load-screen read and can safely be repaired.
+        history.firstEndedAt = nil
+        history.firstEndedLevel = nil
+        history.endedWithLevel60Exception = nil
+        history.pendingEndAt = nil
         history.firstSelfFoundAt = history.firstSelfFoundAt or now
         history.firstSelfFoundLevel = history.firstSelfFoundLevel or level
         history.lastSelfFoundAt = now
-    elseif history.firstSelfFoundAt and not history.firstEndedAt then
+    elseif history.firstSelfFoundAt and not history.firstEndedAt and self.SelfFoundAuraReady and not history.pendingEndAt then
+        -- UnitBuff can briefly return an incomplete aura list while entering
+        -- the world.  Require a delayed, second absent reading before the
+        -- irreversible history flag is written.
+        history.pendingEndAt = now
+        if C_Timer and C_Timer.After then
+            C_Timer.After(3, function() iRC:ConfirmSelfFoundEnded(now) end)
+        end
+    end
+    return history
+end
+
+function iRC:ConfirmSelfFoundEnded(expectedAt)
+    local history = self:GetSelfFoundHistory()
+    if history.pendingEndAt ~= expectedAt then return end
+    history.pendingEndAt = nil
+    if not self.SelfFoundAuraReady or self:GetSelfFoundState() then return end
+    if history.firstSelfFoundAt and not history.firstEndedAt then
+        local now, level = time(), UnitLevel("player") or 1
         local rules = self:GetConnectionRules()
         local allowedAtMaxLevel = level >= 60 and rules and (rules.level60GuildFound or rules.allowLevel60WithoutSelfFound)
         history.firstEndedAt = now
         history.firstEndedLevel = level
         history.endedWithLevel60Exception = allowedAtMaxLevel and true or false
     end
-    return history
 end
 
 function iRC:GetSelfFoundEvidence()

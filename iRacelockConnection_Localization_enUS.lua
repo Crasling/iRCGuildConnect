@@ -55,6 +55,8 @@ iRC.L = {
     RACEGRID_SUMMARY = "Race Overview assembled: %d race group(s), %d external guild report(s), source: %s.",
     RACEGRID_UNSUPPORTED_RACE = "Skipped Race Overview data with an unsupported race value: %s.",
 
+    FORKEU_REFRESH_SENT = "Sent ForkEU compatibility refresh: REQUEST and RLAddon PING.",
+
     COMMAND_CONNECTED = "Connected to %s.",
     COMMAND_NOT_CONNECTED = "No guild connection. Join a guild to use iRacelockConnection.",
     COMMAND_HELP = "/irc - achievements | /irc inspect <name> | /irc guild | /irc options | /irc status",

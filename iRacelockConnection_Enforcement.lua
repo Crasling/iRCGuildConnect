@@ -267,7 +267,18 @@ frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
 frame:SetScript("OnEvent", function(_, event, unit)
-    if event == "TRADE_CLOSED" then
+    if event == "PLAYER_ENTERING_WORLD" then
+        iRC.SelfFoundAuraReady = false
+        Enforcement:Refresh()
+        if C_Timer and C_Timer.After then
+            C_Timer.After(3, function()
+                iRC.SelfFoundAuraReady = true
+                Enforcement:Refresh()
+            end)
+        else
+            iRC.SelfFoundAuraReady = true
+        end
+    elseif event == "TRADE_CLOSED" then
         restrictedTradeCancelled = false
         pendingGuildFoundTradePartners = {}
     elseif event == "TRADE_SHOW" or event == "TRADE_UPDATE" then

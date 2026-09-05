@@ -106,7 +106,7 @@ function Compatibility:StoreStats(entry)
     if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
 end
 
-function Compatibility:StoreSelfFound(name, selfFound)
+function Compatibility:StoreSelfFound(name, selfFound, source)
     if not name or not iRC:IsInGuildConnection() then return end
     local connection = iRC:GetConnection()
     connection.compatibilityMembers = connection.compatibilityMembers or {}
@@ -115,6 +115,10 @@ function Compatibility:StoreSelfFound(name, selfFound)
     member.name = member.name or name
     member.selfFound = selfFound and true or false
     member.selfFoundLastSeen = time()
+    member.presence = {
+        source = source or FORKEU_SOURCE,
+        lastSeen = member.selfFoundLastSeen,
+    }
     connection.compatibilityMembers[key] = member
     if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
 end
@@ -165,7 +169,7 @@ end
 function Compatibility:BroadcastSelfFound(messageType)
     if not iRC:IsInGuildConnection() then return end
     send(SELF_FOUND_PREFIX, messageType .. "," .. (iRC:GetSelfFoundState() and "1" or "0"), "GUILD")
-    self:StoreSelfFound(iRC:GetPlayerName(), iRC:GetSelfFoundState())
+    self:StoreSelfFound(iRC:GetPlayerName(), iRC:GetSelfFoundState(), "iRC")
 end
 
 function Compatibility:BroadcastAll()
@@ -173,6 +177,7 @@ function Compatibility:BroadcastAll()
     self:BroadcastStats()
     send("RaceLockedForkEU", REQUEST_PAYLOAD, "GUILD")
     self:BroadcastSelfFound("PING")
+    iRC:DebugMsg(iRC:Text("FORKEU_REFRESH_SENT"), 3)
 end
 
 function iRC:RequestRaceLockedTradeVerification(targetName)
@@ -202,7 +207,7 @@ local function handleSelfFound(message, sender)
     if not iRC:IsGuildMemberName(sender) then return end
     local messageType, value = tostring(message or ""):match("^([^,]+),([01])$")
     if not messageType then return end
-    Compatibility:StoreSelfFound(sender, value == "1")
+    Compatibility:StoreSelfFound(sender, value == "1", FORKEU_SOURCE)
     if messageType == "PING" then Compatibility:BroadcastSelfFound("PONG") end
 end
 

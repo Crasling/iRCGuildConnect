@@ -420,7 +420,7 @@ local trollTalkCheck
 trollTalkCheck, y = CreateSettingsCheckbox(roleplayContent, "Enable Troll Talk", "Add simple troll wording to your normal chat messages.", y,
     function() return iRC.Roleplay:GetPlayerSettings().trollTalk end,
     function(value) iRC.Roleplay:GetPlayerSettings().trollTalk = value and true or false end)
-_, y = CreateInfoText(roleplayContent, "Example: “Do you want to join?” becomes “Do ya wanna join, mon?”", y - 2, "GameFontDisableSmall")
+_, y = CreateInfoText(roleplayContent, "Example: “Do you want to join?” becomes “Do ya wanna join?” Words such as man and mate can still become mon.", y - 2, "GameFontDisableSmall")
 roleplayContent:SetHeight(math.abs(y) + 20)
 
 do

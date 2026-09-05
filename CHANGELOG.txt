@@ -2,6 +2,17 @@
  iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.2 - Race Overview & Connection Dashboard
+--------------------------------------------------------------------------------
+
+ [NEW] Joined RaceLocked and RaceLockedForkEU public race-data channels as read-only sources for Race Overview
+ [FIX] Normalized local race tokens so local race reports render in the correct Horde or Alliance card
+ [FIX] Restored ForkEU fallback guild names for races without live guild data
+ [NEW] Added iWR-style colour-coded debug output and detailed Race Overview transfer diagnostics
+ [CHANGED] Moved Debug Mode to About > Developer with the shared verbose-debug tooltip
+ [CHANGED] Reworked Connection Dashboard tabs with summaries, filters, sortable columns, clearer verification status, and ranking numbers
+ [FIX] Achievement and Connection dashboard close buttons now work during combat
+
 v0.2.1 - Connection & Rules Polish
 --------------------------------------------------------------------------------
 

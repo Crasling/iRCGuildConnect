@@ -31,13 +31,14 @@ local function displayMemberName(name)
     return name
 end
 
-local SELF_FOUND_HISTORY_LABELS = {
-    VERIFIED = "Verified",
-    TRACKED = "Tracked",
-    BROKEN = "Broken",
-    LEVEL_60_EXCEPTION = "Lv60 exception",
-    UNVERIFIED = "Unverified",
-}
+local function formatAttentionTimer(startedAt)
+    if not startedAt then return nil end
+    local elapsed = math.max(0, time() - startedAt)
+    local hours = math.floor(elapsed / 3600)
+    local minutes = math.floor((elapsed % 3600) / 60)
+    local duration = hours > 0 and (hours .. "h " .. minutes .. "m") or (minutes .. "m")
+    return "Since " .. date("%H:%M", startedAt) .. " · " .. duration
+end
 
 local function setBackdrop(frame, background, border)
     frame:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
@@ -90,6 +91,15 @@ function Dashboard:Create()
     frame:SetClampedToScreen(true)
     setBackdrop(frame, { 0.025, 0.022, 0.018, 0.98 }, { 0.46, 0.37, 0.20, 1 })
     frame:Hide()
+    frame.attentionTimerElapsed = 0
+    frame:SetScript("OnUpdate", function(self, elapsed)
+        if not self:IsShown() or self.tab ~= "Verification" then return end
+        self.attentionTimerElapsed = self.attentionTimerElapsed + elapsed
+        if self.attentionTimerElapsed >= 1 then
+            self.attentionTimerElapsed = 0
+            Dashboard:Refresh()
+        end
+    end)
     tinsert(UISpecialFrames, frame:GetName())
     self.frame = frame
 
@@ -138,11 +148,14 @@ function Dashboard:Create()
     local refreshButton = CreateFrame("Button", nil, sidebar, "UIPanelButtonTemplate")
     refreshButton:SetSize(166, 27)
     refreshButton:SetPoint("BOTTOM", 0, 16)
-    refreshButton:SetText("Refresh guild roster")
+    refreshButton:SetText("Refresh verification")
     refreshButton:SetScript("OnClick", function()
         iRC:RefreshGuildRoster()
         iRC:SendHello()
         iRC:RequestGuildPresence()
+        if iRC.Compatibility and iRC.Compatibility.BroadcastAll then
+            iRC.Compatibility:BroadcastAll()
+        end
         Dashboard:Refresh()
     end)
 
@@ -171,6 +184,10 @@ function Dashboard:Create()
         local button = CreateFrame("Button", nil, main, "UIPanelButtonTemplate")
         button:SetSize(124, 23)
         button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 130, -126)
+        button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
+        button.activeGlow:SetAllPoints(button)
+        button.activeGlow:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.26)
+        button.activeGlow:Hide()
         button:Hide()
         frame.filterButtons[index] = button
     end
@@ -231,8 +248,13 @@ local function setFilters(frame, choices)
     for index, button in ipairs(frame.filterButtons) do
         local choice = choices[index]
         if choice then
-            button:SetText(choice.label)
-            button:SetEnabled(choice.id ~= selected)
+            local active = choice.id == selected
+            button:SetText((active and "• " or "") .. choice.label)
+            button:SetEnabled(true)
+            button.activeGlow:SetShown(active)
+            if button.GetFontString and button:GetFontString() then
+                button:GetFontString():SetTextColor(unpack(active and ORANGE or GRAY))
+            end
             button:SetScript("OnClick", function()
                 frame.filters[frame.tab] = choice.id
                 Dashboard:Refresh()
@@ -367,14 +389,15 @@ function Dashboard:Refresh()
         for _, member in ipairs(members) do
             count = count + 1
             local verification = member.verification or { state = "missing", label = "Addon not detected" }
-            local addon = member.profile and (sourceLabel("iRC") .. " v" .. (member.addonVersion or "?") .. " · " .. verification.label)
+            local compatiblePresence = member.compatibilityMember and member.compatibilityMember.presence
+            local addon = verification.state == "compatible" and compatiblePresence and (sourceLabel(compatiblePresence.source) .. " · " .. verification.label)
+                or (member.profile and (sourceLabel("iRC") .. " v" .. (member.addonVersion or "?") .. " · " .. verification.label))
                 or (member.compatibility and (sourceLabel(member.source) .. " · " .. verification.label))
                 or verification.label
-            local evidence = member.profile and member.profile.selfFoundEvidence or nil
-            local historyStatus = evidence and evidence.status or "UNVERIFIED"
-            local historyLabel = SELF_FOUND_HISTORY_LABELS[historyStatus] or "Unverified"
-            local selfFound = member.profile and ((member.selfFound and "Active" or "Inactive") .. " / " .. historyLabel)
-                or (member.compatibility and (member.selfFound and "Active (ForkEU)" or "Inactive (ForkEU)"))
+            local attentionTimer = formatAttentionTimer(member.attentionSince)
+            if attentionTimer then addon = addon .. "\n" .. attentionTimer end
+            local selfFound = member.profile and (member.selfFound and "Active" or "Inactive")
+                or ((member.compatibility or compatiblePresence) and (member.selfFound and "Active (ForkEU)" or "Inactive (ForkEU)"))
                 or "Unknown"
             local selectedMember = member
             local color = verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or (verification.state == "offline" and GRAY or RED))

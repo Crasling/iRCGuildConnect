@@ -5,11 +5,34 @@ if not iRC then return end
 local AllianceRaces = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HordeRaces = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
 local PRESENCE_TIMEOUT = 135
+-- RaceLocked only broadcasts its guild-sync data at login and then every five
+-- minutes.  Do not apply iRC's much shorter active-poll timeout to that source.
+local COMPATIBILITY_TIMEOUT = 360
 local reportedPresenceMismatches = {}
 
 local function memberKey(name, guid)
     if guid and guid ~= "" then return "guid:" .. guid end
     return "name:" .. iRC:NormalizeName(name)
+end
+
+function iRC:GetMemberAttentionSince(name, verification)
+    local connection = self:GetConnection()
+    if not connection then return nil end
+    connection.attentionSince = connection.attentionSince or {}
+    local key = self:NormalizeName(name)
+    local state = verification and verification.state
+    if state == "missing" or state == "stale" then
+        local record = connection.attentionSince[key]
+        if not record then
+            record = { since = time(), state = state }
+            connection.attentionSince[key] = record
+        else
+            record.state = state
+        end
+        return record.since
+    end
+    connection.attentionSince[key] = nil
+    return nil
 end
 
 function iRC:FindConnectionProfile(name)
@@ -30,31 +53,41 @@ function iRC:GetMemberVerification(name, online, profile)
     local compatibility = self.GetCompatibilityStats and self:GetCompatibilityStats(name)
     local compatibilityMember = self.GetCompatibilityMember and self:GetCompatibilityMember(name)
     local guildFound = compatibilityMember and compatibilityMember.guildFound
-    if not profile and guildFound and guildFound.source == "RaceLocked" and guildFound.lastSeen then
+    local compatiblePresence = compatibilityMember and compatibilityMember.presence
+    local sessionStartedAt = self.ConnectionSessionStartedAt or 0
+    if profile and profile.lastSeen and profile.lastSeen >= sessionStartedAt then
+        local profileAge = time() - profile.lastSeen
+        if profileAge <= PRESENCE_TIMEOUT then
+            return { state = "verified", label = "Verified " .. math.max(0, math.floor(profileAge)) .. "s ago" }
+        end
+    end
+    if guildFound and guildFound.source == "RaceLocked" and guildFound.lastSeen then
         local guildFoundAge = time() - guildFound.lastSeen
-        if guildFoundAge <= PRESENCE_TIMEOUT then
+        if guildFoundAge <= COMPATIBILITY_TIMEOUT then
             local status = guildFound.verified and guildFound.clean and "verified" or "not verified"
             return { state = "compatible", label = "RaceLocked Guild Found " .. status .. " " .. math.max(0, math.floor(guildFoundAge)) .. "s ago" }
         end
     end
-    if not profile and compatibility and compatibility.lastSeen then
+    if compatiblePresence and compatiblePresence.lastSeen then
+        local presenceAge = time() - compatiblePresence.lastSeen
+        if presenceAge <= PRESENCE_TIMEOUT then
+            return { state = "compatible", label = (compatiblePresence.source or "RaceLockedForkEU") .. " presence " .. math.max(0, math.floor(presenceAge)) .. "s ago" }
+        end
+    end
+    if compatibility and compatibility.lastSeen then
         local compatibilityAge = time() - compatibility.lastSeen
-        if compatibilityAge <= PRESENCE_TIMEOUT then
+        if compatibilityAge <= COMPATIBILITY_TIMEOUT then
             return { state = "compatible", label = (compatibility.source or "RaceLockedForkEU") .. " data " .. math.max(0, math.floor(compatibilityAge)) .. "s ago" }
         end
     end
     if not profile or not profile.lastSeen then
         return { state = "missing", label = "Addon not detected" }
     end
-    local sessionStartedAt = self.ConnectionSessionStartedAt or 0
     if profile.lastSeen < sessionStartedAt then
         return { state = "missing", label = "No live iRC response" }
     end
     local age = time() - profile.lastSeen
-    if age > PRESENCE_TIMEOUT then
-        return { state = "stale", label = "iRC response expired" }
-    end
-    return { state = "verified", label = "Verified " .. math.max(0, math.floor(age)) .. "s ago" }
+    return { state = "stale", label = "iRC response expired " .. math.max(0, math.floor(age)) .. "s ago" }
 end
 
 function iRC:IsPresenceNotificationLeader()
@@ -140,7 +173,9 @@ function iRC:CheckNewMemberAddon(memberId)
     if not newMember or not newMember.online then return true end
     local checkStartedAt = connection.newMemberChecks[memberId] or time()
     if (newMember.profile and newMember.profile.lastSeen and newMember.profile.lastSeen >= checkStartedAt)
-        or newMember.compatibility then
+        or newMember.compatibility
+        or (newMember.compatibilityMember and newMember.compatibilityMember.presence
+            and (tonumber(newMember.compatibilityMember.presence.lastSeen) or 0) >= checkStartedAt) then
         connection.newMemberChecks[memberId] = nil
         return true
     end
@@ -161,6 +196,12 @@ function iRC:ScheduleNewMemberAddonCheck(memberId)
     connection.newMemberChecks[memberId] = time()
     self:DebugMsg(self:Text("NEW_MEMBER_CHECK", memberId), 3)
     C_Timer.After(2, function()
+        -- ForkEU responds to this public presence heartbeat with PONG.  Every
+        -- iRC client sends it, so detecting a new guild member never depends
+        -- on the local player being an officer.
+        if iRC.Compatibility and iRC.Compatibility.BroadcastSelfFound then
+            iRC.Compatibility:BroadcastSelfFound("PING")
+        end
         if iRC:IsPresenceNotificationLeader() then iRC:RequestGuildPresence(true) end
     end)
     C_Timer.After(10, function()
@@ -210,12 +251,14 @@ function iRC:GetGuildRosterRows()
                 guid = profile.guid
             end
             local verification = self:GetMemberVerification(name, online and true or false, profile)
+            local attentionSince = self:GetMemberAttentionSince(name, verification)
             local combinedSource = profile and compatibility and ("iRC + " .. (compatibility.source or "RaceLocked")) or nil
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
                 level = (profile and profile.level) or (compatibility and compatibility.level) or level or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
                 race = race, online = online and true or false, profile = profile,
                 compatibility = compatibility,
+                compatibilityMember = compatibilityMember,
                 -- A member has exactly one canonical row. iRC is preferred when
                 -- present; compatible counters only fill missing data and are
                 -- never added to iRC counters.
@@ -225,6 +268,7 @@ function iRC:GetGuildRosterRows()
                 statistics = (profile and profile.statistics) or (compatibility and compatibility.statistics) or nil,
                 source = combinedSource or (profile and "iRC") or (compatibility and compatibility.source) or nil,
                 verification = verification,
+                attentionSince = attentionSince,
             }
         end
     end

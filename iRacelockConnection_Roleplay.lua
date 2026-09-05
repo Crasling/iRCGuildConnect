@@ -134,13 +134,6 @@ function Roleplay:TransformTrollTalk(text)
     text = text:gsub("’", "'")
     text = applyReplacements(text, phraseReplacements)
     text = applyReplacements(text, wordReplacements)
-    if not text:find("%f[%a][Mm][Oo][Nn]%f[%A]") then
-        if text:match("[%.%!%?]+%s*$") then
-            text = text:gsub("([%.%!%?]+)(%s*)$", ", mon%1%2")
-        else
-            text = text .. ", mon"
-        end
-    end
     return text
 end
 
