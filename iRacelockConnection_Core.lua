@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.6"
+iRC.Version = "0.2.7"
 -- Increment for each local testing change. Set to nil when testing ends.
 -- Display only: TOC metadata, release tags and shared profiles use iRC.Version.
 local TEST_REVISION = nil
@@ -56,6 +56,7 @@ iRC.DefaultConnectionRules = {
     allowLevel60MixedRaceGroups = false,
     guildGroupsOnly = false,
     guildGroupsMinimumLevel = 1,
+    guildContacts = "",
 }
 
 iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL" }
@@ -541,6 +542,17 @@ function iRC:SetGuildGroupsMinimumLevel(value)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
+    return true
+end
+
+function iRC:SetGuildContacts(value)
+    if not self:IsGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
+    connection.rules.guildContacts = value:sub(1, 60)
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
 

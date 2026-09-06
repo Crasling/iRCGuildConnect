@@ -2,7 +2,18 @@
 iRacelockConnection - Changelog
 ================================================================================
 
-v0.2.6 -
+v0.2.7 - Guild Sharing & Reliable Verification
+--------------------------------------------------------------------------------
+ [FIX] Reduced false addon warnings by checking once more for a recent response before notifying players and officers
+ [CHANGED] RaceLockedForkEU status now expires after 135 seconds when no new response is received
+ [NEW] Guild Masters can add invite contacts to their guild's expandable Statistics card
+ [CHANGED] Guild Statistics are now shared only between iRC users and no longer sent through other addons' data channels
+ [FIX] Refresh / Share now sends guild information more reliably, including reports from large guilds
+ [NEW] Enabling global sharing or opening the main iRC window now shares fresh guild information when available
+ [CHANGED] Refresh / Share displays a 30-second cooldown after sharing or receiving new guild information
+
+
+v0.2.6 - Reliable Guild Verification & Guild Found Economy
 --------------------------------------------------------------------------------
  [CHANGED] Renamed Total players to Total members in Guild Statistics
  [CHANGED] Active players now shows each guild's highest observed online-member count during the last 24 hours

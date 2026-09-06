@@ -187,10 +187,14 @@ gridFrame.OnEvent(nil, "CHAT_MSG_ADDON", "iRCGridV1", "REQUEST\t1", "CHANNEL", "
 grid:BroadcastExternalReports(); grid:RequestReports(); grid:BroadcastReport()
 advance(3)
 assert(#chat == 0, "network requests and non-click callers cannot send channel chat")
+local nativeAddonMessages = #sent
 click(function() grid:PublishFromClick() end)
+assert(#sent == nativeAddonMessages + 2, "Refresh / Share sends one iRC guild report and one report request")
+assert(sent[nativeAddonMessages + 1][1] == "iRCGridV1" and sent[nativeAddonMessages + 1][3] == "CHANNEL", "guild report uses the native addon channel")
+assert(grid:GetRefreshCooldownRemaining() > 0 and grid:GetRefreshCooldownRemaining() <= 30, "Refresh / Share starts the shared-data cooldown")
 local externalCount = 0
 for _, packet in ipairs(chat) do if packet[4] == 4 or packet[4] == 5 then externalCount = externalCount + 1 end end
-assert(externalCount == 2, "one native snapshot on each external bus")
+assert(externalCount == 0, "iRC never publishes race-grid snapshots on external addon buses")
 for _, packet in ipairs(chat) do assert(#packet[1] <= 255 and packet[2] == "CHANNEL") end
 local chatCount = #chat
 click(function() grid:BroadcastExternalReports(true) end); advance(3)
@@ -243,7 +247,7 @@ local combined = iRC:GetRaceGridOverview()
 assert(#combined == 1, "native reports cannot create guild cards without an iRC guild report")
 local relayBefore = #chat
 advance(121); click(function() grid:BroadcastExternalReports(true) end); advance(10)
-assert(#chat == relayBefore + 2, "only current own snapshots are sent; cached native data is never relayed")
+assert(#chat == relayBefore, "neither current nor cached iRC snapshots are sent on external addon buses")
 local exactRelay = false
 for index = relayBefore + 1, #chat do if chat[index][1] == relayWire then exactRelay = true end end
 assert(not exactRelay, "cached native reports are display-only")
@@ -256,7 +260,7 @@ assert(grid:IsExternalBroadcaster())
 -- Dynamic guild snapshots are discovered only through iRC and ranked by
 -- level-60 members, active players, total roster, then guild name.
 serverStore.guildReports = {}
-local function guildReport(name, guild, race, level60, active, total, stamp, ruleMask, sameRaceLevel, guildGroupsLevel)
+local function guildReport(name, guild, race, level60, active, total, stamp, ruleMask, sameRaceLevel, guildGroupsLevel, contacts)
     local fields = { "GUILD_REPORT", "2", name, "Player-1-" .. name, guild, race,
         tostring(level60), tostring(active), tostring(total), "30", tostring(stamp or time()), "0" }
     for index = 1, 9 do fields[#fields + 1] = tostring(index == 4 and total or 0) end
@@ -264,12 +268,13 @@ local function guildReport(name, guild, race, level60, active, total, stamp, rul
         fields[#fields + 1] = tostring(ruleMask)
         fields[#fields + 1] = tostring(sameRaceLevel or 1)
         fields[#fields + 1] = tostring(guildGroupsLevel or 1)
+        fields[#fields + 1] = contacts or ""
     end
     gridFrame.OnEvent(nil, "CHAT_MSG_ADDON", "iRCGridV1", table.concat(fields, "\t"), "CHANNEL", name)
 end
 guildReport("Elf-Soulseeker", "Moon Wardens", "NIGHTELF", 4, 2, 10)
-guildReport("Orc-Soulseeker", "Warsong Vanguard", "ORC", 3, 9, 20, nil, 80, 50, 55)
-guildReport("OrcTwo-Soulseeker", "Warsong Vanguard", "ORC", 3, 2, 20, time() + 1, 80, 50, 55)
+guildReport("Orc-Soulseeker", "Warsong Vanguard", "ORC", 3, 9, 20, nil, 80, 50, 55, "Orcchief, Orcguard")
+guildReport("OrcTwo-Soulseeker", "Warsong Vanguard", "ORC", 3, 2, 20, time() + 1, 80, 50, 55, "Orcchief, Orcguard")
 guildReport("Human-Soulseeker", "Lion Guard", "HUMAN", 3, 8, 50)
 guildReport("ElfTwo-Soulseeker", "Moon Wardens", "NIGHTELF", 4, 2, 11, time() + 1)
 local ranked = iRC:GetRaceGridOverview()
@@ -280,6 +285,7 @@ assert(ranked[1].faction == "Alliance" and ranked[2].faction == "Horde", "guild 
 assert(ranked[1].rulesKnown == nil, "older iRC reports remain valid without rule metadata")
 assert(ranked[2].rulesKnown and ranked[2].rules.sameRaceGroupsOnly and ranked[2].rules.guildGroupsOnly, "rule flags decode from new reports")
 assert(ranked[2].rules.sameRaceMinimumLevel == 50 and ranked[2].rules.guildGroupsMinimumLevel == 55, "rule levels decode from new reports")
+assert(ranked[2].guildContacts == "Orcchief, Orcguard", "guild homepage contacts decode from current iRC reports")
 
 -- Native reports are retained for compatibility but cannot invent a Stats
 -- guild that has never been announced through iRC.

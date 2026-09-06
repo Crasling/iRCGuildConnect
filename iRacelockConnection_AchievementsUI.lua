@@ -213,7 +213,7 @@ local function makeRaceCard(parent)
     card.rulesSeparator:SetHeight(1)
     card.rulesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     card.rulesTitle:SetPoint("TOPLEFT", 16, -171)
-    card.rulesTitle:SetText(iRC:Text("GUILD_STATS_ACTIVE_RULES"))
+    card.rulesTitle:SetText(iRC:Text("GUILD_STATS_GUILD_PROFILE"))
     card.rulesTitle:SetTextColor(unpack(COLORS.gold))
     card.rulesText = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     card.rulesText:SetPoint("TOPLEFT", 20, -190)
@@ -424,6 +424,14 @@ function UI:Create()
         GameTooltip:Show()
     end)
     frame.raceRefresh:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    frame.raceRefresh:SetScript("OnUpdate", function(self, elapsed)
+        self.cooldownElapsed = (self.cooldownElapsed or 0) + elapsed
+        if self.cooldownElapsed < 0.25 then return end
+        self.cooldownElapsed = 0
+        local remaining = iRC.RaceGrid and iRC.RaceGrid:GetRefreshCooldownRemaining() or 0
+        self:SetEnabled(remaining <= 0)
+        self:SetText(remaining > 0 and iRC:Text("RL_GRID_REFRESH_COOLDOWN", math.ceil(remaining)) or iRC:Text("RL_GRID_REFRESH"))
+    end)
     frame.raceRefresh:Hide()
     frame.contentSubtitle = main:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.contentSubtitle:SetPoint("TOPLEFT", frame.contentTitle, "BOTTOMLEFT", 0, -5)
@@ -792,9 +800,21 @@ local function getActiveRuleLines(group)
     return lines
 end
 
+local function getGuildProfileLines(group)
+    local contacts = tostring(group.guildContacts or "")
+    local lines = {
+        iRC:Text("GUILD_STATS_RACELOCKED_EXPLANATION"),
+        contacts ~= "" and iRC:Text("GUILD_STATS_CONTACTS", contacts) or iRC:Text("GUILD_STATS_NO_CONTACTS"),
+        "",
+        iRC:Text("GUILD_STATS_ACTIVE_RULES") .. ":",
+    }
+    for _, line in ipairs(getActiveRuleLines(group)) do lines[#lines + 1] = line end
+    return lines
+end
+
 local function guildCardHeight(group)
     if not expandedGuildCards[guildCardKey(group)] then return 158 end
-    return 202 + #getActiveRuleLines(group) * 14
+    return 202 + #getGuildProfileLines(group) * 14
 end
 
 local function setRaceCard(card, group, rank)
@@ -816,7 +836,7 @@ local function setRaceCard(card, group, rank)
     card.rulesSeparator:SetShown(expanded and true or false)
     card.rulesTitle:SetShown(expanded and true or false)
     card.rulesText:SetShown(expanded and true or false)
-    if expanded then card.rulesText:SetText(table.concat(getActiveRuleLines(group), "\n")) end
+    if expanded then card.rulesText:SetText(table.concat(getGuildProfileLines(group), "\n")) end
     updateClassBreakdown(card, group.classes, group.members)
     card:Show()
 end
@@ -964,7 +984,7 @@ function UI:OpenHardcoreAchievements()
     iRC:Print(iRC.Colors.Red .. iRC:Text("HCA_NOT_READY") .. iRC.Colors.Reset)
 end
 
-function UI:Open(subjectName)
+function UI:Open(subjectName, publishFromClick)
     local frame = self:Create()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     frame.subjectName = subjectName or iRC:GetPlayerName()
@@ -973,14 +993,17 @@ function UI:Open(subjectName)
     self:Refresh()
     frame:Show()
     frame:Raise()
+    if publishFromClick and iRC.RaceGrid and iRC.RaceGrid:GetRefreshCooldownRemaining() <= 0 then
+        iRC.RaceGrid:PublishFromClick()
+    end
 end
 
-function UI:Toggle()
+function UI:Toggle(publishFromClick)
     local frame = self:Create()
     if frame:IsShown() then
         frame:Hide()
     else
-        self:Open()
+        self:Open(nil, publishFromClick)
     end
 end
 

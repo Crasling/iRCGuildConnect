@@ -8,15 +8,18 @@ local PRESENCE_TIMEOUT = 135
 -- RaceLocked only broadcasts its guild-sync data at login and then every five
 -- minutes.  Do not apply iRC's much shorter active-poll timeout to that source.
 local COMPATIBILITY_TIMEOUT = 360
+local FORKEU_COMPATIBILITY_TIMEOUT = 135
 local reportedPresenceMismatches = {}
 local pendingPresenceChecks = {}
 local presenceConnection, reviewTicket, reviewAt, selectedOfficer
 local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 60, 60
 local sessionStartedAt = time()
 
-local function isFreshCompatibility(lastSeen, profile)
-    lastSeen = tonumber(lastSeen)
-    if not lastSeen or lastSeen > time() or time() - lastSeen > COMPATIBILITY_TIMEOUT then return false end
+local function isFreshCompatibility(entry, profile)
+    if type(entry) ~= "table" then return false end
+    local lastSeen = tonumber(entry.lastSeen)
+    local timeout = entry.source == "RaceLockedForkEU" and FORKEU_COMPATIBILITY_TIMEOUT or COMPATIBILITY_TIMEOUT
+    if not lastSeen or lastSeen > time() or time() - lastSeen > timeout then return false end
     local profileLastSeen = profile and tonumber(profile.lastSeen)
     -- iRC emits compatibility mirrors next to HELLO. They must not extend the
     -- same client's presence after HELLO expires; a later native response can.
@@ -29,10 +32,11 @@ local function isFreshIRCProfile(profile)
     return lastSeen and lastSeen >= startedAt and lastSeen <= time() and time() - lastSeen <= PRESENCE_TIMEOUT
 end
 
-local function latestCompatibilitySeen(member, synced)
-    local latest = 0
+local function latestCompatibilityEntry(member, synced)
+    local latest, latestSeen
     for _, entry in pairs({ member and member.stats, member and member.presence, member and member.guildFound, synced }) do
-        latest = math.max(latest, type(entry) == "table" and tonumber(entry.lastSeen) or 0)
+        local seen = type(entry) == "table" and tonumber(entry.lastSeen) or nil
+        if seen and (not latestSeen or seen > latestSeen) then latest, latestSeen = entry, seen end
     end
     return latest
 end
@@ -111,21 +115,21 @@ function iRC:GetMemberVerification(name, online, profile, context)
             return { state = "verified", label = "Verified " .. math.max(0, math.floor(profileAge)) .. "s ago" }
         end
     end
-    if synced and synced.source == "RaceLocked" and isFreshCompatibility(synced.lastSeen, profile) then
+    if synced and synced.source == "RaceLocked" and isFreshCompatibility(synced, profile) then
         return { state = "compatible", label = self:Text("RL_ROSTER_PRESENT") }
     end
-    if guildFound and guildFound.source == "RaceLocked" and isFreshCompatibility(guildFound.lastSeen, profile) then
+    if guildFound and guildFound.source == "RaceLocked" and isFreshCompatibility(guildFound, profile) then
         local guildFoundAge = time() - guildFound.lastSeen
         local status = guildFound.verified and guildFound.clean and "verified" or "not verified"
         return { state = "compatible", label = "RaceLocked Guild Found " .. status .. " " .. math.max(0, math.floor(guildFoundAge)) .. "s ago" }
     end
-    if compatiblePresence and isFreshCompatibility(compatiblePresence.lastSeen, profile) then
+    if compatiblePresence and isFreshCompatibility(compatiblePresence, profile) then
         local presenceAge = time() - compatiblePresence.lastSeen
         if presenceAge <= PRESENCE_TIMEOUT then
             return { state = "compatible", label = (compatiblePresence.source or "RaceLockedForkEU") .. " presence " .. math.max(0, math.floor(presenceAge)) .. "s ago" }
         end
     end
-    if compatibility and isFreshCompatibility(compatibility.lastSeen, profile) then
+    if compatibility and isFreshCompatibility(compatibility, profile) then
         local compatibilityAge = time() - compatibility.lastSeen
         return { state = "compatible", label = (compatibility.source or "RaceLockedForkEU") .. " data " .. math.max(0, math.floor(compatibilityAge)) .. "s ago" }
     end
@@ -172,6 +176,18 @@ end
 local function announcePresenceMismatch(member, verification, escalated)
     -- Re-elect immediately before publishing, not just when the probes began.
     if not iRC:IsPresenceNotificationLeader() or not SendChatMessage then return false end
+    -- The roster row passed into this function is a snapshot. An addon reply
+    -- can arrive after that row was built but before the delayed warning runs,
+    -- so always consult the live caches again at the final send boundary.
+    local liveProfile = iRC:FindConnectionProfile(member.name)
+    local liveVerification = iRC:GetMemberVerification(member.name, true, liveProfile)
+    if liveVerification.state == "verified" or liveVerification.state == "compatible" then
+        local key = iRC:NormalizeName(member.name)
+        reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
+        iRC:DebugMsg(iRC:Text("PRESENCE_RECOVERED", member.name), 3)
+        return true, true
+    end
+    verification = liveVerification
     if iRC:SuppressesPresenceWarnings() then
         iRC:DebugMsg(iRC:Text("PRESENCE_WARNING_SUPPRESSED", member.name), 3)
         return true
@@ -253,19 +269,23 @@ function iRC:CheckPresenceMismatches()
                     else
                         pendingPresenceChecks[key] = nil
                         if report then
-                            if not announcePresenceMismatch(member, verification, true) then queuePresenceReview(1); return end
-                            report.escalated = true
+                            local sent, recovered = announcePresenceMismatch(member, verification, true)
+                            if not sent then queuePresenceReview(1); return end
+                            if not recovered then report.escalated = true end
                         else
-                            if not announcePresenceMismatch(member, verification, false) then queuePresenceReview(1); return end
-                            reportedPresenceMismatches[key] = { reportedAt = now, escalated = false }
-                            self:DebugMsg(self:Text("PRESENCE_MISMATCH", member.name, verification.label or ""), 2)
-                            if connection.newMemberChecks[id] and not connection.newMemberWelcomeNotices[id] and SendChatMessage
-                                and self:IsPresenceNotificationLeader() and not self:SuppressesPresenceWarnings() then
-                                connection.newMemberWelcomeNotices[id] = now
-                                SendChatMessage(self:Text("NEW_MEMBER_WELCOME", member.name), "GUILD")
+                            local sent, recovered = announcePresenceMismatch(member, verification, false)
+                            if not sent then queuePresenceReview(1); return end
+                            if not recovered then
+                                reportedPresenceMismatches[key] = { reportedAt = now, escalated = false }
+                                self:DebugMsg(self:Text("PRESENCE_MISMATCH", member.name, verification.label or ""), 2)
+                                if connection.newMemberChecks[id] and not connection.newMemberWelcomeNotices[id] and SendChatMessage
+                                    and self:IsPresenceNotificationLeader() and not self:SuppressesPresenceWarnings() then
+                                    connection.newMemberWelcomeNotices[id] = now
+                                    SendChatMessage(self:Text("NEW_MEMBER_WELCOME", member.name), "GUILD")
+                                end
+                                queuePresenceReview(300 - CONFIRMATION_WINDOW)
                             end
                             connection.newMemberChecks[id] = nil
-                            queuePresenceReview(300 - CONFIRMATION_WINDOW)
                         end
                     end
                 end
@@ -375,7 +395,7 @@ function iRC:GetGuildRosterRows()
                     -- live. Keep compatibility cached, but do not mix it into
                     -- this character's row or source label.
                     compatibilityMember, compatibility, syncedStatus = nil, nil, nil
-                elseif isFreshCompatibility(latestCompatibilitySeen(compatibilityMember, syncedStatus), profile) then
+                elseif isFreshCompatibility(latestCompatibilityEntry(compatibilityMember, syncedStatus), profile) then
                     -- A genuinely later native response proves that iRC is no
                     -- longer the active source for this character.
                     profiles[key], profile = nil, nil

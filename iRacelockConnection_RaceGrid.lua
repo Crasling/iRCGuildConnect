@@ -9,6 +9,7 @@ local PREFIX = "iRCGridV1"
 local CHANNEL_NAME = "iRacelockConnection"
 local WIRE_VERSION = "2"
 local REPORT_INTERVAL = 120
+local REFRESH_COOLDOWN = 30
 local STALE_AFTER = 900
 local SEP = "\t"
 -- RaceLocked and its ForkEU variant publish the same RLRaceGridV1 payload on
@@ -53,10 +54,13 @@ end
 local function send(prefix, message, distribution, target)
     if distribution == "CHANNEL" then
         local id = GetChannelName and GetChannelName(target)
-        local wire = prefix .. ":" .. message:gsub(".", function(char) return string.format("%02x", string.byte(char)) end)
-        if SendChatMessage and type(id) == "number" and id > 0 and #wire <= 255 then
-            SendChatMessage(wire, "CHANNEL", nil, id)
-            return true
+        if type(id) ~= "number" or id <= 0 or #message > 255 then return false end
+        local api = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
+        if api then
+            local called, result = pcall(api, prefix, message, "CHANNEL", id)
+            -- Classic commonly returns nil after a successful addon-message
+            -- send. Only an API error or an explicit false means failure.
+            return called and result ~= false
         end
         return false
     end
@@ -201,6 +205,7 @@ function RaceGrid:GetLocalReport()
         membersLevel60 = guild.membersLevel60, averageLevel = guild.averageLevel,
         classes = guild.classes, guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
+        guildContacts = guild.guildContacts,
         source = "iRC guild report", timestamp = time(), lastSeen = time(),
     }
 end
@@ -364,7 +369,7 @@ function RaceGrid:EncodeExternalReport(report, channelName)
     return #wire <= 255 and wire or nil
 end
 
-local externalReady, lastExternalBroadcast = false, nil
+local externalReady = false
 
 -- Verification and compatible participation remain useful metadata, but the
 -- guild statistics themselves count the complete current roster.
@@ -409,6 +414,7 @@ function RaceGrid:BuildOwnGuildReports()
             sameRaceMinimumLevel = tonumber(rules.sameRaceMinimumLevel) or 1,
             guildGroupsMinimumLevel = tonumber(rules.guildGroupsMinimumLevel) or 1,
         },
+        guildContacts = tostring(rules.guildContacts or ""):sub(1, 60),
     }
     local counted = {}
     for _, member in ipairs(iRC:GetGuildRosterRows()) do
@@ -437,11 +443,6 @@ function RaceGrid:BuildOwnGuildReports()
     return { group }
 end
 
-local function externalAddonLoaded(channelName)
-    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-    return loaded and loaded(channelName == "RaceLockedDataBus" and "RaceLocked" or "RaceLockedForkEU")
-end
-
 function RaceGrid:IsExternalBroadcaster()
     if not self:IsEnabled() or not iRC:IsGuildConnectionActive() then return false end
     local ownName = iRC:NormalizeName(iRC:GetPlayerName())
@@ -454,28 +455,9 @@ function RaceGrid:IsExternalBroadcaster()
 end
 
 function RaceGrid:BroadcastExternalReports(fromClick)
-    -- CHANNEL chat is protected on Classic. Never defer this send into a timer,
-    -- nor respond to network events with public chat; retain the hardware click.
-    if fromClick ~= true or not externalReady or not self:IsExternalBroadcaster() then return end
-    if lastExternalBroadcast and GetTime() - lastExternalBroadcast < REPORT_INTERVAL then return end
-    lastExternalBroadcast = GetTime()
-    self:EnsureRaceLockedChannels()
-    local outgoing, own = {}, self:BuildOwnGuildReports()
-    for _, channel in ipairs(RACELOCKED_CHANNELS) do
-        if not externalAddonLoaded(channel) then
-            for _, report in ipairs(own) do
-                local wire = self:EncodeExternalReport(report, channel)
-                if wire then outgoing[#outgoing + 1] = { channel = channel, wire = wire } end
-            end
-        end
-    end
-    for _, packet in ipairs(outgoing) do
-        local id = getChannelId(packet.channel)
-        if id and SendChatMessage then
-            SendChatMessage(packet.wire, "CHANNEL", nil, id)
-            iRC:DebugMsg(iRC:Text("RL_GRID_SENT", packet.channel), 3)
-        end
-    end
+    -- iRC may read these channels for compatibility, but its Guild Statistics
+    -- reports belong exclusively to the native iRC channel.
+    return false
 end
 
 function RaceGrid:BroadcastReport(fromClick)
@@ -506,10 +488,17 @@ function RaceGrid:BroadcastReport(fromClick)
     fields[#fields + 1] = tostring(ruleMask)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
+    fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 60)
     local payload = table.concat(fields, SEP)
     if #payload > 255 then return false end
     self:StoreGuildReport(report)
-    if fromClick ~= true or not send(PREFIX, payload, "CHANNEL", CHANNEL_NAME) then return false end
+    -- Public custom-channel sends require a hardware event on Classic. Startup
+    -- and ticker refreshes update the local cache only and are not failures.
+    if fromClick ~= true then return false end
+    if not send(PREFIX, payload, "CHANNEL", CHANNEL_NAME) then
+        iRC:DebugMsg(iRC:Text("RACEGRID_REPORT_SEND_FAILED", report.guildName, #payload), 1)
+        return false
+    end
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
     return true
 end
@@ -523,15 +512,22 @@ function RaceGrid:RequestReports(fromClick)
     return true
 end
 
-local lastClickPublish
+local lastRefreshActivityAt
+
+function RaceGrid:GetRefreshCooldownRemaining()
+    if not lastRefreshActivityAt then return 0 end
+    return math.max(0, REFRESH_COOLDOWN - (GetTime() - lastRefreshActivityAt))
+end
+
 -- Only call synchronously from an actual UI OnClick handler.
 function RaceGrid:PublishFromClick()
     self:ImportNativeCaches()
-    if lastClickPublish and GetTime() - lastClickPublish < 5 then return end
-    lastClickPublish = GetTime()
+    if not self:IsEnabled() then return false end
+    if self:GetRefreshCooldownRemaining() > 0 then return false end
+    lastRefreshActivityAt = GetTime()
     self:BroadcastReport(true)
     self:RequestReports(true)
-    self:BroadcastExternalReports(true)
+    return true
 end
 
 function RaceGrid:Refresh()
@@ -580,11 +576,14 @@ local function parseGuildReport(parts)
             guildGroupsMinimumLevel = guildGroupsLevel,
         }
     end
+    local guildContacts = tostring(parts[25] or "")
+    if #guildContacts > 60 or guildContacts:find("[%c]") then return nil end
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
         classes = classes, rules = rules, rulesKnown = rulesKnown,
+        guildContacts = guildContacts,
         source = "iRC guild report",
     }
 end
@@ -599,7 +598,7 @@ local function handleMessage(prefix, message, sender)
     end
     local report = parseGuildReport(parts)
     if not report or fullNameKey(report.name) ~= fullNameKey(sender) then return end
-    RaceGrid:StoreGuildReport(report)
+    if RaceGrid:StoreGuildReport(report) then lastRefreshActivityAt = GetTime() end
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
 end
 

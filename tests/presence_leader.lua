@@ -63,6 +63,10 @@ assert(messages[beforeBootstrap + 1][3] == "WHISPER" and messages[beforeBootstra
 assert(messages[beforeBootstrap + 2][2]:match("^RULES\t9\t"), "bootstrap includes current rules")
 assert(messages[beforeBootstrap + 2][3] == "WHISPER" and messages[beforeBootstrap + 2][4] == "Member-Soulseeker", "rules target requester")
 assert(messages[beforeBootstrap + 3][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
+local beforeDirectHello = #messages
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t9\tREQUEST", "WHISPER", "Member-Soulseeker")
+assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t9\t"), "presence request returns HELLO")
+assert(messages[#messages][3] == "WHISPER" and messages[#messages][4] == "Member-Soulseeker", "presence response targets the requester directly")
 player = "Crasjin"
 
 local function profile(name, age, override)
@@ -175,6 +179,10 @@ sourceRows = iRC:GetGuildRosterRows()
 for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
 assert(sourced and not sourced.profile and sourced.compatibility and sourced.source == "RaceLockedForkEU", "newer native data replaces and clears an expired iRC profile")
 assert(db.members.member == nil, "expired iRC profile is removed from the connection cache after native takeover")
+db.compatibilityMembers.member.stats.lastSeen = now - 136
+assert(iRC:GetMemberVerification("Member", true).state == "missing", "ForkEU compatibility expires after 135 seconds")
+db.compatibilityMembers.member.stats = { guid = "Player-1-Member", source = "RaceLocked", lastSeen = now - 136 }
+assert(iRC:GetMemberVerification("Member", true).state == "compatible", "RaceLocked's five-minute broadcast interval keeps its longer compatibility window")
 db.members.member = { name = "Member", guid = "Player-OLD-Member", race = "Troll", lastSeen = now }
 db.compatibilityMembers.member = { guid = "Player-OLD-Member", stats = { guid = "Player-OLD-Member", source = "RaceLockedForkEU", lastSeen = now } }
 db.guildFoundRoster = { member = { source = "RaceLocked", lastSeen = now } }

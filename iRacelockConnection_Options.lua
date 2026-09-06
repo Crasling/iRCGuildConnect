@@ -374,6 +374,9 @@ globalRaceGridCheck, y = CreateSettingsCheckbox(generalContent, "Share global ra
         if iRC.SendHello then iRC:SendHello() end
         if value and iRC.RaceGrid then
             iRC.RaceGrid:Refresh()
+            -- This checkbox click is a hardware event, so it can safely perform
+            -- the initial protected public-channel publication immediately.
+            iRC.RaceGrid:PublishFromClick()
         elseif iRC.RaceGrid then
             iRC.RaceGrid:Disable()
         end
@@ -409,7 +412,7 @@ slider:SetScript("OnValueChanged", function(_, value)
     if iRC.AchievementsUI and iRC.AchievementsUI.frame then iRC.AchievementsUI.frame:SetScale(value) end
 end)
 y = y - 74
-_, y = CreateSettingsButton(generalContent, L.IRC_MAIN_OPEN, 180, y, function() iRC.AchievementsUI:Open() end, L.IRC_MAIN_OPEN_DESC)
+_, y = CreateSettingsButton(generalContent, L.IRC_MAIN_OPEN, 180, y, function() iRC.AchievementsUI:Open(nil, true) end, L.IRC_MAIN_OPEN_DESC)
 _, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, function()
     local achievementFrame = iRC.AchievementsUI:Create()
     achievementFrame:ClearAllPoints()
@@ -437,7 +440,7 @@ broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
 y = connectionActionsY - 36
 
 local guildRulesStatus
-local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider
+local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
 _, y = CreateInfoText(connectionContent, L.GUILD_RULES_INTRO, y, "GameFontDisableSmall")
@@ -519,6 +522,21 @@ guildGroupsLevelSlider:SetScript("OnValueChanged", function(_, value)
     if not refreshingGuildGroupsLevel then iRC:SetGuildGroupsMinimumLevel(value) end
 end)
 y = y - 66
+_, y = CreateSubcategoryHeader(connectionContent, L.GUILD_CONTACTS_HEADER, y - 2)
+local guildContactsLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+guildContactsLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 20, y)
+guildContactsLabel:SetText(L.GUILD_CONTACTS_LABEL)
+guildContactsEdit = CreateFrame("EditBox", nil, connectionContent, "InputBoxTemplate")
+guildContactsEdit:SetSize(330, 24)
+guildContactsEdit:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 25, y - 22)
+guildContactsEdit:SetAutoFocus(false)
+guildContactsEdit:SetMaxLetters(60)
+guildContactsEdit:SetScript("OnEnterPressed", function(self) iRC:SetGuildContacts(self:GetText()); self:ClearFocus() end)
+guildContactsEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+SetSimpleTooltip(guildContactsEdit, L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC)
+guildContactsSave, y = CreateSettingsButton(connectionContent, L.GUILD_CONTACTS_SAVE, 150, y - 54, function()
+    iRC:SetGuildContacts(guildContactsEdit:GetText())
+end, L.GUILD_CONTACTS_DESC)
 connectionContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -721,6 +739,9 @@ local function Refresh()
     refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local guildActive = connection and iRC:IsGuildConnectionActive()
+    if not guildContactsEdit:HasFocus() then guildContactsEdit:SetText(iRC:GetConnectionRules().guildContacts or "") end
+    guildContactsEdit:SetEnabled(isGuildMaster and guildActive and true or false)
+    guildContactsSave:SetEnabled(isGuildMaster and guildActive and true or false)
     overrideVerifiedDropdown:Refresh()
     overrideCleanDropdown:Refresh()
     overrideApply:SetEnabled(isGuildMaster and guildActive and true or false)

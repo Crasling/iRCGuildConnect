@@ -191,11 +191,11 @@ function iRC:StoreMemberProfile(profile)
     if self.ConnectionDashboard then self.ConnectionDashboard:RefreshIfShown() end
 end
 
-function iRC:SendHello()
+function iRC:SendHello(targetName)
     if not self:IsGuildConnectionActive() then return end
     local profile = self:GetLocalProfile()
     self:StoreMemberProfile(profile)
-    send(self.Prefix, addProfileParts({ "HELLO", WIRE_VERSION }, profile), "GUILD")
+    send(self.Prefix, addProfileParts({ "HELLO", WIRE_VERSION }, profile), targetName and "WHISPER" or "GUILD", targetName)
     self:DebugMsg(self:Text("PROFILE_SENT"), 3)
 end
 
@@ -233,6 +233,7 @@ function iRC:SendConnectionRules(targetName)
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))),
         rules.guildGroupsOnly and "1" or "0",
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))),
+        tostring(rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 60),
     }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("RULES_SENT"), 3)
 end
@@ -306,7 +307,7 @@ local function handleMessage(prefix, message, distribution, sender)
             if iRC:IsGuildMaster() then iRC:SendConnectionRules() end
         end
         iRC:DebugMsg(iRC:Text("PRESENCE_POLL_RECEIVED", sender), 3)
-        iRC:SendHello()
+        iRC:SendHello(sender)
     elseif kind == "INSPECT_REQUEST" then
         local requestId = parts[2] == WIRE_VERSION and parts[3] or nil
         if requestId and senderIsKnown(sender) then iRC:SendInspection(sender, requestId) end
@@ -326,6 +327,7 @@ local function handleMessage(prefix, message, distribution, sender)
             connection.rules.sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[10]) or 1)))
             connection.rules.guildGroupsOnly = parts[11] == "1"
             connection.rules.guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[12]) or 1)))
+            connection.rules.guildContacts = tostring(parts[13] or ""):sub(1, 60)
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.Enforcement then iRC.Enforcement:Refresh() end
             iRC:DebugMsg(iRC:Text("RULES_RECEIVED", sender), 3)
