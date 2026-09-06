@@ -145,11 +145,14 @@ end
 
 function iRC:IsPresenceNotificationLeader()
     local connection = self:GetConnection()
-    if not connection or connection.active ~= true or not self:IsGuildAdmin() then return false end
+    if not connection or connection.active ~= true then return false end
+    -- Notification leadership must follow the real guild roster. Testing
+    -- overrides may unlock configuration, but they cannot grant access to
+    -- officer chat or displace an actual rank 0/1 iRC client.
+    local _, _, ownRankIndex = GetGuildInfo and GetGuildInfo("player")
+    if type(ownRankIndex) ~= "number" or ownRankIndex < 0 or ownRankIndex > 1 then return false end
     local ownName = self:NormalizeName(self:GetPlayerName())
-    -- This running client is known to have iRC. IsGuildAdmin includes the
-    -- enabled testing overrides, even when the game roster shows member rank.
-    local candidate = { name = self:GetPlayerName(), rankIndex = self:IsGuildMaster() and 0 or 1 }
+    local candidate = { name = self:GetPlayerName(), rankIndex = ownRankIndex }
     local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
     local now, sessionStartedAt = time(), self.ConnectionSessionStartedAt or 0
     for index = 1, count do
@@ -161,8 +164,6 @@ function iRC:IsPresenceNotificationLeader()
             -- iRC's notification handler. Only direct, current-session iRC
             -- profiles can participate in this election.
             if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= PRESENCE_TIMEOUT then
-                if self:IsTestGuildMasterName(name)
-                    or (self:IsTestAdminName(name) and profile.testGuildMasterOverride == true) then rankIndex = 0 end
                 if type(rankIndex) == "number" and rankIndex >= 0 and rankIndex <= 1
                     and (rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name))) then
                     candidate = { name = name, rankIndex = rankIndex }
@@ -212,6 +213,10 @@ end
 function iRC:CheckPresenceMismatches()
     local connection = self:GetConnection()
     if not connection or connection.active ~= true then self:ResetPresenceNotificationChecks(); return end
+    if self:SuppressesPresenceWarnings() then
+        self:ResetPresenceNotificationChecks()
+        return
+    end
     if presenceConnection ~= connection then
         self:ResetPresenceNotificationChecks()
         presenceConnection = connection
@@ -412,7 +417,7 @@ function iRC:GetGuildRosterRows()
             local attentionSince = self:GetMemberAttentionSince(name, verification, connection or false)
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
-                level = (profile and profile.level) or (compatibility and compatibility.level) or level or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
+                level = level or (profile and profile.level) or (compatibility and compatibility.level) or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
                 race = race, online = online and true or false, profile = profile,
                 compatibility = compatibility,
                 compatibilityMember = compatibilityMember,
@@ -526,5 +531,8 @@ frame:SetScript("OnEvent", function(_, event)
         iRC:CheckGuildRosterForNewMembers()
         if iRC:IsGuildConnectionActive() and iRC:IsGuildAdmin() then queuePresenceReview(1) end
         if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+        if iRC.AchievementsUI and iRC.AchievementsUI.frame and iRC.AchievementsUI.frame.category == "Guild Members" then
+            iRC.AchievementsUI:RefreshIfShown()
+        end
     end
 end)

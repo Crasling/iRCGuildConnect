@@ -158,7 +158,7 @@ local function hideChannelFromChatWindows(channelName)
 end
 
 function RaceGrid:IsEnabled()
-    return iRC:GetSettings().shareGlobalRaceGrid == true
+    return true
 end
 
 function RaceGrid:EnsureChannel()
@@ -489,6 +489,7 @@ function RaceGrid:BroadcastReport(fromClick)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 60)
+    fields[#fields + 1] = iRC.Version
     local payload = table.concat(fields, SEP)
     if #payload > 255 then return false end
     self:StoreGuildReport(report)
@@ -507,7 +508,7 @@ function RaceGrid:RequestReports(fromClick)
     if fromClick ~= true or not self:IsEnabled() then return false end
     self:EnsureChannel()
     if not getChannelId() then return false end
-    if not send(PREFIX, table.concat({ "REQUEST", WIRE_VERSION }, SEP), "CHANNEL", CHANNEL_NAME) then return false end
+    if not send(PREFIX, table.concat({ "REQUEST", WIRE_VERSION, iRC.Version }, SEP), "CHANNEL", CHANNEL_NAME) then return false end
     iRC:DebugMsg(iRC:Text("RACEGRID_REQUEST_SENT"), 3)
     return true
 end
@@ -578,12 +579,14 @@ local function parseGuildReport(parts)
     end
     local guildContacts = tostring(parts[25] or "")
     if #guildContacts > 60 or guildContacts:find("[%c]") then return nil end
+    local addonVersion = parts[26]
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
         classes = classes, rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
+        addonVersion = addonVersion,
         source = "iRC guild report",
     }
 end
@@ -593,11 +596,13 @@ local function handleMessage(prefix, message, sender)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts = split(message)
     if parts[1] == "REQUEST" and (parts[2] == WIRE_VERSION or parts[2] == "1") then
+        iRC:CheckForNewVersion(parts[3])
         iRC:DebugMsg(iRC:Text("RACEGRID_REQUEST_RECEIVED", sender), 3)
         return
     end
     local report = parseGuildReport(parts)
     if not report or fullNameKey(report.name) ~= fullNameKey(sender) then return end
+    iRC:CheckForNewVersion(report.addonVersion)
     if RaceGrid:StoreGuildReport(report) then lastRefreshActivityAt = GetTime() end
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
 end

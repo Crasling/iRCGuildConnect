@@ -4,10 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.7"
--- Increment for each local testing change. Set to nil when testing ends.
--- Display only: TOC metadata, release tags and shared profiles use iRC.Version.
-local TEST_REVISION = nil
+iRC.Version = "0.2.8"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -37,9 +34,9 @@ iRC.ColorValues = {
 }
 
 local DEFAULT_SETTINGS = {
-    showAchievementNotifications = true,
+    showAchievementNotifications = false,
     achievementScale = 1,
-    shareGlobalRaceGrid = false,
+    shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,
     suppressPresenceWarnings = false,
@@ -91,7 +88,37 @@ function iRC:Text(key, ...)
 end
 
 function iRC:GetDisplayVersion()
-    return TEST_REVISION and (self.Version .. "." .. TEST_REVISION) or self.Version
+    return self.Version
+end
+
+local newestVersionSeen
+
+local function versionParts(version)
+    local parts = {}
+    for value in tostring(version or ""):gmatch("%d+") do
+        parts[#parts + 1] = tonumber(value) or 0
+        if #parts == 3 then break end
+    end
+    return #parts == 3 and parts or nil
+end
+
+local function isNewerVersion(candidate, current)
+    local candidateParts, currentParts = versionParts(candidate), versionParts(current)
+    if not candidateParts or not currentParts then return false end
+    for index = 1, 3 do
+        if candidateParts[index] ~= currentParts[index] then
+            return candidateParts[index] > currentParts[index]
+        end
+    end
+    return false
+end
+
+function iRC:CheckForNewVersion(version)
+    if not isNewerVersion(version, self.Version) then return false end
+    if newestVersionSeen and not isNewerVersion(version, newestVersionSeen) then return false end
+    newestVersionSeen = version
+    self:Print(self.Colors.Yellow .. self:Text("NEW_VERSION_AVAILABLE", version) .. self.Colors.Reset)
+    return true
 end
 
 function iRC:PrintLoaded()
@@ -259,6 +286,12 @@ function iRC:GetSettings()
             iRCDB.settings[key] = value
         end
     end
+    -- Public guild discovery is a core connection feature, not an optional
+    -- preference. Migrate previously disabled profiles immediately.
+    iRCDB.settings.shareGlobalRaceGrid = true
+    -- Achievement notifications are intentionally disabled while the
+    -- achievement system is hidden and being reworked.
+    iRCDB.settings.showAchievementNotifications = false
     iRCDB.settings.minimapButton = iRCDB.settings.minimapButton or {}
     if iRCDB.settings.minimapButton.hide == nil then
         iRCDB.settings.minimapButton.hide = iRCDB.settings.showMinimapButton == false
@@ -267,6 +300,31 @@ function iRC:GetSettings()
         iRCDB.settings.minimapButton.minimapPos = -30
     end
     return iRCDB.settings
+end
+
+local function decodeRulesTimestamp(value)
+    value = tostring(value or ""):lower()
+    if value == "" or #value > 12 or not value:match("^[0-9a-f]+$") then return 0 end
+    return tonumber(value, 16) or 0
+end
+
+function iRC:StampConnectionRules(connection)
+    if not self:IsGuildMaster() then return false end
+    connection = connection or self:GetConnection()
+    if not connection then return false end
+    local stamp = math.max(time(), decodeRulesTimestamp(connection.rulesTimestampHex) + 1)
+    connection.rulesTimestampHex = string.format("%x", stamp)
+    connection.rulesTimestampSource = self:GetPlayerName()
+    return true
+end
+
+function iRC:EnsureConnectionRulesTimestamp(connection)
+    connection = connection or self:GetConnection()
+    if not connection then return "0", "" end
+    if (not connection.rulesTimestampHex or connection.rulesTimestampHex == "") and self:IsGuildMaster() then
+        self:StampConnectionRules(connection)
+    end
+    return connection.rulesTimestampHex or "0", connection.rulesTimestampSource or ""
 end
 
 function iRC:GetConnection()
@@ -289,6 +347,7 @@ function iRC:GetConnection()
     if connection.rules.guildRace == "" and self:IsGuildMaster() then
         local _, raceFile = UnitRace("player")
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
+        self:StampConnectionRules(connection)
     end
     return connection
 end
@@ -463,6 +522,7 @@ function iRC:SetGuildRace(race)
     local connection = self:GetConnection()
     if not connection then return false end
     connection.rules.guildRace = normalizedRace
+    self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -483,6 +543,7 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild)
     if active and not receivedFromGuild and self:GetGuildRace() == "" then
         local _, raceFile = UnitRace("player")
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
+        self:StampConnectionRules(connection)
     end
     if not active then
         if self.ResetPresenceNotificationChecks then self:ResetPresenceNotificationChecks() end
@@ -517,6 +578,7 @@ function iRC:SetConnectionRule(key, value)
     elseif value and key == "allowLevel60WithoutSelfFound" then
         connection.rules.level60GuildFound = false
     end
+    self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
@@ -528,6 +590,7 @@ function iRC:SetSameRaceMinimumLevel(value)
     local connection = self:GetConnection()
     if not connection then return false end
     connection.rules.sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(value) or 1)))
+    self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
@@ -539,6 +602,7 @@ function iRC:SetGuildGroupsMinimumLevel(value)
     local connection = self:GetConnection()
     if not connection then return false end
     connection.rules.guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(value) or 1)))
+    self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
@@ -551,6 +615,7 @@ function iRC:SetGuildContacts(value)
     if not connection then return false end
     value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
     connection.rules.guildContacts = value:sub(1, 60)
+    self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true

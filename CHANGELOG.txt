@@ -2,6 +2,25 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.8 - Options Cleanup
+--------------------------------------------------------------------------------
+ [CHANGED] Temporarily hidden the Guild Found Verification tab from the settings menu
+ [FIX] Invalid groups are never left automatically during combat, inside an instance, while dead, or on a taxi; iRC warns first and waits for a safe open-world moment
+ [NEW] Restricted-group incidents are saved with time, location and involved players, then reliably reported once to the active officer client after combat
+ [NEW] Automatic group leaving now displays a clear local iRC message in addition to the party or raid explanation
+ [FIX] Test Guild Master mode no longer replaces a real officer as the notification sender; officer alerts are always handled by an actual rank 0 or rank 1 member
+ [FIX] Guild Members now checks the current guild roster when opened, removes departed characters and shows their current roster levels
+ [CHANGED] Public race-grid sharing is now always enabled and its optional setting has been removed
+ [CHANGED] Achievement notifications are now disabled while achievements are being reworked, and their display setting has been removed
+ [NEW] iRC now notifies you when another guild or Public Grid client reports a newer addon version
+ [FIX] Every blocked trade, mail collection, Auction House visit or automatic group action now gives the player a local iRC explanation
+ [NEW] Guild rules now synchronize through the highest available iRC guild rank (0, then 1, then 2 and onward), allowing new members to receive the active rules even while higher ranks are offline
+ [NEW] Relayed guild rules now retain their GM-created hexadecimal timestamp and source, preventing an older relay from replacing newer rules
+ [NEW] Rank 0 and rank 1 officers now have an Incidents view under Verification; rank 1 hands saved reports to the GM when the rank 0 iRC client returns
+ [FIX] Test warning suppression now stops presence checks silently, and officer eligibility text no longer implies that test-GM grants officerchat authority
+ [CHANGED] Guild Verification now shows Self-Found activity before level 60, Guild Found verification at level 60, and Clean status in its own column
+
+
 v0.2.7 - Guild Sharing & Reliable Verification
 --------------------------------------------------------------------------------
  [FIX] Reduced false addon warnings by checking once more for a recent response before notifying players and officers

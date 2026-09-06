@@ -179,7 +179,10 @@ assert(grid:BuildOwnGuildReports()[1].points == 0, "profile points must not ente
 rows[2].profile = peerProfile
 
 -- Login, timers and network requests must never perform protected CHANNEL sends.
-iRC:GetSettings().shareGlobalRaceGrid = true
+iRC:GetSettings().shareGlobalRaceGrid = false
+iRC:GetSettings().showAchievementNotifications = true
+assert(iRC:GetSettings().shareGlobalRaceGrid == true and grid:IsEnabled(), "public grid sharing is mandatory and migrates an old disabled preference")
+assert(iRC:GetSettings().showAchievementNotifications == false, "achievement notifications remain disabled even with an old enabled preference")
 gridFrame.OnEvent(nil, "PLAYER_LOGIN")
 advance(12)
 assert(#chat == 0, "login does not send protected channel chat")

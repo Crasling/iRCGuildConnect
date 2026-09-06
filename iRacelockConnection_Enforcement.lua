@@ -14,13 +14,15 @@ local languageHooksInstalled = false
 local applyingLanguage = false
 local groupLeaving = false
 local groupSafety = { sameRace = false, guildOnly = false }
+local pendingUnsafeGroupReason
+local pendingGroupViolation
+local pendingGroupViolationKey
 local observedGroupRestrictions
 local restrictedTradeCancelled = false
 local lastMailRestrictionReason
 local pendingGuildFoundTradePartners = {}
 local originalSendMail, originalTakeInboxItem, originalTakeInboxMoney, originalAutoLootMailItem
 local originalAcceptTrade
-local inboxRestrictionNotices = {}
 
 local warningFrame = CreateFrame("Frame", "iRCSelfFoundWarning", UIParent)
 warningFrame:SetSize(620, 32)
@@ -30,6 +32,15 @@ warningFrame.text:SetAllPoints(warningFrame)
 warningFrame.text:SetJustifyH("CENTER")
 warningFrame.text:SetTextColor(1, 0.10, 0.10)
 warningFrame:Hide()
+
+local groupWarningFrame = CreateFrame("Frame", "iRCUnsafeGroupWarning", UIParent)
+groupWarningFrame:SetSize(760, 42)
+groupWarningFrame:SetPoint("TOP", warningFrame, "BOTTOM", 0, -8)
+groupWarningFrame.text = groupWarningFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+groupWarningFrame.text:SetAllPoints(groupWarningFrame)
+groupWarningFrame.text:SetJustifyH("CENTER")
+groupWarningFrame.text:SetTextColor(1, 0.10, 0.10)
+groupWarningFrame:Hide()
 
 local function isRuleEnabled(key)
     return iRC:IsGuildConnectionActive() and iRC:GetConnectionRules()[key] == true
@@ -241,9 +252,6 @@ function Enforcement:IsInboxMailRestricted(index)
 end
 
 function Enforcement:ShowInboxRestriction(index, sender)
-    local key = tostring(index) .. ":" .. tostring(sender or "")
-    if inboxRestrictionNotices[key] then return end
-    inboxRestrictionNotices[key] = true
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_INBOX_BLOCKED", sender or iRC:Text("GUILD_FOUND_UNKNOWN_SENDER")))
 end
 
@@ -303,17 +311,94 @@ function Enforcement:CloseRestrictedAuctionHouse()
     if C_Timer and C_Timer.After then C_Timer.After(0.1, closeAuctionHouse) else closeAuctionHouse() end
 end
 
+local function canSafelyLeaveGroup()
+    if InCombatLockdown and InCombatLockdown() then return false end
+    if UnitAffectingCombat and UnitAffectingCombat("player") then return false end
+    if IsInInstance then
+        local inInstance = IsInInstance()
+        if inInstance then return false end
+    end
+    if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return false end
+    if UnitOnTaxi and UnitOnTaxi("player") then return false end
+    return true
+end
+
+local function clearUnsafeGroupWarning()
+    pendingUnsafeGroupReason = nil
+    pendingGroupViolationKey = nil
+    groupWarningFrame:Hide()
+end
+
+local function reportPendingGroupViolation()
+    if not pendingGroupViolation or pendingGroupViolation.reported then return end
+    if (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) then return end
+    if iRC.SendGroupViolation and iRC:SendGroupViolation(pendingGroupViolation) then
+        pendingGroupViolation.reported = true
+    elseif C_Timer and C_Timer.After then
+        C_Timer.After(30, reportPendingGroupViolation)
+    end
+end
+
+function iRC:MarkGroupViolationReported(violationId)
+    if not violationId or violationId == "" then return end
+    local connection = self:GetConnection()
+    for _, record in ipairs(connection and connection.groupViolations or {}) do
+        if record.id == violationId then record.reported = true end
+    end
+    if pendingGroupViolation and pendingGroupViolation.id == violationId then
+        pendingGroupViolation.reported = true
+    end
+end
+
+local function recordGroupViolation(reason, players)
+    local names = {}
+    for _, name in ipairs(players or {}) do if name and name ~= "" then names[#names + 1] = name end end
+    if #names == 0 then names[1] = iRC:Text("GROUP_VIOLATION_UNKNOWN_PLAYER") end
+    table.sort(names)
+    local key = reason .. "|" .. table.concat(names, ",")
+    if pendingGroupViolationKey == key then reportPendingGroupViolation(); return end
+    local instanceName = GetInstanceInfo and GetInstanceInfo() or nil
+    if not instanceName or instanceName == "" then instanceName = GetZoneText and GetZoneText() or iRC:Text("GROUP_VIOLATION_UNKNOWN_LOCATION") end
+    local record = {
+        occurredAt = time(), instanceName = instanceName, players = names,
+        reason = reason, reported = false,
+    }
+    local connection = iRC:GetConnection()
+    if connection then
+        connection.groupViolations = connection.groupViolations or {}
+        connection.groupViolations[#connection.groupViolations + 1] = record
+        while #connection.groupViolations > 100 do table.remove(connection.groupViolations, 1) end
+    end
+    pendingGroupViolation, pendingGroupViolationKey = record, key
+    reportPendingGroupViolation()
+end
+
 local function leaveCurrentGroup(reason)
-    if groupLeaving then return end
+    if groupLeaving then return true end
+    if not canSafelyLeaveGroup() then return false end
     groupLeaving = true
     local channel = IsInRaid and IsInRaid() and "RAID" or "PARTY"
     if SendChatMessage then SendChatMessage(reason, channel) end
+    iRC:Print(iRC.Colors.Red .. iRC:Text("GROUP_AUTO_LEFT_LOCAL", reason) .. iRC.Colors.Reset)
     if C_PartyInfo and C_PartyInfo.LeaveParty then
         C_PartyInfo.LeaveParty()
     elseif LeaveParty then
         LeaveParty()
     end
+    clearUnsafeGroupWarning()
     if C_Timer and C_Timer.After then C_Timer.After(1, function() groupLeaving = false end) else groupLeaving = false end
+    return true
+end
+
+local function handleInvalidGroup(reason, players)
+    recordGroupViolation(reason, players)
+    if leaveCurrentGroup(reason) then return end
+    if pendingUnsafeGroupReason ~= reason then
+        iRC:Print(iRC.Colors.Red .. iRC:Text("GROUP_UNSAFE_DEFERRED") .. iRC.Colors.Reset)
+    end
+    pendingUnsafeGroupReason = reason
+    groupWarningFrame.text:SetText(iRC:Text("GROUP_UNSAFE_WARNING"))
+    groupWarningFrame:Show()
 end
 
 local function getCurrentGroupSize()
@@ -323,6 +408,7 @@ end
 
 local function clearGroupSafety()
     groupSafety.sameRace, groupSafety.guildOnly = false, false
+    clearUnsafeGroupWarning()
 end
 
 local function protectExistingGroup(allRules, newLevel)
@@ -375,22 +461,35 @@ function Enforcement:CheckGroup()
     local sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))
     local level60SameRaceException = rules.allowLevel60MixedRaceGroups and (UnitLevel("player") or 0) >= 60
     if isRuleEnabled("sameRaceGroupsOnly") and playerLevel >= sameRaceMinimumLevel and not level60SameRaceException and not groupSafety.sameRace then
+        local wrongRacePlayers = {}
         for index = 1, memberCount do
             local unit = inRaid and "raid" .. index or "party" .. index
             if not UnitIsUnit or not UnitIsUnit(unit, "player") then
                 local _, memberRace = UnitRace(unit)
                 if memberRace and memberRace ~= playerRace then
-                    leaveCurrentGroup(iRC:Text("SAME_RACE_GROUP_LEAVE"))
-                    return
+                    wrongRacePlayers[#wrongRacePlayers + 1] = GetUnitName and GetUnitName(unit, true) or UnitName(unit)
                 end
             end
+        end
+        if #wrongRacePlayers > 0 then
+            handleInvalidGroup(iRC:Text("SAME_RACE_GROUP_LEAVE"), wrongRacePlayers)
+            return
         end
     end
     local guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))
     if isRuleEnabled("guildGroupsOnly") and playerLevel >= guildGroupsMinimumLevel and not groupSafety.guildOnly and not iRC:IsGuildOnlyGroup() then
-        leaveCurrentGroup(iRC:Text("GUILD_GROUP_ONLY_LEAVE"))
+        local nonGuildPlayers = {}
+        for index = 1, memberCount do
+            local unit = inRaid and "raid" .. index or "party" .. index
+            if (not UnitIsUnit or not UnitIsUnit(unit, "player")) then
+                local name = GetUnitName and GetUnitName(unit, true) or UnitName(unit)
+                if name and not iRC:IsGuildMemberName(name) then nonGuildPlayers[#nonGuildPlayers + 1] = name end
+            end
+        end
+        handleInvalidGroup(iRC:Text("GUILD_GROUP_ONLY_LEAVE"), nonGuildPlayers)
         return
     end
+    clearUnsafeGroupWarning()
 end
 
 function Enforcement:Refresh()
@@ -409,6 +508,9 @@ frame:RegisterEvent("LANGUAGE_LIST_CHANGED")
 frame:RegisterEvent("UNIT_AURA")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
+frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+frame:RegisterEvent("PLAYER_ALIVE")
+frame:RegisterEvent("PLAYER_CONTROL_GAINED")
 frame:RegisterEvent("TRADE_SHOW")
 frame:RegisterEvent("TRADE_UPDATE")
 frame:RegisterEvent("TRADE_CLOSED")
@@ -424,6 +526,12 @@ frame:SetScript("OnEvent", function(_, event, unit)
         Enforcement:InstallTradeAPIGuard()
         Enforcement:InstallMailAPIGuards()
         Enforcement:Refresh()
+        local connection = iRC:GetConnection()
+        for index = #(connection and connection.groupViolations or {}), 1, -1 do
+            local record = connection.groupViolations[index]
+            if not record.reported then pendingGroupViolation = record; break end
+        end
+        reportPendingGroupViolation()
     elseif event == "PLAYER_ENTERING_WORLD" then
         iRC.SelfFoundAuraReady = false
         Enforcement:Refresh()
@@ -444,12 +552,10 @@ frame:SetScript("OnEvent", function(_, event, unit)
     elseif event == "AUCTION_HOUSE_SHOW" then
         Enforcement:CloseRestrictedAuctionHouse()
     elseif event == "MAIL_SHOW" then
-        inboxRestrictionNotices = {}
         Enforcement:InstallMailAPIGuards()
         Enforcement:InstallMailRecipientGuard()
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_INBOX_UPDATE" then
-        inboxRestrictionNotices = {}
         Enforcement:InstallMailAPIGuards()
     elseif event == "MAIL_SEND_INFO_UPDATE" then
         Enforcement:InstallMailAPIGuards()
@@ -466,6 +572,9 @@ frame:SetScript("OnEvent", function(_, event, unit)
     elseif event == "GROUP_ROSTER_UPDATE" then
         if getCurrentGroupSize() < 1 then clearGroupSafety() end
         if C_Timer and C_Timer.After then C_Timer.After(0, function() Enforcement:CheckGroup() end) else Enforcement:CheckGroup() end
+    elseif event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_ALIVE" or event == "PLAYER_CONTROL_GAINED" then
+        reportPendingGroupViolation()
+        Enforcement:CheckGroup()
     else
         Enforcement:Refresh()
     end

@@ -393,6 +393,7 @@ function UI:Create()
                     return
                 end
                 frame.category = self.category
+                if self.category == "Guild Members" then iRC:RefreshGuildRoster() end
                 if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
                 UI:Refresh()
             end)
@@ -674,14 +675,9 @@ local function updateRPAchievementRows(frame)
 end
 
 local function updateMemberRows(frame)
-    local profiles = { iRC:GetLocalProfile() }
-    local connection = iRC:GetConnection()
-    if connection then
-        for _, profile in pairs(connection.members) do
-            if iRC:NormalizeName(profile.name) ~= iRC:NormalizeName(iRC:GetPlayerName()) then profiles[#profiles + 1] = profile end
-        end
-    end
-    table.sort(profiles, function(a, b) return a.name < b.name end)
+    -- The live roster is authoritative for membership and level. Cached iRC
+    -- details are used only through rows that still exist in that roster.
+    local profiles = iRC:GetGuildRosterRows()
     for index, profile in ipairs(profiles) do
         local row = frame.memberRows[index]
         if not row then
@@ -989,6 +985,7 @@ function UI:Open(subjectName, publishFromClick)
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     frame.subjectName = subjectName or iRC:GetPlayerName()
     if not frame.category or not frame.tabs[frame.category] or frame.category == "Hardcore Achievements" then frame.category = "Race Overview" end
+    if frame.category == "Guild Members" then iRC:RefreshGuildRoster() end
     frame:SetScale(iRC:GetSettings().achievementScale or 1)
     self:Refresh()
     frame:Show()

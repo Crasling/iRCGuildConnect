@@ -315,9 +315,6 @@ local sidebarItems = {
     { type = "tab", label = "General", index = 1 },
     { type = "tab", label = "Connection & Rules", index = 2 },
 }
-if iRC:IsGuildAdmin() then
-    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.RL_OVERRIDE_TITLE, index = 10 }
-end
 local standardSidebarItems = {
     { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
@@ -360,27 +357,7 @@ for _, item in ipairs(sidebarItems) do
 end
 
 local y = -12
-_, y = CreateSectionHeader(generalContent, "Display Settings", y)
-local notificationCheck, debugModeCheck
-notificationCheck, y = CreateSettingsCheckbox(generalContent, "Show achievement notifications", "Show a message when you earn an achievement.", y,
-    function() return iRC:GetSettings().showAchievementNotifications end,
-    function(value) iRC:GetSettings().showAchievementNotifications = value end)
-_, y = CreateSectionHeader(generalContent, "Race Grid", y - 4)
-local globalRaceGridCheck
-globalRaceGridCheck, y = CreateSettingsCheckbox(generalContent, "Share global race-grid data", L.RL_GRID_SHARING_DESC, y,
-    function() return iRC:GetSettings().shareGlobalRaceGrid end,
-    function(value)
-        iRC:GetSettings().shareGlobalRaceGrid = value and true or false
-        if iRC.SendHello then iRC:SendHello() end
-        if value and iRC.RaceGrid then
-            iRC.RaceGrid:Refresh()
-            -- This checkbox click is a hardware event, so it can safely perform
-            -- the initial protected public-channel publication immediately.
-            iRC.RaceGrid:PublishFromClick()
-        elseif iRC.RaceGrid then
-            iRC.RaceGrid:Disable()
-        end
-    end)
+local debugModeCheck
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
 minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
@@ -688,7 +665,6 @@ if iRC:IsTestAdmin() then
 end
 
 local function Refresh()
-    notificationCheck:Refresh()
     if debugModeCheck then debugModeCheck:Refresh() end
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
@@ -706,7 +682,6 @@ local function Refresh()
             testActivateGuildButton:SetEnabled(false)
         end
     end
-    globalRaceGridCheck:Refresh()
     minimapCheck:Refresh()
     slider:SetValue(iRC:GetSettings().achievementScale or 1)
     local connection = iRC:GetConnection()

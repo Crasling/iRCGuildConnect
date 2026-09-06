@@ -62,11 +62,28 @@ assert(messages[beforeBootstrap + 1][2]:match("^GUILD_ACTIVATION\t9\t1$"), "boot
 assert(messages[beforeBootstrap + 1][3] == "WHISPER" and messages[beforeBootstrap + 1][4] == "Member-Soulseeker", "activation targets requester")
 assert(messages[beforeBootstrap + 2][2]:match("^RULES\t9\t"), "bootstrap includes current rules")
 assert(messages[beforeBootstrap + 2][3] == "WHISPER" and messages[beforeBootstrap + 2][4] == "Member-Soulseeker", "rules target requester")
+local gmRulesTimestamp, gmRulesSource = messages[beforeBootstrap + 2][2]:match("\t([0-9a-f]+)\t([^\t]+)$")
+assert(gmRulesTimestamp and gmRulesSource == "Aleader-Soulseeker", "GM authors the rules timestamp and source")
 assert(messages[beforeBootstrap + 3][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
 local beforeDirectHello = #messages
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t9\tREQUEST", "WHISPER", "Member-Soulseeker")
 assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t9\t"), "presence request returns HELLO")
 assert(messages[#messages][3] == "WHISPER" and messages[#messages][4] == "Member-Soulseeker", "presence response targets the requester directly")
+
+-- Rules and activation bootstrap fall through every guild rank. The lowest
+-- online rank index with a fresh iRC client is authoritative.
+roster[2].online = false
+player = "Aofficer"
+assert(iRC:IsRulesetBroadcaster(), "rank 1 takes over rules while the GM client is unavailable")
+roster[3].online, roster[4].online = false, false
+player = "Member"
+assert(iRC:IsRulesetBroadcaster(), "an ordinary member relays rules when no higher-rank iRC client is available")
+local beforeMemberBootstrap = #messages
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t9", "GUILD", "Jujukhan-Soulseeker")
+assert(#messages == beforeMemberBootstrap + 3, "highest available ordinary rank bootstraps a new member with activation, rules and presence")
+local relayedTimestamp, relayedSource = messages[beforeMemberBootstrap + 2][2]:match("\t([0-9a-f]+)\t([^\t]+)$")
+assert(relayedTimestamp == gmRulesTimestamp and relayedSource == gmRulesSource, "lower ranks relay the original GM timestamp and source unchanged")
+roster[2].online, roster[3].online, roster[4].online = true, true, true
 player = "Crasjin"
 
 local function profile(name, age, override)
@@ -83,23 +100,28 @@ iRC:CheckPresenceMismatches()
 assert(debugMessages[#debugMessages] == iRC:Text("PRESENCE_NOTIFICATION_INELIGIBLE"), "do not claim another leader when local rank is ineligible")
 iRC:GetSettings().testGuildMasterOverride = true
 assert(iRC:IsTestAdminGuildMaster())
-expectLeader("Crasjin") -- GM is online with ForkEU, not iRC.
-profile("Member", 0, true)
-expectLeader("Crasjin") -- Arbitrary self-claimed test authority is ignored.
-profile("Aleader")
-expectLeader("Aleader") -- Fresh actual GM + iRC wins the rank/name tie.
+iRC:GetSettings().suppressPresenceWarnings = true
+local debugBeforeSuppressedCheck = #debugMessages
 iRC:CheckPresenceMismatches()
-assert(debugMessages[#debugMessages]:find("Aleader-Soulseeker", 1, true), "debug names the actual iRC leader")
+assert(#debugMessages == debugBeforeSuppressedCheck, "suppressed test clients stop presence checks without misleading debug output")
+iRC:GetSettings().suppressPresenceWarnings = false
+assert(not iRC:IsPresenceNotificationLeader(), "test GM cannot become the officer notification leader")
+profile("Member", 0, true)
+assert(not iRC:IsPresenceNotificationLeader(), "a member cannot elect another fake officer")
+profile("Aleader")
+assert(not iRC:IsPresenceNotificationLeader(), "ordinary members never send officer notifications")
+iRC:CheckPresenceMismatches()
+assert(debugMessages[#debugMessages] == iRC:Text("PRESENCE_NOTIFICATION_INELIGIBLE"), "test GM remains ineligible for officer notifications")
 now = now + 200
 profile("Aleader", 136)
-expectLeader("Crasjin") -- Expired iRC profile plus fresh ForkEU must not qualify.
+assert(not iRC:IsPresenceNotificationLeader()) -- Expired iRC profile plus fresh ForkEU must not qualify.
 profile("Aleader", 201)
-expectLeader("Crasjin") -- Previous-session profile must not qualify.
+assert(not iRC:IsPresenceNotificationLeader()) -- Previous-session profile must not qualify.
 profile("Aleader", -1)
-expectLeader("Crasjin") -- Future timestamps cannot qualify.
+assert(not iRC:IsPresenceNotificationLeader()) -- Future timestamps cannot qualify.
 profile("Aleader")
 roster[2].online = false
-expectLeader("Crasjin") -- Offline GM cannot qualify even with fresh iRC data.
+assert(not iRC:IsPresenceNotificationLeader()) -- Offline GM cannot qualify even with fresh iRC data.
 roster[2].online = true
 db.members.aleader = nil
 
@@ -113,7 +135,7 @@ assert(db.members.crasjin == nil, "self-sent guild packets are ignored")
 player = "Zofficer"
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", packet[1], packet[2], "GUILD", "Crasjin-Soulseeker")
 assert(db.members.crasjin.testGuildMasterOverride == true)
-expectLeader("Crasjin")
+expectLeader("Zofficer") -- Test GM data never displaces a real officer.
 player = "Crasjin"
 iRC:GetSettings().testGuildMasterOverride = false
 iRC:SendHello()
@@ -253,7 +275,7 @@ date = os.date
 view.tab, view.tabs, view.filters, view.filterButtons = "Verification", {}, {}, {}
 view.status, view.title, view.subtitle = widget(), widget(), widget()
 view.headers, view.summaryCards = {}, {}
-for index = 1, 5 do view.headers[index] = widget(); view.headers[index].text = widget() end
+for index = 1, 6 do view.headers[index] = widget(); view.headers[index].text = widget() end
 for index = 1, 4 do
     view.summaryCards[index] = widget()
     view.summaryCards[index].label, view.summaryCards[index].value = widget(), widget()
