@@ -4,15 +4,18 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.4"
+iRC.Version = "0.2.5"
 -- Increment for each local testing change. Set to nil when testing ends.
 -- Display only: TOC metadata, release tags and shared profiles use iRC.Version.
 local TEST_REVISION = nil
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
--- Testing-only controls are restricted to the explicit local admin UI.
-iRC.TestAdminName = "Crasjin-Soulseeker"
+-- Testing-only controls are restricted to these exact character/realm pairs.
+iRC.TestAdminNames = {
+    "Crasling-Soulseeker",
+    "Crasjin-Soulseeker",
+}
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
 iRC.Colors = {
@@ -38,6 +41,7 @@ local DEFAULT_SETTINGS = {
     shareGlobalRaceGrid = false,
     debugMode = false,
     testGuildMasterOverride = false,
+    suppressPresenceWarnings = false,
 }
 
 iRC.DefaultConnectionRules = {
@@ -47,7 +51,10 @@ iRC.DefaultConnectionRules = {
     level60GuildFound = false,
     allowLevel60WithoutSelfFound = false,
     sameRaceGroupsOnly = false,
+    sameRaceMinimumLevel = 1,
     allowLevel60MixedRaceGroups = false,
+    guildGroupsOnly = false,
+    guildGroupsMinimumLevel = 1,
 }
 
 iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL" }
@@ -317,16 +324,20 @@ end
 
 function iRC:IsTestAdminName(name)
     if type(name) ~= "string" or name == "" then return false end
-
-    local configuredName = self.TestAdminName
-    if type(configuredName) ~= "string" or configuredName == "" then return false end
-    if string.lower(name) == string.lower(configuredName) then return true end
-
-    local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
-    if not testName or name:find("-", 1, true) or string.lower(name) ~= string.lower(testName) then
-        return false
+    local configuredNames = self.TestAdminNames or {}
+    -- Retained as a test harness override; production uses TestAdminNames.
+    if type(self.TestAdminName) == "string" and self.TestAdminName ~= "" then
+        configuredNames = { self.TestAdminName }
     end
-    return GetRealmName and string.lower(GetRealmName()) == string.lower(testRealm) or false
+    for _, configuredName in ipairs(configuredNames) do
+        if type(configuredName) == "string" and configuredName ~= "" then
+            if string.lower(name) == string.lower(configuredName) then return true end
+            local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
+            if testName and not name:find("-", 1, true) and string.lower(name) == string.lower(testName)
+                and GetRealmName and string.lower(GetRealmName()) == string.lower(testRealm) then return true end
+        end
+    end
+    return false
 end
 
 function iRC:IsTestGuildMaster()
@@ -339,6 +350,10 @@ end
 
 function iRC:IsTestAdminGuildMaster()
     return self:IsTestAdmin() and self:GetSettings().testGuildMasterOverride == true
+end
+
+function iRC:SuppressesPresenceWarnings()
+    return self:IsTestAdmin() and self:GetSettings().suppressPresenceWarnings == true
 end
 
 function iRC:ActivateGuildForTesting()
@@ -500,6 +515,28 @@ function iRC:SetConnectionRule(key, value)
     elseif value and key == "allowLevel60WithoutSelfFound" then
         connection.rules.level60GuildFound = false
     end
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.Enforcement then self.Enforcement:Refresh() end
+    return true
+end
+
+function iRC:SetSameRaceMinimumLevel(value)
+    if not self:IsGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.rules.sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(value) or 1)))
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.Enforcement then self.Enforcement:Refresh() end
+    return true
+end
+
+function iRC:SetGuildGroupsMinimumLevel(value)
+    if not self:IsGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.rules.guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(value) or 1)))
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end

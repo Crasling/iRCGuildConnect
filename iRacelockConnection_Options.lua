@@ -293,12 +293,13 @@ local iNIFContainer, iNIFContent = CreateTabContent()
 local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, adminContainer }
+local verificationContainer, verificationContent = CreateTabContent()
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, adminContainer, verificationContainer }
 local sidebarButtons = {}
 
 local function ShowTab(index)
     for tabIndex, tab in ipairs(tabContents) do tab:SetShown(tabIndex == index) end
-    for tabIndex, button in ipairs(sidebarButtons) do
+    for tabIndex, button in pairs(sidebarButtons) do
         if tabIndex == index then
             button.bg:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.25)
             button.text:SetFontObject(GameFontHighlight)
@@ -313,6 +314,11 @@ local sidebarItems = {
     { type = "header", label = iRC.DisplayName },
     { type = "tab", label = "General", index = 1 },
     { type = "tab", label = "Connection & Rules", index = 2 },
+}
+if iRC:IsGuildAdmin() then
+    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.RL_OVERRIDE_TITLE, index = 10 }
+end
+local standardSidebarItems = {
     { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
     { type = "header", label = "Other Addons" },
@@ -321,6 +327,7 @@ local sidebarItems = {
     { type = "tab", label = "iSoundPlayer", index = 7 },
     { type = "tab", label = "iSealTwist", index = 8 },
 }
+for _, item in ipairs(standardSidebarItems) do sidebarItems[#sidebarItems + 1] = item end
 if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "header", label = L.TEST_ADMIN_HEADER }
     sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 9 }
@@ -347,7 +354,7 @@ for _, item in ipairs(sidebarItems) do
         highlight:SetAllPoints(button)
         highlight:SetColorTexture(1, 1, 1, 0.08)
         button:SetScript("OnClick", function() ShowTab(item.index) end)
-        sidebarButtons[#sidebarButtons + 1] = button
+        sidebarButtons[item.index] = button
         sidebarY = sidebarY - 28
     end
 end
@@ -379,10 +386,10 @@ minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", 
         iRC:GetSettings().minimapButton.hide = not value
         if iRC.Minimap then iRC.Minimap:UpdateVisibility() end
     end)
-_, y = CreateSectionHeader(generalContent, "Achievement Window", y - 4)
+_, y = CreateSectionHeader(generalContent, L.IRC_MAIN_WINDOW_SETTINGS, y - 4)
 local scaleLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 scaleLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
-scaleLabel:SetText("Achievement window scale")
+scaleLabel:SetText(L.IRC_MAIN_WINDOW_SCALE)
 local scaleValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 10, 0)
 scaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
@@ -394,7 +401,7 @@ slider:SetValueStep(0.05)
 _G[slider:GetName() .. "Low"]:SetText("80%")
 _G[slider:GetName() .. "High"]:SetText("120%")
 _G[slider:GetName() .. "Text"]:SetText("")
-SetSimpleTooltip(slider, "Achievement window scale", "Make the achievement window smaller or larger.")
+SetSimpleTooltip(slider, L.IRC_MAIN_WINDOW_SCALE, L.IRC_MAIN_WINDOW_SCALE_DESC)
 slider:SetScript("OnValueChanged", function(_, value)
     value = math.floor(value * 20 + 0.5) / 20
     iRC:GetSettings().achievementScale = value
@@ -402,13 +409,13 @@ slider:SetScript("OnValueChanged", function(_, value)
     if iRC.AchievementsUI and iRC.AchievementsUI.frame then iRC.AchievementsUI.frame:SetScale(value) end
 end)
 y = y - 74
-_, y = CreateSettingsButton(generalContent, "Open achievements", 180, y, function() iRC.AchievementsUI:Open() end, "View your achievements.")
-_, y = CreateSettingsButton(generalContent, "Reset achievement window position", 220, y, function()
+_, y = CreateSettingsButton(generalContent, L.IRC_MAIN_OPEN, 180, y, function() iRC.AchievementsUI:Open() end, L.IRC_MAIN_OPEN_DESC)
+_, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, function()
     local achievementFrame = iRC.AchievementsUI:Create()
     achievementFrame:ClearAllPoints()
     achievementFrame:SetPoint("CENTER")
     iRC:Print(L.ACHIEVEMENT_WINDOW_RESET)
-end, "Move the achievement window back to the middle of the screen.")
+end, L.IRC_MAIN_WINDOW_RESET_DESC)
 generalContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -430,7 +437,7 @@ broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
 y = connectionActionsY - 36
 
 local guildRulesStatus
-local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, level60SameRaceExceptionCheck
+local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
 _, y = CreateInfoText(connectionContent, L.GUILD_RULES_INTRO, y, "GameFontDisableSmall")
@@ -452,27 +459,75 @@ selfFoundOnlyCheck, y = CreateSettingsCheckbox(connectionContent, "Self-Found on
     function() return iRC:GetConnectionRules().selfFoundOnly end,
     function(value) iRC:SetConnectionRule("selfFoundOnly", value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Level 60 Self-Found Options", y - 2)
-level60GuildFoundCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Guild Found", "At level 60, replace Self-Found with Guild Found. Trade and group only with guild members; iRC blocks the Auction House and non-guild groups.", y,
+level60GuildFoundCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Guild Found", "At level 60, replace Self-Found with Guild Found. Item exchange is limited to verified guild members; iRC blocks the Auction House and transactions outside the guild.", y,
     function() return iRC:GetConnectionRules().level60GuildFound end,
     function(value) iRC:SetConnectionRule("level60GuildFound", value) end, 18)
-level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 SF Exception", "At level 60, iRC stops enforcing Self-Found and Guild Found limits. You may trade, use the Auction House, and group normally.", y,
+level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 SF Exception", "At level 60, iRC stops enforcing Self-Found and Guild Found economic limits. You may trade, send mail, and use the Auction House normally.", y,
     function() return iRC:GetConnectionRules().allowLevel60WithoutSelfFound end,
     function(value) iRC:SetConnectionRule("allowLevel60WithoutSelfFound", value) end, 18)
 _, y = CreateSubcategoryHeader(connectionContent, "Group Rules", y - 2)
 sameRaceGroupsCheck, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
     function() return iRC:GetConnectionRules().sameRaceGroupsOnly end,
     function(value) iRC:SetConnectionRule("sameRaceGroupsOnly", value) end)
+local sameRaceLevelLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+sameRaceLevelLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y)
+sameRaceLevelLabel:SetText(L.SAME_RACE_MINIMUM_LEVEL)
+local sameRaceLevelValue = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+sameRaceLevelValue:SetPoint("LEFT", sameRaceLevelLabel, "RIGHT", 8, 0)
+sameRaceLevelValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+sameRaceLevelSlider = CreateFrame("Slider", "iRacelockConnectionSameRaceMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
+sameRaceLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y - 22)
+sameRaceLevelSlider:SetWidth(220)
+sameRaceLevelSlider:SetMinMaxValues(1, 60)
+sameRaceLevelSlider:SetValueStep(1)
+_G[sameRaceLevelSlider:GetName() .. "Low"]:SetText("1")
+_G[sameRaceLevelSlider:GetName() .. "High"]:SetText("60")
+_G[sameRaceLevelSlider:GetName() .. "Text"]:SetText("")
+SetSimpleTooltip(sameRaceLevelSlider, L.SAME_RACE_MINIMUM_LEVEL, L.SAME_RACE_MINIMUM_LEVEL_DESC)
+local refreshingSameRaceLevel = false
+sameRaceLevelSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value + 0.5)
+    sameRaceLevelValue:SetText(tostring(value))
+    if not refreshingSameRaceLevel then iRC:SetSameRaceMinimumLevel(value) end
+end)
+y = y - 66
 level60SameRaceExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Mixed-Race Exception", "At level 60, allow mixed-race parties and raids. Same-race groups remain required while leveling.", y,
     function() return iRC:GetConnectionRules().allowLevel60MixedRaceGroups end,
     function(value) iRC:SetConnectionRule("allowLevel60MixedRaceGroups", value) end, 18)
+guildGroupsOnlyCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_GROUPS_ONLY, L.GUILD_GROUPS_ONLY_DESC, y,
+    function() return iRC:GetConnectionRules().guildGroupsOnly end,
+    function(value) iRC:SetConnectionRule("guildGroupsOnly", value) end)
+local guildGroupsLevelLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+guildGroupsLevelLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y)
+guildGroupsLevelLabel:SetText(L.GUILD_GROUPS_MINIMUM_LEVEL)
+local guildGroupsLevelValue = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+guildGroupsLevelValue:SetPoint("LEFT", guildGroupsLevelLabel, "RIGHT", 8, 0)
+guildGroupsLevelValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+guildGroupsLevelSlider = CreateFrame("Slider", "iRacelockConnectionGuildGroupsMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
+guildGroupsLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y - 22)
+guildGroupsLevelSlider:SetWidth(220)
+guildGroupsLevelSlider:SetMinMaxValues(1, 60)
+guildGroupsLevelSlider:SetValueStep(1)
+_G[guildGroupsLevelSlider:GetName() .. "Low"]:SetText("1")
+_G[guildGroupsLevelSlider:GetName() .. "High"]:SetText("60")
+_G[guildGroupsLevelSlider:GetName() .. "Text"]:SetText("")
+SetSimpleTooltip(guildGroupsLevelSlider, L.GUILD_GROUPS_MINIMUM_LEVEL, L.GUILD_GROUPS_MINIMUM_LEVEL_DESC)
+local refreshingGuildGroupsLevel = false
+guildGroupsLevelSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value + 0.5)
+    guildGroupsLevelValue:SetText(tostring(value))
+    if not refreshingGuildGroupsLevel then iRC:SetGuildGroupsMinimumLevel(value) end
+end)
+y = y - 66
 connectionContent:SetHeight(math.abs(y) + 20)
 
-_, y = CreateSectionHeader(connectionContent, L.RL_OVERRIDE_TITLE, y - 8)
-_, y = CreateInfoText(connectionContent, L.RL_OVERRIDE_DESC, y, "GameFontDisableSmall")
-_, y = CreateInfoText(connectionContent, L.RL_OVERRIDE_MEMBER, y, "GameFontHighlight")
-local overrideName = CreateFrame("EditBox", nil, connectionContent, "InputBoxTemplate")
+y = -12
+_, y = CreateSectionHeader(verificationContent, L.RL_OVERRIDE_TITLE, y)
+_, y = CreateInfoText(verificationContent, L.RL_OVERRIDE_DESC, y, "GameFontDisableSmall")
+_, y = CreateInfoText(verificationContent, L.RL_OVERRIDE_MEMBER, y, "GameFontHighlight")
+local overrideName = CreateFrame("EditBox", nil, verificationContent, "InputBoxTemplate")
 overrideName:SetSize(240, 24)
-overrideName:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 25, y)
+overrideName:SetPoint("TOPLEFT", verificationContent, "TOPLEFT", 25, y)
 overrideName:SetAutoFocus(false)
 overrideName:SetMaxLetters(80)
 overrideName:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
@@ -482,20 +537,20 @@ local function overrideValue(value)
     if value == "1" then return true end
     if value == "0" then return false end
 end
-overrideVerifiedDropdown, y = CreateSettingsDropdown("iRCGuildFoundVerifiedDropdown", connectionContent, L.RL_OVERRIDE_VERIFIED, nil, y - 34,
+overrideVerifiedDropdown, y = CreateSettingsDropdown("iRCGuildFoundVerifiedDropdown", verificationContent, L.RL_OVERRIDE_VERIFIED, nil, y - 34,
     function() return overrideVerified end, function(value) overrideVerified = value end,
     function() return { "-", "1", "0" } end,
     function(value) return value == "-" and L.RL_OVERRIDE_RESET or (value == "1" and L.RL_VERIFIED or L.RL_UNVERIFIED) end)
-overrideCleanDropdown, y = CreateSettingsDropdown("iRCGuildFoundCleanDropdown", connectionContent, L.RL_OVERRIDE_CLEAN, nil, y,
+overrideCleanDropdown, y = CreateSettingsDropdown("iRCGuildFoundCleanDropdown", verificationContent, L.RL_OVERRIDE_CLEAN, nil, y,
     function() return overrideClean end, function(value) overrideClean = value end,
     function() return { "-", "1", "0" } end,
     function(value) return value == "-" and L.RL_OVERRIDE_RESET or (value == "1" and L.RL_CLEAN or L.RL_FLAGGED) end)
 local overrideApply
-overrideApply, y = CreateSettingsButton(connectionContent, L.RL_OVERRIDE_APPLY, 220, y, function()
+overrideApply, y = CreateSettingsButton(verificationContent, L.RL_OVERRIDE_APPLY, 220, y, function()
     local name = (overrideName:GetText() or ""):match("^%s*(.-)%s*$")
     if not iRC.RaceLockedSync:SetOverride(name, overrideValue(overrideVerified), overrideValue(overrideClean)) then iRC:Print(L.RL_OVERRIDE_FAILED) end
 end, L.RL_OVERRIDE_DESC)
-connectionContent:SetHeight(math.abs(y) + 20)
+verificationContent:SetHeight(math.abs(y) + 20)
 
 y = -12
 _, y = CreateSectionHeader(roleplayContent, "Player Settings", y)
@@ -507,6 +562,12 @@ trollTalkCheck, y = CreateSettingsCheckbox(roleplayContent, "Enable Troll Talk",
     function() return iRC.Roleplay:GetPlayerSettings().trollTalk end,
     function(value) iRC.Roleplay:GetPlayerSettings().trollTalk = value and true or false end)
 _, y = CreateInfoText(roleplayContent, "Example: “Do you want to join?” becomes “Do ya wanna join?” Words such as man and mate can still become mon.", y - 2, "GameFontDisableSmall")
+_, y = CreateSectionHeader(roleplayContent, L.TAUREN_TALK_TITLE, y - 4)
+local taurenTalkCheck
+taurenTalkCheck, y = CreateSettingsCheckbox(roleplayContent, L.TAUREN_TALK_ENABLE, L.TAUREN_TALK_DESC, y,
+    function() return iRC.Roleplay:GetPlayerSettings().taurenTalk end,
+    function(value) iRC.Roleplay:GetPlayerSettings().taurenTalk = value and true or false end)
+_, y = CreateInfoText(roleplayContent, L.TAUREN_TALK_EXAMPLE, y - 2, "GameFontDisableSmall")
 roleplayContent:SetHeight(math.abs(y) + 20)
 
 do
@@ -584,7 +645,7 @@ for _, addon in ipairs(companionAddons) do
     end
 end
 
-local testGuildMasterCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
+local testGuildMasterCheck, suppressWarningsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
 if iRC:IsTestAdmin() then
     y = -12
     _, y = CreateSectionHeader(adminContent, L.TEST_ADMIN_TITLE, y)
@@ -599,6 +660,9 @@ if iRC:IsTestAdmin() then
             iRC:PollGuildPresence()
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
         end)
+    suppressWarningsCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SUPPRESS_WARNINGS, L.TEST_ADMIN_SUPPRESS_WARNINGS_DESC, y,
+        function() return iRC:SuppressesPresenceWarnings() end,
+        function(value) iRC:GetSettings().suppressPresenceWarnings = value and true or false end)
     testActivateGuildButton, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ACTIVATE_GUILD, 190, y - 4, function()
         iRC:ActivateGuildForTesting()
     end, L.TEST_ADMIN_ACTIVATE_GUILD_DESC)
@@ -610,6 +674,7 @@ local function Refresh()
     if debugModeCheck then debugModeCheck:Refresh() end
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
+        suppressWarningsCheck:Refresh()
         local testGuildMaster = iRC:IsTestAdminGuildMaster()
         testAdminStatus:SetText((testGuildMaster and iRC.Colors.Green or iRC.Colors.Yellow)
             .. iRC:Text(testGuildMaster and "TEST_ADMIN_STATUS_GUILD_MASTER" or "TEST_ADMIN_STATUS_MEMBER") .. iRC.Colors.Reset)
@@ -646,7 +711,14 @@ local function Refresh()
     level60GuildFoundCheck:Refresh()
     level60SelfFoundExceptionCheck:Refresh()
     sameRaceGroupsCheck:Refresh()
+    refreshingSameRaceLevel = true
+    sameRaceLevelSlider:SetValue(iRC:GetConnectionRules().sameRaceMinimumLevel or 1)
+    refreshingSameRaceLevel = false
     level60SameRaceExceptionCheck:Refresh()
+    guildGroupsOnlyCheck:Refresh()
+    refreshingGuildGroupsLevel = true
+    guildGroupsLevelSlider:SetValue(iRC:GetConnectionRules().guildGroupsMinimumLevel or 1)
+    refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local guildActive = connection and iRC:IsGuildConnectionActive()
     overrideVerifiedDropdown:Refresh()
@@ -670,7 +742,15 @@ local function Refresh()
     level60SelfFoundExceptionCheck:SetEnabled(selfFoundOptionsEnabled and true or false)
     sameRaceGroupsCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     local sameRaceExceptionEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().sameRaceGroupsOnly
+    sameRaceLevelSlider:SetEnabled(sameRaceExceptionEnabled and true or false)
+    local sameRaceLevelColor = sameRaceExceptionEnabled and iRC.ColorValues.Green or iRC.ColorValues.Gray
+    sameRaceLevelLabel:SetTextColor(sameRaceLevelColor[1], sameRaceLevelColor[2], sameRaceLevelColor[3])
     level60SameRaceExceptionCheck:SetEnabled(sameRaceExceptionEnabled and true or false)
+    guildGroupsOnlyCheck:SetEnabled(isGuildMaster and guildActive and true or false)
+    local guildGroupsLevelEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().guildGroupsOnly
+    guildGroupsLevelSlider:SetEnabled(guildGroupsLevelEnabled and true or false)
+    local guildGroupsLevelColor = guildGroupsLevelEnabled and iRC.ColorValues.Green or iRC.ColorValues.Gray
+    guildGroupsLevelLabel:SetTextColor(guildGroupsLevelColor[1], guildGroupsLevelColor[2], guildGroupsLevelColor[3])
     local rules = iRC:GetConnectionRules()
     SetRuleVisualState(guildActivationCheck, guildActive)
     SetRuleVisualState(nativeTongueCheck, rules.nativeTongueOnly)
@@ -679,6 +759,7 @@ local function Refresh()
     SetRuleVisualState(level60SelfFoundExceptionCheck, rules.selfFoundOnly and rules.allowLevel60WithoutSelfFound)
     SetRuleVisualState(sameRaceGroupsCheck, rules.sameRaceGroupsOnly)
     SetRuleVisualState(level60SameRaceExceptionCheck, rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
+    SetRuleVisualState(guildGroupsOnlyCheck, rules.guildGroupsOnly)
     if not connection then
         guildRulesStatus:SetText(iRC.Colors.Gray .. L.GUILD_STATUS_NO_GUILD .. iRC.Colors.Reset)
     elseif not guildActive and isGuildMaster then
@@ -692,11 +773,16 @@ local function Refresh()
     end
     trollTalkCheck:Refresh()
     local isTroll = iRC.Roleplay and iRC.Roleplay:IsTroll()
+    local isTauren = iRC.Roleplay and iRC.Roleplay:IsTauren()
     trollTalkCheck:SetEnabled(isTroll and true or false)
+    taurenTalkCheck:Refresh()
+    taurenTalkCheck:SetEnabled(isTauren and true or false)
     if isTroll then
         trollTalkStatus:SetText(iRC.Colors.Green .. "Troll character detected." .. iRC.Colors.Reset .. " This setting only affects this character.")
+    elseif isTauren then
+        trollTalkStatus:SetText(iRC.Colors.Green .. L.TAUREN_TALK_DETECTED .. iRC.Colors.Reset .. " " .. L.RACE_TALK_CHARACTER_ONLY)
     else
-        trollTalkStatus:SetText(iRC.Colors.Gray .. "Only Troll characters can use Troll Talk." .. iRC.Colors.Reset)
+        trollTalkStatus:SetText(iRC.Colors.Gray .. L.RACE_TALK_UNAVAILABLE .. iRC.Colors.Reset)
     end
     for _, addon in ipairs(companionAddons) do
         local loaded = IsAddonLoadedCompat(addon.addonName)

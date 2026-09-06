@@ -13,6 +13,8 @@ local LANGUAGE_BY_RACE = {
 local languageHooksInstalled = false
 local applyingLanguage = false
 local groupLeaving = false
+local groupSafety = { sameRace = false, guildOnly = false }
+local observedGroupRestrictions
 local restrictedTradeCancelled = false
 local lastMailRestrictionReason
 local pendingGuildFoundTradePartners = {}
@@ -219,15 +221,65 @@ local function leaveCurrentGroup(reason)
     if C_Timer and C_Timer.After then C_Timer.After(1, function() groupLeaving = false end) else groupLeaving = false end
 end
 
+local function getCurrentGroupSize()
+    if IsInRaid and IsInRaid() then return GetNumGroupMembers and GetNumGroupMembers() or 0 end
+    return GetNumSubgroupMembers and GetNumSubgroupMembers() or 0
+end
+
+local function clearGroupSafety()
+    groupSafety.sameRace, groupSafety.guildOnly = false, false
+end
+
+local function protectExistingGroup(allRules, newLevel)
+    if getCurrentGroupSize() < 1 then return end
+    local rules, protected = iRC:GetConnectionRules(), false
+    local previousLevel = newLevel and math.max(0, newLevel - 1) or nil
+    local sameRaceLevel = math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))
+    local guildOnlyLevel = math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))
+    if (allRules and rules.sameRaceGroupsOnly)
+        or (rules.sameRaceGroupsOnly and previousLevel < sameRaceLevel and newLevel >= sameRaceLevel) then
+        groupSafety.sameRace, protected = true, true
+    end
+    if (allRules and rules.guildGroupsOnly)
+        or (rules.guildGroupsOnly and previousLevel < guildOnlyLevel and newLevel >= guildOnlyLevel) then
+        groupSafety.guildOnly, protected = true, true
+    end
+    if protected then iRC:Print(iRC.Colors.Yellow .. iRC:Text("GROUP_SAFETY_ACTIVE") .. iRC.Colors.Reset) end
+end
+
+local function protectNewlyActivatedRestrictions()
+    local rules, level = iRC:GetConnectionRules(), UnitLevel("player") or 0
+    local sameRaceLevel = math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))
+    local guildOnlyLevel = math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))
+    local current = {
+        sameRace = isRuleEnabled("sameRaceGroupsOnly") and level >= sameRaceLevel
+            and not (rules.allowLevel60MixedRaceGroups and level >= 60),
+        guildOnly = isRuleEnabled("guildGroupsOnly") and level >= guildOnlyLevel,
+    }
+    local protected = false
+    if observedGroupRestrictions and getCurrentGroupSize() > 0 then
+        for key, active in pairs(current) do
+            if active and not observedGroupRestrictions[key] and not groupSafety[key] then
+                groupSafety[key], protected = true, true
+            end
+        end
+    end
+    observedGroupRestrictions = current
+    if protected then iRC:Print(iRC.Colors.Yellow .. iRC:Text("GROUP_SAFETY_ACTIVE") .. iRC.Colors.Reset) end
+end
+
 function Enforcement:CheckGroup()
     if groupLeaving then return end
     local _, playerRace = UnitRace("player")
     if not playerRace then return end
     local inRaid = IsInRaid and IsInRaid()
     local memberCount = inRaid and (GetNumGroupMembers and GetNumGroupMembers() or 0) or (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0)
+    if memberCount < 1 then clearGroupSafety(); return end
     local rules = iRC:GetConnectionRules()
+    local playerLevel = UnitLevel("player") or 0
+    local sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))
     local level60SameRaceException = rules.allowLevel60MixedRaceGroups and (UnitLevel("player") or 0) >= 60
-    if isRuleEnabled("sameRaceGroupsOnly") and not level60SameRaceException then
+    if isRuleEnabled("sameRaceGroupsOnly") and playerLevel >= sameRaceMinimumLevel and not level60SameRaceException and not groupSafety.sameRace then
         for index = 1, memberCount do
             local unit = inRaid and "raid" .. index or "party" .. index
             if not UnitIsUnit or not UnitIsUnit(unit, "player") then
@@ -239,8 +291,10 @@ function Enforcement:CheckGroup()
             end
         end
     end
-    if isLevel60GuildFoundActive() and memberCount > 0 and not iRC:IsGuildOnlyGroup() then
-        leaveCurrentGroup(iRC:Text("GUILD_FOUND_GROUP_LEAVE"))
+    local guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))
+    if isRuleEnabled("guildGroupsOnly") and playerLevel >= guildGroupsMinimumLevel and not groupSafety.guildOnly and not iRC:IsGuildOnlyGroup() then
+        leaveCurrentGroup(iRC:Text("GUILD_GROUP_ONLY_LEAVE"))
+        return
     end
 end
 
@@ -249,6 +303,7 @@ function Enforcement:Refresh()
     iRC:RecordSelfFoundState()
     scheduleLanguageApply()
     self:UpdateSelfFoundWarning()
+    protectNewlyActivatedRestrictions()
     if C_Timer and C_Timer.After then C_Timer.After(0, function() Enforcement:CheckGroup() end) else self:CheckGroup() end
 end
 
@@ -267,7 +322,10 @@ frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
 frame:SetScript("OnEvent", function(_, event, unit)
-    if event == "PLAYER_ENTERING_WORLD" then
+    if event == "PLAYER_LOGIN" then
+        protectExistingGroup(true)
+        Enforcement:Refresh()
+    elseif event == "PLAYER_ENTERING_WORLD" then
         iRC.SelfFoundAuraReady = false
         Enforcement:Refresh()
         if C_Timer and C_Timer.After then
@@ -294,7 +352,11 @@ frame:SetScript("OnEvent", function(_, event, unit)
         lastMailRestrictionReason = nil
     elseif event == "UNIT_AURA" and unit ~= "player" then
         return
+    elseif event == "PLAYER_LEVEL_UP" then
+        protectExistingGroup(false, tonumber(unit) or UnitLevel("player") or 0)
+        Enforcement:Refresh()
     elseif event == "GROUP_ROSTER_UPDATE" then
+        if getCurrentGroupSize() < 1 then clearGroupSafety() end
         if C_Timer and C_Timer.After then C_Timer.After(0, function() Enforcement:CheckGroup() end) else Enforcement:CheckGroup() end
     else
         Enforcement:Refresh()

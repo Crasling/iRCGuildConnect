@@ -34,7 +34,7 @@ local function createDataObject()
             local colors = iRC.Colors
             tooltip:SetText(colors.iRC .. iRC.DisplayName .. colors.Green .. " v" .. iRC:GetDisplayVersion(), 1, 1, 1)
             tooltip:AddLine(" ")
-            tooltip:AddLine(colors.Yellow .. "Left Click: " .. colors.Orange .. "Toggle achievements", 1, 1, 1)
+            tooltip:AddLine(colors.Yellow .. "Left Click: " .. colors.Orange .. iRC:Text("IRC_MAIN_MINIMAP_TOGGLE"), 1, 1, 1)
             tooltip:AddLine(colors.Yellow .. "Shift-Left Click: " .. colors.Orange .. "Toggle connection dashboard", 1, 1, 1)
             tooltip:AddLine(colors.Yellow .. "Right Click: " .. colors.Orange .. "Toggle settings", 1, 1, 1)
         end,

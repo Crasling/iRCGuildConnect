@@ -22,7 +22,7 @@ function UnitClass() return "Warrior", "WARRIOR" end
 function GetNumGuildMembers() return #roster end
 function GetGuildRosterInfo(index)
     local row = roster[index]
-    return row.name .. "-Soulseeker", "Rank", row.rank, 10, "Warrior", nil, nil, nil, row.online
+    return row.name .. "-Soulseeker", "Rank", row.rank, 10, "Warrior", nil, nil, nil, row.online, nil, "WARRIOR", nil, nil, nil, nil, nil, row.guid or ("Player-1-" .. row.name)
 end
 function GetGuildInfo()
     for _, row in ipairs(roster) do if row.name == player then return "Darkspear Tribe", "Rank", row.rank end end
@@ -41,6 +41,10 @@ assert(loadfile("iRacelockConnection_Localization_enUS.lua"))("iRacelockConnecti
 assert(loadfile("iRacelockConnection_Guild.lua"))("iRacelockConnection", private)
 assert(loadfile("iRacelockConnection_Connection.lua"))("iRacelockConnection", private)
 local connectionFrame, iRC = frames[#frames], private.iRC
+assert(iRC:IsTestAdminName("Crasling-Soulseeker"), "Crasling is an explicit test admin")
+assert(iRC:IsTestAdminName("Crasjin-Soulseeker"), "Crasjin is an explicit test admin")
+assert(not iRC:IsTestAdminName("Crasling-OtherRealm"), "test admin authority is realm-locked")
+iRC.TestAdminName = "Crasjin-Soulseeker"
 iRCDB, iRCCharDB = {}, {}
 local db = iRC:GetConnection()
 db.active = true
@@ -135,16 +139,38 @@ function iRC:GetCompatibilityStats(name)
 end
 roster[#roster + 1] = roster[2] -- Same character must still only count once.
 local group = assert(iRC.RaceGrid:BuildOwnGuildReports()[1])
-assert(group.members == 4 and group.verifiedMembers == 2 and group.compatibleMembers == 2, "online + offline verified/compatible members count once; undetected/leavers excluded")
+assert(group.members == 6 and group.activePlayers == 3 and group.verifiedMembers == 2 and group.compatibleMembers == 2,
+    string.format("guild snapshot totals: %s/%s/%s/%s", group.members, group.activePlayers, group.verifiedMembers, group.compatibleMembers))
 assert(group.points == 0, "achievement statistics stay disabled")
 assert(group.averageLevel == 10, "averages use the same participant population")
 local classTotal = 0; for _, count in pairs(group.classes) do classTotal = classTotal + count end
-assert(classTotal == 4, "class breakdown uses the same participant population")
+assert(classTotal == 6, "class breakdown uses the full guild roster")
 local native = { race = "TROLL", guildName = "Darkspear Tribe", members = 600, averageLevel = 30, points = 9999, classes = { WARRIOR = 600 }, timestamp = now }
 assert(iRC.RaceGrid:StoreRaceLockedGuildReport(native))
 group = assert(iRC:GetRaceGridOverview()[1])
-assert(group.members == 4 and group.points == 0 and group.populationSource == "verified_compatible", "external own-guild snapshot cannot overwrite participant count or restore AP")
+assert(group.members == 6 and group.points == 0 and group.populationSource == "irc_guild_roster", "external data cannot overwrite the local iRC guild snapshot")
 assert(iRC:GetMemberVerification("Aofficer", false).state == "offline", "live verification behavior remains unchanged")
+db.members.member = { name = "Member", guid = "Player-1-Member", race = "Troll", lastSeen = now, addonVersion = "0.2.4" }
+db.compatibilityMembers.member = { guid = "Player-1-Member", stats = { guid = "Player-1-Member", source = "RaceLockedForkEU", lastSeen = now } }
+local sourceRows = iRC:GetGuildRosterRows()
+local sourced
+for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
+assert(sourced and sourced.profile and not sourced.compatibility and sourced.source == "iRC", "fresh iRC suppresses the compatible source for the same character")
+db.members.member.lastSeen = now - 136
+db.compatibilityMembers.member.stats.lastSeen = now - 100
+sourceRows = iRC:GetGuildRosterRows()
+for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
+assert(sourced and not sourced.profile and sourced.compatibility and sourced.source == "RaceLockedForkEU", "newer native data replaces and clears an expired iRC profile")
+assert(db.members.member == nil, "expired iRC profile is removed from the connection cache after native takeover")
+db.members.member = { name = "Member", guid = "Player-OLD-Member", race = "Troll", lastSeen = now }
+db.compatibilityMembers.member = { guid = "Player-OLD-Member", stats = { guid = "Player-OLD-Member", source = "RaceLockedForkEU", lastSeen = now } }
+db.guildFoundRoster = { member = { source = "RaceLocked", lastSeen = now } }
+local identityRows = iRC:GetGuildRosterRows()
+local recreated
+for _, row in ipairs(identityRows) do if iRC:NormalizeName(row.name) == "member" then recreated = row break end end
+assert(recreated and not recreated.profile and recreated.verification.state == "missing", "same-name character with a new GUID cannot inherit cached verification")
+assert(db.members.member == nil and db.compatibilityMembers.member == nil and db.guildFoundRoster.member == nil, "all name-keyed identity caches are cleared after a GUID change")
+assert(db.newMemberChecks["guid:Player-1-Member"], "a recreated character receives a new GUID-scoped confirmation check")
 print("Race Overview population tests passed: verified + compatible, offline/unknown race, dual-source deduplication, departed/undetected exclusions and native overwrite protection.")
 print("Presence leader tests passed: iRC-only officers, test overrides, fresh/session/offline checks, deterministic election and profile wire round trip.")
 

@@ -228,6 +228,9 @@ function iRC:SendConnectionRules()
         rules.sameRaceGroupsOnly and "1" or "0",
         rules.allowLevel60MixedRaceGroups and "1" or "0",
         iRC:NormalizeGuildRace(rules.guildRace),
+        tostring(math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))),
+        rules.guildGroupsOnly and "1" or "0",
+        tostring(math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))),
     }, SEP), "GUILD")
     self:DebugMsg(self:Text("RULES_SENT"), 3)
 end
@@ -310,6 +313,9 @@ local function handleMessage(prefix, message, sender)
             connection.rules.sameRaceGroupsOnly = parts[7] == "1"
             connection.rules.allowLevel60MixedRaceGroups = parts[8] == "1"
             connection.rules.guildRace = iRC:NormalizeGuildRace(parts[9])
+            connection.rules.sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[10]) or 1)))
+            connection.rules.guildGroupsOnly = parts[11] == "1"
+            connection.rules.guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[12]) or 1)))
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.Enforcement then iRC.Enforcement:Refresh() end
             iRC:DebugMsg(iRC:Text("RULES_RECEIVED", sender), 3)

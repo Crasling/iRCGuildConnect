@@ -9,6 +9,7 @@ function Roleplay:GetPlayerSettings()
     iRCCharDB = iRCCharDB or {}
     iRCCharDB.roleplay = iRCCharDB.roleplay or {}
     if iRCCharDB.roleplay.trollTalk == nil then iRCCharDB.roleplay.trollTalk = false end
+    if iRCCharDB.roleplay.taurenTalk == nil then iRCCharDB.roleplay.taurenTalk = false end
     return iRCCharDB.roleplay
 end
 
@@ -19,6 +20,15 @@ end
 
 function Roleplay:IsTrollTalkEnabled()
     return self:IsTroll() and self:GetPlayerSettings().trollTalk and true or false
+end
+
+function Roleplay:IsTauren()
+    local _, raceFile = UnitRace("player")
+    return string.upper(tostring(raceFile or "")) == "TAUREN"
+end
+
+function Roleplay:IsTaurenTalkEnabled()
+    return self:IsTauren() and self:GetPlayerSettings().taurenTalk and true or false
 end
 
 local phraseReplacements = {
@@ -97,6 +107,58 @@ local wordReplacements = {
     { "my", "me" },
 }
 
+-- Conservative substitutions keep ordinary Tauren chat readable.
+local taurenPhraseReplacements = {
+    { "thank you", "you have my gratitude" },
+    { "good luck", "may the spirits guide you" },
+    { "be careful", "walk with care" },
+    { "follow me", "walk beside me" },
+    { "stay here", "remain here" },
+    { "help me", "lend me your strength" },
+    { "i agree", "your words carry truth" },
+    { "i disagree", "I do not share your path" },
+    { "we must go", "our path leads onward" },
+    { "prepare yourself", "steady your heart" },
+    { "we are ready", "our hearts are prepared" },
+    { "rest in peace", "rest with the spirits" },
+}
+
+local taurenWordReplacements = {
+    { "ancestors", "honored ancestors" },
+    { "everyone", "everyone gathered" },
+    { "goodbye", "farewell" },
+    { "hello", "greetings" },
+    { "people", "tribe" },
+    { "earth", "sacred earth" },
+    { "nature", "Earth Mother" },
+    { "world", "living world" },
+    { "home", "homelands" },
+    { "sun", "An'she" },
+    { "moon", "Mu'sha" },
+    { "gods", "spirits" },
+    { "magic", "spirit power" },
+    { "enemies", "foes" },
+    { "enemy", "foe" },
+    { "danger", "peril" },
+    { "death", "final journey" },
+    { "dead", "fallen" },
+    { "kill", "strike down" },
+    { "protect", "guard" },
+    { "fight", "stand against" },
+    { "win", "prevail" },
+    { "lose", "fall" },
+    { "strong", "steadfast" },
+    { "brave", "courageous" },
+    { "wise", "guided" },
+    { "wait", "have patience" },
+    { "hurry", "move swiftly" },
+    { "listen", "hear me" },
+    { "look", "behold" },
+    { "understand", "see clearly" },
+    { "remember", "honor" },
+    { "perhaps", "maybe" },
+}
+
 local function caseInsensitivePattern(phrase)
     local pattern = {}
     for index = 1, #phrase do
@@ -137,11 +199,27 @@ function Roleplay:TransformTrollTalk(text)
     return text
 end
 
+function Roleplay:TransformTaurenTalk(text)
+    if type(text) ~= "string" or text == "" or text:match("^%s*/") then return text end
+    text = text:gsub("â€™", "'")
+    text = applyReplacements(text, taurenPhraseReplacements)
+    text = applyReplacements(text, taurenWordReplacements)
+    return text
+end
+
 local roleplayWrappers = setmetatable({}, { __mode = "k" })
+local transformedEditBoxes = setmetatable({}, { __mode = "k" })
 
 local function transformBeforeSend(editBox)
-    if not Roleplay:IsTrollTalkEnabled() or not editBox or not editBox.GetText or not editBox.SetText then return end
-    editBox:SetText(Roleplay:TransformTrollTalk(editBox:GetText()))
+    if not editBox or not editBox.GetText or not editBox.SetText then return end
+    if transformedEditBoxes[editBox] then return end
+    if Roleplay:IsTrollTalkEnabled() then
+        editBox:SetText(Roleplay:TransformTrollTalk(editBox:GetText()))
+        transformedEditBoxes[editBox] = true
+    elseif Roleplay:IsTaurenTalkEnabled() then
+        editBox:SetText(Roleplay:TransformTaurenTalk(editBox:GetText()))
+        transformedEditBoxes[editBox] = true
+    end
 end
 
 local function installChatSendHook()
@@ -150,7 +228,9 @@ local function installChatSendHook()
     local originalSend = currentSend
     local wrapper = function(editBox, addHistory)
         transformBeforeSend(editBox)
-        return originalSend(editBox, addHistory)
+        local result = originalSend(editBox, addHistory)
+        transformedEditBoxes[editBox] = nil
+        return result
     end
     roleplayWrappers[wrapper] = true
     ChatEdit_SendText = wrapper
@@ -165,7 +245,9 @@ local function installChatEditBoxHooks()
             local originalHandler = currentHandler
             local wrapper = function(self, ...)
                 transformBeforeSend(self)
-                return originalHandler(self, ...)
+                local results = { originalHandler(self, ...) }
+                transformedEditBoxes[self] = nil
+                return unpack(results)
             end
             roleplayWrappers[wrapper] = true
             editBox:SetScript("OnEnterPressed", wrapper)

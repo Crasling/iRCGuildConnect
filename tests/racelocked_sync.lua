@@ -147,15 +147,22 @@ assert(original.points == 300 and original.membersLevel60 == 2 and original.guil
 assert(original.classAverageLevels.WARRIOR == 30 and fork.classes.WARRIOR == 1)
 assert(fork.points == 300 and fork.membersLevel60 == nil and fork.guildDeaths == nil)
 assert(grid:StoreRaceLockedGuildReport(original))
-local saved = iRCDB.globalRaceGrid.raceLockedGuildReports["TROLL@darkspear tribe"]
+local serverStore = iRCDB.globalRaceGrid.servers.soulseeker
+local saved = serverStore.raceLockedGuildReports["TROLL@darkspear tribe"]
 fork.timestamp = original.timestamp - 50
 assert(not grid:StoreRaceLockedGuildReport(fork))
 assert(saved.lastSeen == original.timestamp, "stale relay does not refresh age")
 local wrong = {}; for k, v in pairs(report) do wrong[k] = v end
 wrong.guildName = "Wrong guild"
-assert(grid:EncodeExternalReport(wrong, "RaceLockedDataBus") == nil)
+assert(grid:EncodeExternalReport(wrong, "RaceLockedDataBus"), "native compatibility encoding no longer uses a hardcoded guild allowlist")
 local own = grid:BuildOwnGuildReports()[1]
 assert(own.points == 0 and own.members == 3 and own.membersLevel60 == 2)
+assert(own.rulesKnown and type(own.rules) == "table", "live iRC guild snapshots include current rule metadata")
+rows[4] = { name = "Lowbie", race = "Troll", class = "ROGUE", level = 18 }
+members.lowbie = true
+local filteredClasses = grid:BuildOwnGuildReports()[1]
+assert(filteredClasses.members == 4 and filteredClasses.classes.ROGUE == nil, "class breakdown excludes characters below level 19")
+rows[4], members.lowbie = nil, nil
 local overview = iRC:GetRaceGridOverview()[1]
 assert(overview.members == 3 and overview.points == 0, "achievement statistics are disabled")
 local peerProfile = rows[2].profile
@@ -214,7 +221,7 @@ assert(grid:ParseExternalReport(wireFields(simple), "RaceLockedForkEUDataBus").t
 simple[4] = "-1"
 assert(grid:ParseExternalReport(wireFields(simple), "RaceLockedDataBus") == nil)
 simple[4], simple[3] = "3", "Wrong guild"
-assert(grid:ParseExternalReport(wireFields(simple), "RaceLockedDataBus") == nil)
+assert(grid:ParseExternalReport(wireFields(simple), "RaceLockedDataBus"), "native reports accept dynamic guild names")
 local paired = { strsplit(string.char(1), RaceLocked_GuildChampion.Comms.HexToBytes(originalWire:match(":(.+)$"))) }
 paired[1], paired[27], paired[26] = "v4", nil, nil
 assert(grid:ParseExternalReport(wireFields(paired), "RaceLockedDataBus").guildDeaths == 7)
@@ -227,66 +234,50 @@ externalReport.race, externalReport.guildName, externalReport.timestamp = "NIGHT
 local relayWire = assert(grid:EncodeExternalReport(externalReport, "RaceLockedForkEUDataBus"))
 gridFrame.OnEvent(nil, "CHAT_MSG_CHANNEL", relayWire, "External", nil, nil, nil, nil, nil, 5, "RaceLockedForkEUDataBus")
 local combined = iRC:GetRaceGridOverview()
-assert(#combined == 2, "local and external hardcoded guild slots coexist")
+assert(#combined == 1, "native reports cannot create guild cards without an iRC guild report")
 local relayBefore = #chat
 advance(121); click(function() grid:BroadcastExternalReports(true) end); advance(10)
-assert(#chat == relayBefore + 3, "two own snapshots and one unchanged native relay")
+assert(#chat == relayBefore + 2, "only current own snapshots are sent; cached native data is never relayed")
 local exactRelay = false
 for index = relayBefore + 1, #chat do if chat[index][1] == relayWire then exactRelay = true end end
-assert(exactRelay, "relay retains original packet and timestamp")
+assert(not exactRelay, "cached native reports are display-only")
 rows[2].profile = { shareGlobalRaceGrid = true, lastSeen = time(), hardcorePoints = 50 }
 rows[2].online = true
 assert(not grid:IsExternalBroadcaster(), "one live sharing client elected per guild")
 rows[2].profile = peerProfile
 assert(grid:IsExternalBroadcaster())
 
--- Co-installed native data predates our login; retain population snapshots,
--- but never use their AP, including for our own guild.
-iRCDB.globalRaceGrid.raceLockedGuildReports = {}
-local oldStamp = time() - 4000
-local cache = {
-    Troll = {{ guildName = "Darkspear Tribe", guildSize = 630, averageLevel = 14, totalAP = 11098, timestamp = oldStamp, classes = { warriors = 100 } }},
-    Scourge = {{ guildName = "WE are FORSAKEN", guildSize = 10, averageLevel = 30, totalAP = 18162, timestamp = oldStamp, classes = { priests = 10 } }},
-    Tauren = {{ guildName = "Wrong guild", guildSize = 20, averageLevel = 30, totalAP = 99, timestamp = time() }},
-    Human = {{ guildName = "Northshire Survivors", guildSize = 0, averageLevel = 0, totalAP = 0, timestamp = 0 }},
-}
-RaceLockedForkEUAccountDB = { raceGridStoredGuildReportsByRace = cache }
-loaded.RaceLockedForkEU = true
-local byRace = {}
-for _, group in ipairs(iRC:GetRaceGridOverview()) do byRace[group.race] = group end
-assert(byRace.TROLL.points == 0 and byRace.TROLL.members == 3, "own verified/compatible count replaces native population without AP")
-assert(byRace.SCOURGE.points == 0 and byRace.SCOURGE.averagePoints == nil and byRace.SCOURGE.cached and byRace.SCOURGE.timestamp == oldStamp)
-assert(not byRace.TAUREN and not byRace.HUMAN, "wrong guild and empty native placeholders excluded")
-byRace.SCOURGE.classes.PRIEST = 0
-assert(cache.Scourge[1].classes.priests == 10 and cache.Scourge[1].timestamp == oldStamp, "native cache never mutated")
--- Prefer current in-memory native reports over its saved-table snapshot.
-local liveRow = { guildName = "WE are FORSAKEN", guildSize = 11, averageLevel = 31, totalAP = 19000, timestamp = time(), classes = { priests = 11 } }
-RaceLockedForkEU_GuildChampion.RACE_GRID_STORED_GUILD_REPORTS_BY_RACE = { Scourge = { liveRow } }
-byRace = {}; for _, group in ipairs(iRC:GetRaceGridOverview()) do byRace[group.race] = group end
-assert(byRace.SCOURGE.points == 0 and byRace.SCOURGE.members == 11 and not byRace.SCOURGE.cached, "even live native AP is excluded")
--- Achievement fields in iRC reports remain ignored while statistics are paused.
-local function publicReport(name, points, guild)
-    local fields = { "REPORT", "1", name, "Player-1-" .. name, "SCOURGE", "PRIEST", "30", tostring(points), guild or "WE are FORSAKEN", "1", "UNVERIFIED" }
+-- Dynamic guild snapshots are discovered only through iRC and ranked by
+-- level-60 members, active players, total roster, then guild name.
+serverStore.guildReports = {}
+local function guildReport(name, guild, race, level60, active, total, stamp, ruleMask, sameRaceLevel, guildGroupsLevel)
+    local fields = { "GUILD_REPORT", "2", name, "Player-1-" .. name, guild, race,
+        tostring(level60), tostring(active), tostring(total), "30", tostring(stamp or time()), "0" }
+    for index = 1, 9 do fields[#fields + 1] = tostring(index == 4 and total or 0) end
+    if ruleMask ~= nil then
+        fields[#fields + 1] = tostring(ruleMask)
+        fields[#fields + 1] = tostring(sameRaceLevel or 1)
+        fields[#fields + 1] = tostring(guildGroupsLevel or 1)
+    end
     gridFrame.OnEvent(nil, "CHAT_MSG_ADDON", "iRCGridV1", table.concat(fields, "\t"), "CHANNEL", name)
 end
-publicReport("UndeadOne-Soulseeker", 120)
-publicReport("UndeadOne-Soulseeker", 150)
-publicReport("UndeadTwo-Soulseeker", 50)
-publicReport("WrongGuild-Soulseeker", 9999, "Wrong guild")
-byRace = {}; for _, group in ipairs(iRC:GetRaceGridOverview()) do byRace[group.race] = group end
-assert(byRace.SCOURGE.points == 0 and byRace.SCOURGE.members == 11, "individual iRC AP is ignored while achievement statistics are paused")
-assert(byRace.SCOURGE.averagePoints == nil, "average AP remains disabled")
-loaded.RaceLockedForkEU = false
-advance(2000)
-byRace = {}; for _, group in ipairs(iRC:GetRaceGridOverview()) do byRace[group.race] = group end
-assert(byRace.SCOURGE.points == 0 and byRace.SCOURGE.cached, "expired iRC AP never falls back to retained native points")
--- Original RaceLocked uses class tables and average AP, not ForkEU's total AP.
-loaded.RaceLocked = true
-RaceLocked_GuildChampion.RACE_GRID_STORED_GUILD_REPORTS_BY_RACE = {
-    Tauren = {{ guildName = "Fear The Beef", guildSize = 5, averageLevel = 20, guildAchievementsAverage = 100, guildDeaths = 3, guildMembersLevel60 = 1, timestamp = time(), classes = { warriors = { count = 5, averageLevel = 20 } } }},
-}
-byRace = {}; for _, group in ipairs(iRC:GetRaceGridOverview()) do byRace[group.race] = group end
-assert(byRace.TAUREN.points == 0 and byRace.TAUREN.averagePoints == nil and byRace.TAUREN.guildDeaths == 3 and byRace.TAUREN.classAverageLevels.WARRIOR == 20)
+guildReport("Elf-Soulseeker", "Moon Wardens", "NIGHTELF", 4, 2, 10)
+guildReport("Orc-Soulseeker", "Warsong Vanguard", "ORC", 3, 9, 20, nil, 80, 50, 55)
+guildReport("Human-Soulseeker", "Lion Guard", "HUMAN", 3, 8, 50)
+guildReport("ElfTwo-Soulseeker", "Moon Wardens", "NIGHTELF", 4, 2, 11, time() + 1)
+local ranked = iRC:GetRaceGridOverview()
+assert(#ranked == 4 and ranked[1].guildName == "Moon Wardens" and ranked[1].members == 11, "same guild is deduplicated and newest iRC snapshot wins")
+assert(ranked[2].guildName == "Warsong Vanguard" and ranked[3].guildName == "Lion Guard" and ranked[4].guildName == "Darkspear Tribe", "guild ranking is level60, active, then total")
+assert(ranked[1].faction == "Alliance" and ranked[2].faction == "Horde", "guild race assigns the faction frame")
+assert(ranked[1].rulesKnown == nil, "older iRC reports remain valid without rule metadata")
+assert(ranked[2].rulesKnown and ranked[2].rules.sameRaceGroupsOnly and ranked[2].rules.guildGroupsOnly, "rule flags decode from new reports")
+assert(ranked[2].rules.sameRaceMinimumLevel == 50 and ranked[2].rules.guildGroupsMinimumLevel == 55, "rule levels decode from new reports")
+
+-- Native reports are retained for compatibility but cannot invent a Stats
+-- guild that has never been announced through iRC.
+assert(grid:StoreRaceLockedGuildReport({ race = "TAUREN", guildName = "Native Only", members = 99, averageLevel = 40, classes = {}, timestamp = time() }))
+ranked = iRC:GetRaceGridOverview()
+for _, group in ipairs(ranked) do assert(group.guildName ~= "Native Only") end
 local protectedBefore = #chat
 grid:Refresh(); advance(12)
 assert(#chat == protectedBefore, "refresh timers only read data")
@@ -306,32 +297,4 @@ iRCCharDB.guildFoundHistory.moneyDiscrepancyAt = time() + 1
 assert(sync:GetStatus("Tester").clean == false, "new incident beats GM approval")
 sf = true; sync:ObserveSelfFound()
 assert(iRCCharDB.guildFoundHistory.moneyDiscrepancyAt == nil, "active game SF clears false discrepancy")
-if nativeCachePath then
-    local savedEnvironment = {}
-    assert(loadfile(nativeCachePath, "t", savedEnvironment))()
-    RaceLockedForkEUAccountDB = assert(savedEnvironment.RaceLockedForkEUAccountDB)
-    RaceLockedForkEU_GuildChampion.RACE_GRID_STORED_GUILD_REPORTS_BY_RACE = nil
-    loaded.RaceLocked, loaded.RaceLockedForkEU = false, true
-    iRCDB.globalRaceGrid.raceLockedGuildReports = {}
-    local imported = {}
-    for _, group in ipairs(iRC:GetRaceGridOverview()) do imported[group.guildName] = group end
-    local count = 0
-    for _, guilds in pairs(RaceLockedForkEUAccountDB.raceGridStoredGuildReportsByRace) do
-        for _, guild in ipairs(guilds) do
-            if guild.guildSize > 0 then
-                local group = assert(imported[guild.guildName], "saved native guild missing in iRC")
-                if group.race == "TROLL" then
-                    assert(group.members == 3 and group.populationSource == "verified_compatible", "own participation count ignores native total")
-                else
-                    assert(group.members == guild.guildSize and group.timestamp == guild.timestamp)
-                    assert(group.averageLevel == math.floor(guild.averageLevel * 10 + 0.5) / 10, "preserve native fractional averages")
-                end
-                assert(group.points == 0 and group.averagePoints == nil, "achievement statistics stay disabled for all guilds")
-                count = count + 1
-            end
-        end
-    end
-    assert(count > 0)
-    print("Read-only saved-variable test passed: " .. count .. " guild snapshots checked; own participant count protected, external populations retained, all native AP excluded.")
-end
 print("RaceLocked sync tests passed: roster, overrides, clean state, deaths, codecs, deduplication, activation and coexistence.")

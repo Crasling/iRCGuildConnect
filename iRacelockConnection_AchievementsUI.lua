@@ -4,6 +4,7 @@ if not iRC then return end
 
 local UI = {}
 iRC.AchievementsUI = UI
+local expandedGuildCards = {}
 
 local COLORS = {
     gold = iRC.ColorValues.Orange,
@@ -35,16 +36,6 @@ local RACE_LABELS = {
     HUMAN = "Human", DWARF = "Dwarf", NIGHTELF = "Night Elf", GNOME = "Gnome", DRAENEI = "Draenei",
     ORC = "Orc", SCOURGE = "Undead", TAUREN = "Tauren", TROLL = "Troll", BLOODELF = "Blood Elf",
 }
-
-local RACES_BY_FACTION = {
-    Horde = { "TROLL", "ORC", "SCOURGE", "TAUREN" },
-    Alliance = { "HUMAN", "DWARF", "NIGHTELF", "GNOME" },
-}
-
-if iRC:SupportsTBCPlayableRaces() then
-    RACES_BY_FACTION.Horde[#RACES_BY_FACTION.Horde + 1] = "BLOODELF"
-    RACES_BY_FACTION.Alliance[#RACES_BY_FACTION.Alliance + 1] = "DRAENEI"
-end
 
 local FACTION_STYLES = {
     Horde = { border = { 0.72, 0.18, 0.15, 1 }, background = { 0.13, 0.035, 0.03, 0.92 } },
@@ -168,23 +159,23 @@ local function makeRaceCard(parent)
     card.freshness:SetPoint("RIGHT", card, "RIGHT", -14, 0)
     card.freshness:SetJustifyH("LEFT")
     card.guildLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.guildLabel:SetPoint("TOP", card, "TOP", 0, -65)
-    card.guildLabel:SetText("Guilds")
+    card.guildLabel:SetPoint("TOP", card, "TOP", -35, -43)
+    card.guildLabel:SetText(iRC:Text("GUILD_STATS_RACE"))
     card.guildLabel:SetTextColor(unpack(COLORS.gold))
     card.guild = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.guild:SetPoint("TOP", card.guildLabel, "BOTTOM", 0, -3)
-    card.guild:SetWidth(285)
-    card.guild:SetJustifyH("CENTER")
+    card.guild:SetPoint("LEFT", card.guildLabel, "RIGHT", 7, 0)
+    card.guild:SetWidth(180)
+    card.guild:SetJustifyH("LEFT")
 
     card.averageLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.averageLabel:SetPoint("TOP", card, "TOP", -102, -104)
-    card.averageLabel:SetText("Average level")
+    card.averageLabel:SetPoint("TOP", card, "TOP", -170, -64)
+    card.averageLabel:SetText(iRC:Text("GUILD_STATS_LEVEL_60"))
     card.membersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.membersLabel:SetPoint("TOP", card, "TOP", 0, -104)
-    card.membersLabel:SetText("Total players")
+    card.membersLabel:SetPoint("TOP", card, "TOP", 0, -64)
+    card.membersLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_PLAYERS"))
     card.pointsLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.pointsLabel:SetPoint("TOP", card, "TOP", 102, -104)
-    card.pointsLabel:SetText("Level 60")
+    card.pointsLabel:SetPoint("TOP", card, "TOP", 170, -64)
+    card.pointsLabel:SetText(iRC:Text("GUILD_STATS_TOTAL_PLAYERS"))
     card.average = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     card.average:SetPoint("TOP", card.averageLabel, "BOTTOM", 0, -3)
     card.members = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -193,35 +184,51 @@ local function makeRaceCard(parent)
     card.points:SetPoint("TOP", card.pointsLabel, "BOTTOM", 0, -3)
 
     card.classesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -139)
-    card.classesTitle:SetText("Class breakdown")
+    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -94)
+    card.classesTitle:SetText(iRC:Text("GUILD_STATS_CLASS_BREAKDOWN"))
     card.classText = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.classText:SetPoint("TOPLEFT", 15, -153)
-    card.classText:SetPoint("TOPRIGHT", -15, -153)
+    card.classText:SetPoint("TOPLEFT", 15, -107)
+    card.classText:SetPoint("TOPRIGHT", -15, -107)
     card.classText:SetJustifyH("CENTER")
     card.classText:SetWordWrap(false)
-    card.classBar = CreateFrame("Frame", nil, card)
-    card.classBar:SetPoint("TOPLEFT", 16, -168)
-    card.classBar:SetPoint("TOPRIGHT", -16, -168)
-    card.classBar:SetHeight(7)
+    card.classBar = CreateFrame("Frame", nil, card, "BackdropTemplate")
+    card.classBar:SetPoint("TOPLEFT", 16, -122)
+    card.classBar:SetPoint("TOPRIGHT", -16, -122)
+    card.classBar:SetHeight(12)
+    createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
     card.classSegments = {}
+    card.classLabels = {}
     card.metrics = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.metrics:SetPoint("TOPLEFT", 12, -184)
-    card.metrics:SetPoint("TOPRIGHT", -12, -184)
-    card.metrics:SetJustifyH("CENTER")
+    card.metrics:SetPoint("TOPLEFT", 16, -140)
+    card.metrics:SetWidth(270)
+    card.metrics:SetJustifyH("LEFT")
+    card.expandHint = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.expandHint:SetPoint("TOPRIGHT", -16, -140)
+    card.expandHint:SetWidth(270)
+    card.expandHint:SetJustifyH("RIGHT")
+    card.rulesSeparator = card:CreateTexture(nil, "ARTWORK")
+    card.rulesSeparator:SetColorTexture(0.35, 0.29, 0.16, 0.8)
+    card.rulesSeparator:SetPoint("TOPLEFT", 16, -160)
+    card.rulesSeparator:SetPoint("TOPRIGHT", -16, -160)
+    card.rulesSeparator:SetHeight(1)
+    card.rulesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    card.rulesTitle:SetPoint("TOPLEFT", 16, -171)
+    card.rulesTitle:SetText(iRC:Text("GUILD_STATS_ACTIVE_RULES"))
+    card.rulesTitle:SetTextColor(unpack(COLORS.gold))
+    card.rulesText = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    card.rulesText:SetPoint("TOPLEFT", 20, -190)
+    card.rulesText:SetPoint("TOPRIGHT", -20, -190)
+    card.rulesText:SetJustifyH("LEFT")
+    card.rulesText:SetJustifyV("TOP")
+    card.rulesText:SetWordWrap(true)
     card:EnableMouse(true)
     card:SetScript("OnEnter", function(self)
         if not GameTooltip or not self.report then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(iRC:GetRaceOverviewGuildName(self.report.race) or "—")
+        GameTooltip:SetText(self.report.guildName or "—")
         if self.report.timestamp and self.report.timestamp > 0 then GameTooltip:AddLine(iRC:Text("RL_GRID_UPDATED", date("%Y-%m-%d %H:%M", self.report.timestamp))) end
         if self.report.source then GameTooltip:AddLine(iRC:Text("RL_GRID_SOURCE", self.report.source)) end
-        GameTooltip:AddLine(iRC:Text("RL_GRID_AP_SOURCE"), 1, 1, 1, true)
-        if self.report.populationSource == "verified_compatible" then
-            GameTooltip:AddLine(iRC:Text("RL_GRID_POPULATION", self.report.verifiedMembers or 0, self.report.compatibleMembers or 0), 1, 1, 1, true)
-        else
-            GameTooltip:AddLine(iRC:Text("RL_GRID_EXTERNAL_POPULATION"), 1, 1, 1, true)
-        end
+        GameTooltip:AddLine(iRC:Text("GUILD_STATS_POPULATION", self.report.membersLevel60 or 0, self.report.activePlayers or 0, self.report.members or 0), 1, 1, 1, true)
         if self.report.cached then GameTooltip:AddLine(iRC:Text("RL_GRID_CACHED"), 1, 0.65, 0) end
         for class, average in pairs(self.report.classAverageLevels or {}) do
             GameTooltip:AddLine(iRC:Text("RL_GRID_CLASS_LEVEL", class, average))
@@ -229,6 +236,13 @@ local function makeRaceCard(parent)
         GameTooltip:Show()
     end)
     card:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    card:SetScript("OnMouseUp", function(self, button)
+        if button ~= "LeftButton" or not self.guildKey then return end
+        expandedGuildCards[self.guildKey] = not expandedGuildCards[self.guildKey]
+        if GameTooltip then GameTooltip:Hide() end
+        if UI.frame and UI.frame.scroll then UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll() end
+        UI:Refresh()
+    end)
     return card
 end
 
@@ -248,7 +262,7 @@ local function makeRacePodium(parent)
     createBackdrop(podium, { 0.075, 0.06, 0.04, 0.98 }, { 0.55, 0.41, 0.17, 1 })
     podium.title = podium:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     podium.title:SetPoint("TOP", 0, -7)
-    podium.title:SetText("Top Races")
+    podium.title:SetText(iRC:Text("GUILD_STATS_TOP_THREE"))
     podium.title:SetTextColor(unpack(COLORS.gold))
     podium.entries = {}
 
@@ -273,12 +287,12 @@ local function makeRacePodium(parent)
 end
 
 local ACHIEVEMENT_NAVIGATION = {
-    { id = "Achievements", label = "Achievements" },
-    { id = "Hardcore Achievements", label = "Hardcore Achievements", child = true },
-    { id = "Guild Achievements", label = "Guild Achievements", child = true },
-    { id = "RP Achievements", label = "RP Achievements", child = true },
-    { id = "Race Overview", label = "Race Overview" },
+    { id = "Race Overview", label = iRC:Text("GUILD_STATS_TITLE") },
     { id = "Guild Members", label = "Guild Members" },
+    { id = "Achievements", label = "Achievements", hidden = true },
+    { id = "Hardcore Achievements", label = "Hardcore Achievements", child = true, hidden = true },
+    { id = "Guild Achievements", label = "Guild Achievements", child = true, hidden = true },
+    { id = "RP Achievements", label = "RP Achievements", child = true, hidden = true },
 }
 
 local function getProfile(frame)
@@ -337,7 +351,7 @@ function UI:Create()
 
     frame.title = header:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.title:SetPoint("TOPLEFT", header, "TOPLEFT", 18, -11)
-    frame.title:SetText(iRC.DisplayName .. " Achievements")
+    frame.title:SetText(iRC.DisplayName)
     frame.title:SetTextColor(unpack(COLORS.gold))
     frame.player = header:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.player:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 17, 13)
@@ -357,29 +371,33 @@ function UI:Create()
 
     local sidebarTitle = sidebar:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     sidebarTitle:SetPoint("TOPLEFT", 14, -13)
-    sidebarTitle:SetText("Achievements")
+    sidebarTitle:SetText(iRC:Text("IRC_MAIN_NAV_TITLE"))
     sidebarTitle:SetTextColor(unpack(COLORS.gold))
     frame.tabs = {}
-    for index, item in ipairs(ACHIEVEMENT_NAVIGATION) do
-        local tab = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
-        tab:SetSize(item.child and 166 or 180, 31)
-        tab:SetPoint("TOPLEFT", item.child and 28 or 14, -((index - 1) * 35 + 41))
-        createBackdrop(tab, { 0.08, 0.065, 0.05, 0.96 }, { 0.34, 0.28, 0.20, 1 })
-        tab:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-        tab.label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        tab.label:SetPoint("LEFT", 12, 0)
-        tab.label:SetText(item.child and "- " .. item.label or item.label)
-        tab.category = item.id
-        tab:SetScript("OnClick", function(self)
-            if self.category == "Hardcore Achievements" then
-                UI:OpenHardcoreAchievements()
-                return
-            end
-            frame.category = self.category
-            if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
-            UI:Refresh()
-        end)
-        frame.tabs[item.id] = tab
+    local visibleTabIndex = 0
+    for _, item in ipairs(ACHIEVEMENT_NAVIGATION) do
+        if not item.hidden then
+            visibleTabIndex = visibleTabIndex + 1
+            local tab = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
+            tab:SetSize(item.child and 166 or 180, 31)
+            tab:SetPoint("TOPLEFT", item.child and 28 or 14, -((visibleTabIndex - 1) * 35 + 41))
+            createBackdrop(tab, { 0.08, 0.065, 0.05, 0.96 }, { 0.34, 0.28, 0.20, 1 })
+            tab:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+            tab.label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            tab.label:SetPoint("LEFT", 12, 0)
+            tab.label:SetText(item.child and "- " .. item.label or item.label)
+            tab.category = item.id
+            tab:SetScript("OnClick", function(self)
+                if self.category == "Hardcore Achievements" then
+                    UI:OpenHardcoreAchievements()
+                    return
+                end
+                frame.category = self.category
+                if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
+                UI:Refresh()
+            end)
+            frame.tabs[item.id] = tab
+        end
     end
 
     local main = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -425,7 +443,7 @@ function UI:Create()
     frame.achievementRows, frame.memberRows, frame.raceCards, frame.factionSections = {}, {}, {}, {}
     frame.racePodium = makeRacePodium(content)
     frame.racePodium:Hide()
-    frame.category = "Achievements"
+    frame.category = "Race Overview"
     return frame
 end
 
@@ -490,8 +508,26 @@ local function updateAchievementRows(frame, profile, completed)
     end
 end
 
-local function getTrollFoundPoints()
-    local getPoints = _G.TrollFound_GetTotalPoints
+local RP_PROVIDERS = {
+    TROLL = {
+        name = "TrollFound",
+        achievements = "TrollFound_Achievements",
+        hasAchievement = "TrollFound_HasAchievement",
+        metadata = "TrollFound_GetAchievementMetadata",
+        getPoints = "TrollFound_GetTotalPoints",
+    },
+}
+
+local function getActiveRPProvider()
+    local _, race = UnitRace("player")
+    race = iRC:NormalizeGuildRace(race)
+    return race ~= "" and RP_PROVIDERS[race] or nil
+end
+
+local function getRPPoints(provider)
+    provider = provider or getActiveRPProvider()
+    if not provider then return 0 end
+    local getPoints = _G[provider.getPoints]
     if type(getPoints) ~= "function" then return 0 end
     local ok, points = pcall(getPoints)
     return ok and (tonumber(points) or 0) or 0
@@ -506,6 +542,7 @@ end
 
 local function updateAchievementOverview(frame)
     local guildPoints = iRC.Achievements:GetGuildPoints()
+    local rpProvider = getActiveRPProvider()
     local sources = {
         {
             category = "Hardcore Achievements", title = "Hardcore Achievements", icon = "Interface\\Icons\\Achievement_General",
@@ -516,12 +553,14 @@ local function updateAchievementOverview(frame)
             category = "Guild Achievements", title = "Guild Achievements", icon = "Interface\\Icons\\Achievement_GuildPerks_GuildPage",
             description = "iRC achievements earned while completing guild-only challenges.", points = guildPoints, available = true,
         },
-        {
-            category = "RP Achievements", title = "RP Achievements", icon = "Interface\\Icons\\INV_Misc_Book_09",
-            description = "TrollFound achievements displayed in iRC's achievement list.", points = getTrollFoundPoints(),
-            available = type(_G.TrollFound_Achievements) == "table",
-        },
     }
+    if rpProvider then
+        sources[#sources + 1] = {
+            category = "RP Achievements", title = "RP Achievements", icon = "Interface\\Icons\\INV_Misc_Book_09",
+            description = iRC:Text("RP_PROVIDER_DESC", rpProvider.name), points = getRPPoints(rpProvider),
+            available = type(_G[rpProvider.achievements]) == "table",
+        }
+    end
     local yOffset = 0
     for index, source in ipairs(sources) do
         local row = frame.achievementRows[index]
@@ -559,17 +598,24 @@ local function updateAchievementOverview(frame)
     frame.scrollContent:SetHeight(math.max(1, yOffset - 8))
     frame.scroll:SetVerticalScroll(0)
     frame.contentTitle:SetText("Achievements")
-    frame.contentSubtitle:SetText("Choose an achievement source. HardcoreAchievements and TrollFound keep ownership of their own progress data.")
+    frame.contentSubtitle:SetText(iRC:Text("ACHIEVEMENT_SOURCES_DESC"))
 end
 
 local function updateRPAchievementRows(frame)
-    local source = _G.TrollFound_Achievements
-    local completed = _G.TrollFound_HasAchievement
-    local metadata = _G.TrollFound_GetAchievementMetadata
+    local provider = getActiveRPProvider()
+    if not provider then
+        updateAchievementOverview(frame)
+        frame.contentTitle:SetText("RP Achievements")
+        frame.contentSubtitle:SetText(iRC:Text("RP_PROVIDER_NONE"))
+        return
+    end
+    local source = _G[provider.achievements]
+    local completed = _G[provider.hasAchievement]
+    local metadata = _G[provider.metadata]
     if type(source) ~= "table" then
         updateAchievementOverview(frame)
         frame.contentTitle:SetText("RP Achievements")
-        frame.contentSubtitle:SetText("TrollFound is not detected. Install and enable TrollFound to view its roleplay achievements here.")
+        frame.contentSubtitle:SetText(iRC:Text("RP_PROVIDER_UNAVAILABLE", provider.name))
         return
     end
 
@@ -616,7 +662,7 @@ local function updateRPAchievementRows(frame)
     frame.scrollContent:SetHeight(math.max(1, yOffset - 8))
     frame.scroll:SetVerticalScroll(0)
     frame.contentTitle:SetText("RP Achievements")
-    frame.contentSubtitle:SetText("Roleplay achievements provided by TrollFound and displayed through iRC.")
+    frame.contentSubtitle:SetText(iRC:Text("RP_PROVIDER_ACTIVE", provider.name))
 end
 
 local function updateMemberRows(frame)
@@ -677,51 +723,102 @@ local CLASS_SHORT_NAMES = {
 
 local function updateClassBreakdown(card, classes, totalMembers)
     local classGroups = {}
-    for class, count in pairs(classes or {}) do classGroups[#classGroups + 1] = { class = class, count = count } end
+    totalMembers = 0
+    for class, count in pairs(classes or {}) do
+        count = tonumber(count) or 0
+        if count > 0 then
+            classGroups[#classGroups + 1] = { class = class, count = count }
+            totalMembers = totalMembers + count
+        end
+    end
     table.sort(classGroups, function(a, b) return a.count > b.count end)
-    local labels, usedWidth = {}, 0
-    local availableWidth = math.max(1, (card:GetWidth() or 333) - 32)
+    local usedWidth = 0
+    local availableWidth = math.max(1, (card:GetWidth() or 651) - 36)
     for index, group in ipairs(classGroups) do
         local share = totalMembers > 0 and group.count / totalMembers or 0
         local percent = math.floor(share * 100 + 0.5)
-        labels[#labels + 1] = (CLASS_SHORT_NAMES[group.class] or group.class) .. " " .. percent .. "%"
         local segment = card.classSegments[index]
         if not segment then
-            segment = card.classBar:CreateTexture(nil, "ARTWORK")
-            segment:SetHeight(7)
+            segment = CreateFrame("Frame", nil, card.classBar, "BackdropTemplate")
+            segment:SetHeight(8)
+            segment:SetBackdrop({
+                bgFile = "Interface\\Buttons\\WHITE8X8",
+                edgeFile = "Interface\\Buttons\\WHITE8X8",
+                edgeSize = 1,
+            })
             card.classSegments[index] = segment
         end
         segment:ClearAllPoints()
-        segment:SetPoint("LEFT", card.classBar, "LEFT", usedWidth, 0)
+        segment:SetPoint("LEFT", card.classBar, "LEFT", 2 + usedWidth, 0)
         local width = index == #classGroups and availableWidth - usedWidth or math.floor(availableWidth * share)
         segment:SetWidth(math.max(1, width))
-        segment:SetColorTexture(getClassColor(group.class))
+        local red, green, blue = getClassColor(group.class)
+        segment:SetBackdropColor(red, green, blue, 1)
+        segment:SetBackdropBorderColor(0.02, 0.02, 0.02, 1)
         segment:Show()
+        local label = card.classLabels[index]
+        if not label then
+            label = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            label:SetJustifyH("CENTER")
+            card.classLabels[index] = label
+        end
+        label:ClearAllPoints()
+        label:SetPoint("BOTTOM", segment, "TOP", 0, 2)
+        label:SetText((CLASS_SHORT_NAMES[group.class] or group.class) .. " " .. percent .. "%")
+        label:Show()
         usedWidth = usedWidth + width
     end
     for index = #classGroups + 1, #card.classSegments do card.classSegments[index]:Hide() end
-    card.classText:SetText(#labels > 0 and table.concat(labels, "  ") or "No class data")
+    for index = #classGroups + 1, #card.classLabels do card.classLabels[index]:Hide() end
+    card.classText:SetText(#classGroups == 0 and iRC:Text("GUILD_STATS_NO_DATA") or "")
+end
+
+local function guildCardKey(group)
+    return string.lower(tostring(group.guildName or "")) .. "@" .. tostring(group.race or "")
+end
+
+local function getActiveRuleLines(group)
+    if not group.rulesKnown or type(group.rules) ~= "table" then return { iRC:Text("GUILD_STATS_RULES_UNKNOWN") } end
+    local rules, lines = group.rules, {}
+    if rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NATIVE_TONGUE") end
+    if rules.selfFoundOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SELF_FOUND") end
+    if rules.level60GuildFound then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_LEVEL60_GUILD_FOUND") end
+    if rules.allowLevel60WithoutSelfFound then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_LEVEL60_SF_EXCEPTION") end
+    if rules.sameRaceGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SAME_RACE", rules.sameRaceMinimumLevel or 1) end
+    if rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_MIXED_RACE_60") end
+    if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_ONLY", rules.guildGroupsMinimumLevel or 1) end
+    if #lines == 0 then lines[1] = iRC:Text("GUILD_STATS_NO_ACTIVE_RULES") end
+    for index, line in ipairs(lines) do lines[index] = "- " .. line end
+    return lines
+end
+
+local function guildCardHeight(group)
+    if not expandedGuildCards[guildCardKey(group)] then return 158 end
+    return 202 + #getActiveRuleLines(group) * 14
 end
 
 local function setRaceCard(card, group, rank)
     local accent = RACE_COLORS[group.race] or RACE_COLORS.Unknown
     card.accent:SetColorTexture(accent[1], accent[2], accent[3], 1)
     card.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
-    card.race:SetText(RACE_LABELS[group.race] or group.race)
+    card.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
     card.rank:SetText("#" .. rank)
-    card.guild:SetText(iRC:GetRaceOverviewGuildName(group.race) or "—")
-    card.average:SetText(group.averageLevel or 0)
-    card.members:SetText(group.members or 0)
-    card.points:SetText(formatNumber(group.membersLevel60 or 0))
+    card.guild:SetText(RACE_LABELS[group.race] or group.race)
+    card.average:SetText(formatNumber(group.membersLevel60 or 0))
+    card.members:SetText(formatNumber(group.activePlayers or 0))
+    card.points:SetText(formatNumber(group.members or 0))
     card.report = group
+    card.guildKey = guildCardKey(group)
+    local expanded = expandedGuildCards[card.guildKey]
     card.freshness:SetText(group.source and iRC:Text(group.cached and "RL_GRID_CACHED" or "RL_GRID_RECENT") or "")
     card.metrics:SetText(iRC:Text("RL_GRID_METRICS", group.guildDeaths ~= nil and tostring(group.guildDeaths) or "—"))
+    card.expandHint:SetText(iRC:Text(expanded and "GUILD_STATS_COLLAPSE_RULES" or "GUILD_STATS_EXPAND_RULES"))
+    card.rulesSeparator:SetShown(expanded and true or false)
+    card.rulesTitle:SetShown(expanded and true or false)
+    card.rulesText:SetShown(expanded and true or false)
+    if expanded then card.rulesText:SetText(table.concat(getActiveRuleLines(group), "\n")) end
     updateClassBreakdown(card, group.classes, group.members)
     card:Show()
-end
-
-local function emptyRaceGroup(race, faction)
-    return { race = race, faction = faction, guildName = iRC:GetRaceOverviewGuildName(race), members = 0, averageLevel = 0, points = 0, classes = {} }
 end
 
 local function updateRacePodium(frame, rankedGroups)
@@ -744,12 +841,12 @@ local function updateRacePodium(frame, rankedGroups)
         entry.rank:SetText("#" .. rank)
         if group then
             entry.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
-            entry.race:SetText(RACE_LABELS[group.race] or group.race)
-            entry.points:SetText(formatNumber(group.members or 0) .. " players")
+            entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
+            entry.points:SetText(iRC:Text("GUILD_STATS_POPULATION", group.membersLevel60 or 0, group.activePlayers or 0, group.members or 0))
         else
             entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
-            entry.race:SetText("No data")
-            entry.points:SetText("0 players")
+            entry.race:SetText(iRC:Text("GUILD_STATS_NO_DATA"))
+            entry.points:SetText(iRC:Text("GUILD_STATS_ZERO_PLAYERS"))
         end
         entry:Show()
     end
@@ -757,29 +854,11 @@ local function updateRacePodium(frame, rankedGroups)
 end
 
 local function updateRaceOverview(frame)
-    local groupsByRace, totalPlayers = {}, 0
-    local overviewGroups, overviewSource = iRC:GetRaceGridOverview()
-    for _, group in ipairs(overviewGroups) do
-        groupsByRace[group.race] = group
-        totalPlayers = totalPlayers + (group.members or 0)
-    end
-
-    local allGroups = {}
-    for faction, races in pairs(RACES_BY_FACTION) do
-        for _, race in ipairs(races) do
-            local group = groupsByRace[race] or emptyRaceGroup(race, faction)
-            allGroups[#allGroups + 1] = group
-        end
-    end
-    table.sort(allGroups, function(a, b)
-        if a.members ~= b.members then return a.members > b.members end
-        if a.averageLevel ~= b.averageLevel then return a.averageLevel > b.averageLevel end
-        return a.race < b.race
-    end)
+    local allGroups = iRC:GetRaceGridOverview()
     local ranks = {}
-    for index, group in ipairs(allGroups) do ranks[group.race] = index end
+    for index, group in ipairs(allGroups) do ranks[group.guildName] = index end
 
-    local rowHeight, gap, contentWidth = 214, 9, 675
+    local gap, contentWidth = 9, 675
     updateRacePodium(frame, allGroups)
     local usedCards, yOffset = 0, 95
 
@@ -789,18 +868,18 @@ local function updateRaceOverview(frame)
             section = makeFactionSection(frame.scrollContent, faction)
             frame.factionSections[faction] = section
         end
-        local races = {}
-        for _, race in ipairs(RACES_BY_FACTION[faction]) do
-            races[#races + 1] = groupsByRace[race] or emptyRaceGroup(race, faction)
-        end
-        local rowCount = math.ceil(#races / 2)
-        local sectionHeight = 44 + rowCount * rowHeight + math.max(0, rowCount - 1) * gap + 10
+        local guilds = {}
+        for _, group in ipairs(allGroups) do if group.faction == faction then guilds[#guilds + 1] = group end end
+        local cardsHeight = 0
+        for index, group in ipairs(guilds) do cardsHeight = cardsHeight + guildCardHeight(group) + (index > 1 and gap or 0) end
+        local sectionHeight = 44 + cardsHeight + 10
         section:ClearAllPoints()
         section:SetSize(contentWidth, sectionHeight)
         section:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
         section:Show()
-        local cardWidth = (contentWidth - 32) / 2
-        for index, group in ipairs(races) do
+        local cardWidth = contentWidth - 24
+        local cardOffset = 36
+        for _, group in ipairs(guilds) do
             usedCards = usedCards + 1
             local card = frame.raceCards[usedCards]
             if not card then
@@ -809,12 +888,12 @@ local function updateRaceOverview(frame)
             elseif card:GetParent() ~= section then
                 card:SetParent(section)
             end
-            local column = (index - 1) % 2
-            local row = math.floor((index - 1) / 2)
+            local cardHeight = guildCardHeight(group)
             card:ClearAllPoints()
-            card:SetSize(cardWidth, rowHeight)
-            card:SetPoint("TOPLEFT", section, "TOPLEFT", 12 + column * (cardWidth + 8), -(36 + row * (rowHeight + gap)))
-            setRaceCard(card, group, ranks[group.race] or usedCards)
+            card:SetSize(cardWidth, cardHeight)
+            card:SetPoint("TOPLEFT", section, "TOPLEFT", 12, -cardOffset)
+            setRaceCard(card, group, ranks[group.guildName] or usedCards)
+            cardOffset = cardOffset + cardHeight + gap
         end
         yOffset = yOffset + sectionHeight + gap
     end
@@ -822,10 +901,11 @@ local function updateRaceOverview(frame)
     for _, row in ipairs(frame.achievementRows) do row:Hide() end
     for _, row in ipairs(frame.memberRows) do row:Hide() end
     frame.scrollContent:SetHeight(math.max(1, yOffset - gap))
-    frame.scroll:SetVerticalScroll(0)
-    frame.contentTitle:SetText("RaceLocked Overview")
+    frame.scroll:SetVerticalScroll(UI.preservedRaceScroll or 0)
+    UI.preservedRaceScroll = nil
+    frame.contentTitle:SetText(iRC:Text("GUILD_STATS_TITLE"))
     frame.contentSubtitle:SetText(iRC:Text("RL_GRID_OVERVIEW_DESC"))
-    return totalPlayers
+    return #allGroups
 end
 
 function UI:Refresh()
@@ -844,15 +924,16 @@ function UI:Refresh()
         frame.points.value:SetText("")
         updateAchievementOverview(frame)
     elseif frame.category == "RP Achievements" then
-        frame.pointsLabel:SetText("TrollFound Points")
-        frame.points.value:SetText(getTrollFoundPoints())
+        local provider = getActiveRPProvider()
+        frame.pointsLabel:SetText(provider and iRC:Text("RP_PROVIDER_POINTS", provider.name) or "")
+        frame.points.value:SetText(getRPPoints(provider))
         updateRPAchievementRows(frame)
     elseif frame.category == "Guild Members" then
         updateMemberRows(frame)
     elseif frame.category == "Race Overview" then
         local connection = iRC:GetConnection()
-        frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray .. "  Guild race progression" .. iRC.Colors.Reset)
-        frame.pointsLabel:SetText("Reported Players")
+        frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray .. "  " .. iRC:Text("GUILD_STATS_HEADER_DESC") .. iRC.Colors.Reset)
+        frame.pointsLabel:SetText(iRC:Text("GUILD_STATS_REPORTED_GUILDS"))
         frame.points.value:SetText(formatNumber(updateRaceOverview(frame)))
     else
         updateAchievementRows(frame, profile, completed)
@@ -887,7 +968,7 @@ function UI:Open(subjectName)
     local frame = self:Create()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     frame.subjectName = subjectName or iRC:GetPlayerName()
-    if not frame.category or not frame.tabs[frame.category] or frame.category == "Hardcore Achievements" then frame.category = "Achievements" end
+    if not frame.category or not frame.tabs[frame.category] or frame.category == "Hardcore Achievements" then frame.category = "Race Overview" end
     frame:SetScale(iRC:GetSettings().achievementScale or 1)
     self:Refresh()
     frame:Show()

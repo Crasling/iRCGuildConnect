@@ -14,6 +14,29 @@ local presenceConnection, reviewTicket, reviewAt, selectedOfficer
 local PROBE_INTERVAL, LOGIN_GRACE = 15, 60
 local sessionStartedAt = time()
 
+local function isFreshCompatibility(lastSeen, profile)
+    lastSeen = tonumber(lastSeen)
+    if not lastSeen or lastSeen > time() or time() - lastSeen > COMPATIBILITY_TIMEOUT then return false end
+    local profileLastSeen = profile and tonumber(profile.lastSeen)
+    -- iRC emits compatibility mirrors next to HELLO. They must not extend the
+    -- same client's presence after HELLO expires; a later native response can.
+    return not profileLastSeen or lastSeen > profileLastSeen + 5
+end
+
+local function isFreshIRCProfile(profile)
+    local lastSeen = profile and tonumber(profile.lastSeen)
+    local startedAt = iRC.ConnectionSessionStartedAt or sessionStartedAt
+    return lastSeen and lastSeen >= startedAt and lastSeen <= time() and time() - lastSeen <= PRESENCE_TIMEOUT
+end
+
+local function latestCompatibilitySeen(member, synced)
+    local latest = 0
+    for _, entry in pairs({ member and member.stats, member and member.presence, member and member.guildFound, synced }) do
+        latest = math.max(latest, type(entry) == "table" and tonumber(entry.lastSeen) or 0)
+    end
+    return latest
+end
+
 function iRC:ResetPresenceNotificationChecks()
     reportedPresenceMismatches, pendingPresenceChecks = {}, {}
     presenceConnection, reviewTicket, reviewAt, selectedOfficer = nil, nil, nil, nil
@@ -88,27 +111,23 @@ function iRC:GetMemberVerification(name, online, profile, context)
             return { state = "verified", label = "Verified " .. math.max(0, math.floor(profileAge)) .. "s ago" }
         end
     end
-    if synced and synced.source == "RaceLocked" and synced.lastSeen and time() - synced.lastSeen <= COMPATIBILITY_TIMEOUT then
+    if synced and synced.source == "RaceLocked" and isFreshCompatibility(synced.lastSeen, profile) then
         return { state = "compatible", label = self:Text("RL_ROSTER_PRESENT") }
     end
-    if guildFound and guildFound.source == "RaceLocked" and guildFound.lastSeen then
+    if guildFound and guildFound.source == "RaceLocked" and isFreshCompatibility(guildFound.lastSeen, profile) then
         local guildFoundAge = time() - guildFound.lastSeen
-        if guildFoundAge <= COMPATIBILITY_TIMEOUT then
-            local status = guildFound.verified and guildFound.clean and "verified" or "not verified"
-            return { state = "compatible", label = "RaceLocked Guild Found " .. status .. " " .. math.max(0, math.floor(guildFoundAge)) .. "s ago" }
-        end
+        local status = guildFound.verified and guildFound.clean and "verified" or "not verified"
+        return { state = "compatible", label = "RaceLocked Guild Found " .. status .. " " .. math.max(0, math.floor(guildFoundAge)) .. "s ago" }
     end
-    if compatiblePresence and compatiblePresence.lastSeen then
+    if compatiblePresence and isFreshCompatibility(compatiblePresence.lastSeen, profile) then
         local presenceAge = time() - compatiblePresence.lastSeen
         if presenceAge <= PRESENCE_TIMEOUT then
             return { state = "compatible", label = (compatiblePresence.source or "RaceLockedForkEU") .. " presence " .. math.max(0, math.floor(presenceAge)) .. "s ago" }
         end
     end
-    if compatibility and compatibility.lastSeen then
+    if compatibility and isFreshCompatibility(compatibility.lastSeen, profile) then
         local compatibilityAge = time() - compatibility.lastSeen
-        if compatibilityAge <= COMPATIBILITY_TIMEOUT then
-            return { state = "compatible", label = (compatibility.source or "RaceLockedForkEU") .. " data " .. math.max(0, math.floor(compatibilityAge)) .. "s ago" }
-        end
+        return { state = "compatible", label = (compatibility.source or "RaceLockedForkEU") .. " data " .. math.max(0, math.floor(compatibilityAge)) .. "s ago" }
     end
     if not profile or not profile.lastSeen then
         return { state = "missing", label = "Addon not detected" }
@@ -153,6 +172,10 @@ end
 local function announcePresenceMismatch(member, verification, escalated)
     -- Re-elect immediately before publishing, not just when the probes began.
     if not iRC:IsPresenceNotificationLeader() or not SendChatMessage then return false end
+    if iRC:SuppressesPresenceWarnings() then
+        iRC:DebugMsg(iRC:Text("PRESENCE_WARNING_SUPPRESSED", member.name), 3)
+        return true
+    end
     local reason = verification.label or iRC:Text("PRESENCE_NO_LIVE_RESPONSE")
     local officerMessage = escalated
         and iRC:Text("PRESENCE_OFFICER_ESCALATION", member.name, reason)
@@ -231,7 +254,8 @@ function iRC:CheckPresenceMismatches()
                             if not announcePresenceMismatch(member, verification, false) then queuePresenceReview(1); return end
                             reportedPresenceMismatches[key] = { reportedAt = now, escalated = false }
                             self:DebugMsg(self:Text("PRESENCE_MISMATCH", member.name, verification.label or ""), 2)
-                            if connection.newMemberChecks[id] and not connection.newMemberWelcomeNotices[id] and SendChatMessage and self:IsPresenceNotificationLeader() then
+                            if connection.newMemberChecks[id] and not connection.newMemberWelcomeNotices[id] and SendChatMessage
+                                and self:IsPresenceNotificationLeader() and not self:SuppressesPresenceWarnings() then
                                 connection.newMemberWelcomeNotices[id] = now
                                 SendChatMessage(self:Text("NEW_MEMBER_WELCOME", member.name), "GUILD")
                             end
@@ -325,8 +349,34 @@ function iRC:GetGuildRosterRows()
             local key = self:NormalizeName(name)
             local profile = profiles[key]
             local compatibilityMember = compatibleMembers[key]
+            local profileGuid = profile and profile.guid
+            local compatibilityGuid = compatibilityMember and (compatibilityMember.guid or (compatibilityMember.stats and compatibilityMember.stats.guid))
+            if guid and guid ~= "" and ((profileGuid and profileGuid ~= "" and profileGuid ~= guid)
+                or (compatibilityGuid and compatibilityGuid ~= "" and compatibilityGuid ~= guid)) then
+                profiles[key], compatibleMembers[key] = nil, nil
+                if connection.guildFoundRoster then connection.guildFoundRoster[key] = nil end
+                if connection.attentionSince then connection.attentionSince[key] = nil end
+                reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
+                connection.newMemberChecks = connection.newMemberChecks or {}
+                connection.newMemberChecks[memberKey(name, guid)] = time()
+                profile, compatibilityMember = nil, nil
+                self:DebugMsg(self:Text("ROSTER_IDENTITY_RESET", name), 2)
+            end
             local compatibility = compatibilityMember and compatibilityMember.stats
             local syncedStatus = active and self.RaceLockedSync and self.RaceLockedSync:GetStatus(name, connection)
+            if profile and key ~= context.selfKey then
+                if isFreshIRCProfile(profile) then
+                    -- iRC is the canonical source while its direct profile is
+                    -- live. Keep compatibility cached, but do not mix it into
+                    -- this character's row or source label.
+                    compatibilityMember, compatibility, syncedStatus = nil, nil, nil
+                elseif isFreshCompatibility(latestCompatibilitySeen(compatibilityMember, syncedStatus), profile) then
+                    -- A genuinely later native response proves that iRC is no
+                    -- longer the active source for this character.
+                    profiles[key], profile = nil, nil
+                    self:DebugMsg(self:Text("PROFILE_REPLACED_BY_COMPATIBILITY", name), 3)
+                end
+            end
             local race = profile and profile.race or getRaceFromGuid(guid) or "Unknown"
             if self:NormalizeName(name) == self:NormalizeName(selfName) then
                 profile = self:GetLocalProfile()
@@ -335,7 +385,6 @@ function iRC:GetGuildRosterRows()
             end
             local verification = self:GetMemberVerification(name, online and true or false, profile, context)
             local attentionSince = self:GetMemberAttentionSince(name, verification, connection or false)
-            local combinedSource = profile and compatibility and ("iRC + " .. (compatibility.source or "RaceLocked")) or nil
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
                 level = (profile and profile.level) or (compatibility and compatibility.level) or level or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
@@ -352,7 +401,7 @@ function iRC:GetGuildRosterRows()
                 selfFound = profile and profile.selfFound or (compatibilityMember and compatibilityMember.selfFound) or false,
                 addonVersion = profile and profile.addonVersion or nil,
                 statistics = (profile and profile.statistics) or (compatibility and compatibility.statistics) or nil,
-                source = combinedSource or (profile and "iRC") or (compatibility and compatibility.source) or (syncedPoints and "RaceLocked") or nil,
+                source = (profile and "iRC") or (compatibility and compatibility.source) or (syncedStatus and "RaceLocked") or nil,
                 verification = verification,
                 attentionSince = attentionSince,
             }

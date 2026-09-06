@@ -1,6 +1,31 @@
 ================================================================================
- iRacelockConnection - Changelog
+iRacelockConnection - Changelog
 ================================================================================
+
+v0.2.5 - Verification Identity & Source Priority
+--------------------------------------------------------------------------------
+
+ [CHANGED] Reworked Guild Statistics to discover guild names through iRC and group them dynamically under Horde and Alliance
+ [CHANGED] Guild rankings now sort by level-60 members, active players, then total roster size
+ [NEW] Guild Masters can choose the character level at which the same-race group rule begins
+ [NEW] Added an optional Guild groups only rule with its own configurable starting level
+ [CHANGED] The former achievement panel is now the main iRC window, opening on Guild Statistics with achievements as a secondary section
+ [CHANGED] RP achievement providers are now race-specific; TrollFound integration is active only for Troll characters
+ [CHANGED] Test administrator access now supports both Crasling-Soulseeker and Crasjin-Soulseeker
+ [CHANGED] Temporarily hid the Achievement navigation section while retaining its implementation for later work
+ [NEW] Test administrators can suppress all automatic presence warning messages while using fake Guild Master mode
+ [CHANGED] Guild Statistics now uses full-width guild cards with a larger, outlined class-distribution bar
+ [NEW] Added race-locked Tauren Talk with conservative word and short-phrase substitutions designed to keep chat readable
+ [CHANGED] Guild Statistics cache is now account-wide per server and remains display-only; outgoing reports always use current live guild data
+ [FIX] Leveling up or reloading while grouped can no longer trigger an automatic leave; new restrictions begin after the current group ends
+ [CHANGED] Guild Found no longer applies party or raid restrictions; all group enforcement is configured exclusively under Group Rules
+ [CHANGED] Moved Guild Found verification to a dedicated options tab visible only to Guild Masters and rank-1 officers
+ [CHANGED] Guild Statistics cards are compact by default and expand on click to show the guild's active iRC rules
+ [CHANGED] Guild Statistics class breakdown now counts only characters at level 19 or higher
+ [CHANGED] Each Class Breakdown percentage is now centered above its matching class bar segment
+ [FIX] Live iRC profiles now take priority over RaceLocked data, while a newer compatible-addon response cleanly replaces an expired iRC profile
+ [FIX] Recreated characters receive a fresh addon check instead of inheriting cached verification or warnings from a deleted character with the same name
+ [FIX] Race Overview no longer processes the local player's own global requests and reports as incoming data
 
 v0.2.4 - Guild Activation, Verification & Compatibility
 --------------------------------------------------------------------------------

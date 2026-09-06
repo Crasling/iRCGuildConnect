@@ -107,6 +107,14 @@ advance(60)
 assert(#notices == 0, "late ForkEU response cancels pending notice")
 
 reset()
+respond("Target")
+iRC.Compatibility:StoreStats({ name = "Target", guid = "Player-1-Target", source = "RaceLockedForkEU", level = 10 })
+advance(136)
+assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "stale", "compatibility cached alongside iRC cannot outlive that iRC profile")
+iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
+assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "compatible", "a newer compatibility response can take over after iRC expires")
+
+reset()
 iRC:CheckPresenceMismatches(); advance(30)
 assert(#notices == 2)
 advance(270); respond("Target"); advance(30)
@@ -163,4 +171,12 @@ reset()
 iRC:CheckPresenceMismatches(); advance(15)
 db.active = false; advance(60)
 assert(#notices == 0, "guild deactivation cancels pending notices")
+
+reset(true)
+iRC.TestAdminName = "Bofficer-Soulseeker"
+iRC:GetSettings().suppressPresenceWarnings = true
+iRC:CheckPresenceMismatches(); advance(60)
+assert(#notices == 0, "test admin warning suppression blocks officer, whisper, and guild messages")
+iRC:GetSettings().suppressPresenceWarnings = false
+iRC.TestAdminName = nil
 print("Presence confirmation tests passed: probes/retry, reload grace, late iRC/ForkEU replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")
