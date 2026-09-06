@@ -2,6 +2,22 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.9 - Performance
+--------------------------------------------------------------------------------
+ [FIX] Guild Members now creates only the visible list rows, preventing script timeout errors in large guilds
+ [CHANGED] Guild Verification columns are aligned more clearly and its filter buttons now use the modern iRC active-state styling
+ [NEW] The Needs attention filter now pulses when one or more guild members require review
+ [NEW] Test administrators can optionally display the settings pages normally reserved for guild rank 0 and rank 1
+ [CHANGED] Removed Champions and Leaderboard from the Connection window so it stays focused on guild verification
+ [NEW] Guild Masters, rank-1 officers and test Guild Masters can right-click Verification members to send addon guidance or request fresh iRC data
+ [FIX] Verification member management now uses a native iRC context panel so right-click works reliably on Classic clients
+ [CHANGED] Removed the redundant Faction column from the Verification Overview table
+ [CHANGED] Guild Member rows no longer perform any action on left-click while that list is awaiting its rework
+ [FIX] Verification Overview now uses a full-width four-column layout with readable headings and more space for the class summary
+ [FIX] Sort indicators now use Classic-compatible arrow characters instead of unsupported square glyphs
+ [CHANGED] Removed the race filter buttons from Verification Overview, which now always displays every represented race
+
+
 v0.2.8 - Options Cleanup
 --------------------------------------------------------------------------------
  [CHANGED] Temporarily hidden the Guild Found Verification tab from the settings menu

@@ -328,6 +328,7 @@ for _, item in ipairs(standardSidebarItems) do sidebarItems[#sidebarItems + 1] =
 if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "header", label = L.TEST_ADMIN_HEADER }
     sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 9 }
+    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.RL_OVERRIDE_TITLE, index = 10, officerSettings = true }
 end
 local sidebarY = -6
 for _, item in ipairs(sidebarItems) do
@@ -351,6 +352,7 @@ for _, item in ipairs(sidebarItems) do
         highlight:SetAllPoints(button)
         highlight:SetColorTexture(1, 1, 1, 0.08)
         button:SetScript("OnClick", function() ShowTab(item.index) end)
+        if item.officerSettings and not iRC:GetSettings().showOfficerSettingsForTesting then button:Hide() end
         sidebarButtons[item.index] = button
         sidebarY = sidebarY - 28
     end
@@ -640,7 +642,7 @@ for _, addon in ipairs(companionAddons) do
     end
 end
 
-local testGuildMasterCheck, suppressWarningsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
+local testGuildMasterCheck, suppressWarningsCheck, showOfficerSettingsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
 if iRC:IsTestAdmin() then
     y = -12
     _, y = CreateSectionHeader(adminContent, L.TEST_ADMIN_TITLE, y)
@@ -658,6 +660,13 @@ if iRC:IsTestAdmin() then
     suppressWarningsCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SUPPRESS_WARNINGS, L.TEST_ADMIN_SUPPRESS_WARNINGS_DESC, y,
         function() return iRC:SuppressesPresenceWarnings() end,
         function(value) iRC:GetSettings().suppressPresenceWarnings = value and true or false end)
+    showOfficerSettingsCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SHOW_OFFICER_SETTINGS, L.TEST_ADMIN_SHOW_OFFICER_SETTINGS_DESC, y,
+        function() return iRC:GetSettings().showOfficerSettingsForTesting == true end,
+        function(value)
+            iRC:GetSettings().showOfficerSettingsForTesting = value and true or false
+            if sidebarButtons[10] then sidebarButtons[10]:SetShown(value and true or false) end
+            if not value then ShowTab(9) end
+        end)
     testActivateGuildButton, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ACTIVATE_GUILD, 190, y - 4, function()
         iRC:ActivateGuildForTesting()
     end, L.TEST_ADMIN_ACTIVATE_GUILD_DESC)
@@ -669,6 +678,8 @@ local function Refresh()
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
         suppressWarningsCheck:Refresh()
+        showOfficerSettingsCheck:Refresh()
+        if sidebarButtons[10] then sidebarButtons[10]:SetShown(iRC:GetSettings().showOfficerSettingsForTesting == true) end
         local testGuildMaster = iRC:IsTestAdminGuildMaster()
         testAdminStatus:SetText((testGuildMaster and iRC.Colors.Green or iRC.Colors.Yellow)
             .. iRC:Text(testGuildMaster and "TEST_ADMIN_STATUS_GUILD_MASTER" or "TEST_ADMIN_STATUS_MEMBER") .. iRC.Colors.Reset)

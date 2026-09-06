@@ -448,8 +448,11 @@ function UI:Create()
     content:SetWidth(675)
     content:SetHeight(1)
     scroll:SetScrollChild(content)
+    scroll:HookScript("OnVerticalScroll", function()
+        if frame.category == "Guild Members" then UI:RenderMemberRows() end
+    end)
     frame.scrollContent = content
-    frame.achievementRows, frame.memberRows, frame.raceCards, frame.factionSections = {}, {}, {}, {}
+    frame.achievementRows, frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}, {}
     frame.racePodium = makeRacePodium(content)
     frame.racePodium:Hide()
     frame.category = "Race Overview"
@@ -674,36 +677,47 @@ local function updateRPAchievementRows(frame)
     frame.contentSubtitle:SetText(iRC:Text("RP_PROVIDER_ACTIVE", provider.name))
 end
 
-local function updateMemberRows(frame)
-    -- The live roster is authoritative for membership and level. Cached iRC
-    -- details are used only through rows that still exist in that roster.
-    local profiles = iRC:GetGuildRosterRows()
-    for index, profile in ipairs(profiles) do
-        local row = frame.memberRows[index]
+function UI:RenderMemberRows()
+    local frame = self.frame
+    if not frame or frame.category ~= "Guild Members" then return end
+    local profiles = frame.memberData or {}
+    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / 60) + 1
+    local scrollHeight = frame.scroll:GetHeight() or 0
+    if scrollHeight < 1 then scrollHeight = 480 end
+    local visible = math.max(0, math.min(#profiles - first + 1, math.ceil(scrollHeight / 60) + 1))
+    for slot = 1, visible do
+        local index, profile = first + slot - 1, profiles[first + slot - 1]
+        local row = frame.memberRows[slot]
         if not row then
             row = makeMemberRow(frame.scrollContent, index)
-            frame.memberRows[index] = row
+            frame.memberRows[slot] = row
         end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
         row.name:SetText(profile.name)
         row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
         row.detail:SetText((profile.race or "Unknown") .. " · " .. (profile.class or "Unknown") .. " · Level " .. (profile.level or 1))
         row.badge.value:SetText(profile.points or 0)
         row.profileName = profile.name
-        row:SetScript("OnClick", function(self)
-            frame.subjectName = self.profileName
-            frame.category = "Guild Achievements"
-            if iRC:NormalizeName(self.profileName) ~= iRC:NormalizeName(iRC:GetPlayerName()) then iRC:RequestInspection(self.profileName) end
-            UI:Refresh()
-        end)
+        row:SetScript("OnClick", nil)
         row:Show()
     end
-    for index = #profiles + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
+    for slot = visible + 1, #frame.memberRows do frame.memberRows[slot]:Hide() end
+end
+
+local function updateMemberRows(frame)
+    -- The live roster is authoritative for membership and level. Cached iRC
+    -- details are used only through rows that still exist in that roster.
+    local profiles = iRC:GetGuildRosterRows()
+    frame.memberData = profiles
     for _, row in ipairs(frame.achievementRows) do row:Hide() end
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     frame.racePodium:Hide()
     frame.scrollContent:SetHeight(math.max(1, #profiles * 60))
     frame.scroll:SetVerticalScroll(0)
+    UI:RenderMemberRows()
     frame.contentTitle:SetText("Guild Members")
     frame.contentSubtitle:SetText("Select a guild member to inspect their shared achievement progress.")
 end

@@ -11,6 +11,8 @@ local GRAY = iRC.ColorValues.Gray
 local RED = { 1, 0.25, 0.18 }
 local COLUMN_X = { 14, 139, 254, 309, 499, 624 }
 local COLUMN_WIDTH = { 115, 105, 45, 180, 115, 75 }
+local OVERVIEW_COLUMN_X = { 14, 164, 324, 484 }
+local OVERVIEW_COLUMN_WIDTH = { 136, 146, 146, 224 }
 
 local function sourceLabel(source)
     if source == "iRC" then return iRC.Colors.Green .. "iRC" .. iRC.Colors.Reset end
@@ -48,17 +50,21 @@ end
 
 local function makeRow(parent, index)
     local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    row:EnableMouse(true)
+    row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     row:SetHeight(54)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 60))
     row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 60))
     setBackdrop(row, { 0.08, 0.07, 0.06, 0.96 }, { 0.32, 0.27, 0.18, 1 })
     row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     row.columns = {}
+    local columnX = parent.columnX or COLUMN_X
+    local columnWidth = parent.columnWidth or COLUMN_WIDTH
     for column = 1, #COLUMN_X do
         local text = row:CreateFontString(nil, "OVERLAY", column == 1 and "GameFontHighlight" or "GameFontHighlightSmall")
-        text:SetPoint("LEFT", row, "LEFT", COLUMN_X[column], 0)
-        text:SetWidth(COLUMN_WIDTH[column])
-        text:SetJustifyH("LEFT")
+        text:SetPoint("LEFT", row, "LEFT", columnX[column] or COLUMN_X[column], 0)
+        text:SetWidth(columnWidth[column] or COLUMN_WIDTH[column])
+        text:SetJustifyH(column == 1 and "LEFT" or "CENTER")
         row.columns[column] = text
     end
     return row
@@ -125,13 +131,12 @@ function Dashboard:Create()
     setBackdrop(sidebar, { 0.10, 0.065, 0.03, 0.98 }, { 0.54, 0.40, 0.16, 1 })
     local sideTitle = sidebar:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     sideTitle:SetPoint("TOPLEFT", 14, -14)
-    sideTitle:SetText("Guild Connection")
+    sideTitle:SetText(iRC:Text("DASHBOARD_VERIFICATION_TITLE"))
     sideTitle:SetTextColor(unpack(ORANGE))
     frame.tabs, frame.tabOrder = {}, {}
     local labels = {
         { name = "Overview" }, { name = "Verification" },
         { name = "Incidents", label = iRC:Text("INCIDENT_TAB"), adminOnly = true },
-        { name = "Champions" }, { name = "Leaderboard" },
     }
     for index, item in ipairs(labels) do
         local label = item.name
@@ -189,17 +194,31 @@ function Dashboard:Create()
     end
     frame.filterButtons, frame.filters, frame.headers = {}, {}, {}
     for index = 1, 4 do
-        local button = CreateFrame("Button", nil, main)
-        button:SetSize(124, 23)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 130, -126)
+        local button = CreateFrame("Button", nil, main, "BackdropTemplate")
+        button:SetSize(160, 27)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 166, -124)
+        setBackdrop(button, { 0.055, 0.045, 0.035, 0.96 }, { 0.28, 0.23, 0.16, 0.9 })
         button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
-        button.activeGlow:SetAllPoints(button)
+        button.activeGlow:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
+        button.activeGlow:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -3, 3)
         button.activeGlow:SetColorTexture(0, 0, 0, 0)
+        button.attentionGlow = button:CreateTexture(nil, "BACKGROUND", nil, -1)
+        button.attentionGlow:SetPoint("TOPLEFT", button, "TOPLEFT", -3, 3)
+        button.attentionGlow:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 3, -3)
+        button.attentionGlow:SetColorTexture(1, 0.08, 0.02, 1)
+        button.attentionGlow:SetAlpha(0)
+        button.attentionAnimation = button.attentionGlow:CreateAnimationGroup()
+        button.attentionAnimation:SetLooping("BOUNCE")
+        local pulse = button.attentionAnimation:CreateAnimation("Alpha")
+        pulse:SetFromAlpha(0.12)
+        pulse:SetToAlpha(0.72)
+        pulse:SetDuration(0.65)
+        pulse:SetSmoothing("IN_OUT")
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         button.text:SetPoint("CENTER")
         button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
         button.highlight:SetAllPoints(button)
-        button.highlight:SetColorTexture(1, 1, 1, 0.08)
+        button.highlight:SetColorTexture(1, 0.72, 0.22, 0.10)
         button:Hide()
         frame.filterButtons[index] = button
     end
@@ -209,7 +228,7 @@ function Dashboard:Create()
         button:SetPoint("TOPLEFT", main, "TOPLEFT", COLUMN_X[column] + 1, -156)
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         button.text:SetAllPoints(button)
-        button.text:SetJustifyH("LEFT")
+        button.text:SetJustifyH(column == 1 and "LEFT" or "CENTER")
         button.text:SetTextColor(unpack(ORANGE))
         button:SetScript("OnClick", function(self)
             if not self.sortKey then return end
@@ -233,28 +252,91 @@ function Dashboard:Create()
     scroll:SetScrollChild(frame.content)
     frame.rows = {}
     frame.rowData = {}
+    frame.memberMenu = CreateFrame("Frame", "iRCMemberManagementMenu", frame, "BackdropTemplate")
+    frame.memberMenu:SetSize(270, 128)
+    frame.memberMenu:SetFrameStrata("DIALOG")
+    frame.memberMenu:SetClampedToScreen(true)
+    setBackdrop(frame.memberMenu, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
+    frame.memberMenu:Hide()
+    local menuTitle = frame.memberMenu:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    menuTitle:SetPoint("TOPLEFT", 12, -11)
+    menuTitle:SetPoint("TOPRIGHT", -30, -11)
+    menuTitle:SetJustifyH("LEFT")
+    frame.memberMenu.title = menuTitle
+    local menuClose = CreateFrame("Button", nil, frame.memberMenu, "UIPanelCloseButton")
+    menuClose:SetPoint("TOPRIGHT", 4, 4)
+    local menuActions = {
+        { label = "MEMBER_MENU_WHISPER_IRC", run = function(targetName)
+            if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_IRC"), "WHISPER", nil, targetName) end
+        end },
+        { label = "MEMBER_MENU_WHISPER_FORKEU", run = function(targetName)
+            if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_FORKEU"), "WHISPER", nil, targetName) end
+        end },
+        { label = "MEMBER_MENU_REQUEST_IRC", run = function(targetName)
+            if iRC:IsGuildConnectionActive() then
+                iRC:RequestInspection(targetName)
+                iRC:Print(iRC:Text("MEMBER_REQUEST_SENT", displayMemberName(targetName)))
+            end
+        end },
+    }
+    for index, action in ipairs(menuActions) do
+        local button = CreateFrame("Button", nil, frame.memberMenu, "UIPanelButtonTemplate")
+        button:SetSize(246, 24)
+        button:SetPoint("TOPLEFT", 12, -(31 + (index - 1) * 29))
+        button:SetText(iRC:Text(action.label))
+        button.runAction = action.run
+        button:SetScript("OnClick", function(self)
+            local targetName = frame.memberMenu.targetName
+            frame.memberMenu:Hide()
+            if targetName then self.runAction(targetName) end
+        end)
+    end
     scroll:HookScript("OnVerticalScroll", function() Dashboard:RenderVisibleRows() end)
     frame.tab = "Overview"
     return frame
 end
 
-local function setHeaders(frame, values, sortKeys, defaultKey)
+local function setHeaders(frame, values, sortKeys, defaultKey, columnX, columnWidth, headerY)
+    columnX, columnWidth = columnX or COLUMN_X, columnWidth or COLUMN_WIDTH
+    headerY = headerY or -156
+    frame.content.columnX, frame.content.columnWidth = columnX, columnWidth
+    frame.scroll:ClearAllPoints()
+    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 14, headerY - 20)
+    frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     if not frame.sortKey or frame.sortTab ~= frame.tab then
         frame.sortTab, frame.sortKey = frame.tab, defaultKey
         frame.sortAscending = defaultKey == "name" or defaultKey == "race" or defaultKey == "class" or defaultKey == "source"
     end
     for index = 1, #COLUMN_X do
         local header = frame.headers[index]
+        header:ClearAllPoints()
+        header:SetPoint("TOPLEFT", frame.main, "TOPLEFT", (columnX[index] or COLUMN_X[index]) + 1, headerY)
+        header:SetWidth(columnWidth[index] or COLUMN_WIDTH[index])
+        header.text:SetJustifyH(index == 1 and "LEFT" or "CENTER")
+        for _, row in ipairs(frame.rows) do
+            local columnText = row.columns[index]
+            columnText:ClearAllPoints()
+            columnText:SetPoint("LEFT", row, "LEFT", columnX[index] or COLUMN_X[index], 0)
+            columnText:SetWidth(columnWidth[index] or COLUMN_WIDTH[index])
+        end
         local key = sortKeys and sortKeys[index]
         header.sortKey = key
         header.alphabetical = key == "name" or key == "race" or key == "class" or key == "source"
-        local indicator = key and key == frame.sortKey and (frame.sortAscending and " ▲" or " ▼") or ""
+        local indicator = key and key == frame.sortKey and (frame.sortAscending and " ^" or " v") or ""
         header.text:SetText((values[index] or "") .. indicator)
         header:SetShown(key ~= nil)
     end
 end
 
 local function setFilters(frame, choices)
+    if #choices == 0 then
+        for _, button in ipairs(frame.filterButtons) do
+            button.attentionAnimation:Stop()
+            button.attentionGlow:SetAlpha(0)
+            button:Hide()
+        end
+        return "all"
+    end
     local selected = frame.filters[frame.tab]
     local available = false
     for _, choice in ipairs(choices) do if choice.id == selected then available = true break end end
@@ -264,8 +346,17 @@ local function setFilters(frame, choices)
         if choice then
             local active = choice.id == selected
             button.text:SetText(choice.label)
-            button.activeGlow:SetColorTexture(active and 1 or 0, active and 0.59 or 0, active and 0.09 or 0, active and 0.25 or 0)
+            button.activeGlow:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], active and 0.18 or 0)
+            button:SetBackdropColor(active and 0.18 or 0.055, active and 0.09 or 0.045, active and 0.025 or 0.035, 0.98)
+            button:SetBackdropBorderColor(active and ORANGE[1] or 0.28, active and ORANGE[2] or 0.23, active and ORANGE[3] or 0.16, active and 1 or 0.9)
             button.text:SetFontObject(active and GameFontHighlight or GameFontNormal)
+            button.text:SetTextColor(active and 1 or 0.78, active and 0.82 or 0.72, active and 0.36 or 0.62)
+            if choice.flash then
+                if not button.attentionAnimation:IsPlaying() then button.attentionAnimation:Play() end
+            else
+                button.attentionAnimation:Stop()
+                button.attentionGlow:SetAlpha(0)
+            end
             button:SetScript("OnClick", function()
                 frame.filters[frame.tab] = choice.id
                 Dashboard:Refresh()
@@ -276,6 +367,18 @@ local function setFilters(frame, choices)
         end
     end
     return selected
+end
+
+local function openMemberManagementMenu(frame, member)
+    if not iRC:IsGuildAdmin() or not member or not member.name then return end
+    local menu = frame.memberMenu
+    local scale = UIParent:GetEffectiveScale()
+    local cursorX, cursorY = GetCursorPosition()
+    menu.targetName = member.name
+    menu.title:SetText(displayMemberName(member.name))
+    menu:ClearAllPoints()
+    menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / scale, cursorY / scale)
+    menu:Show()
 end
 
 local function filterAndSort(frame, items, shouldInclude, valueFor)
@@ -359,6 +462,7 @@ function Dashboard:Refresh()
     local frame = self:Create()
     frame.rowData = {}
     local connection = iRC:GetConnection()
+    if frame.tab == "Champions" or frame.tab == "Leaderboard" then frame.tab = "Verification" end
     if frame.tabs.Incidents then frame.tabs.Incidents:SetShown(iRC:IsGuildAdmin()) end
     if frame.tab == "Incidents" and not iRC:IsGuildAdmin() then frame.tab = "Verification" end
     local visibleTabIndex = 0
@@ -391,22 +495,19 @@ function Dashboard:Refresh()
             { label = "Self-Found active", value = tostring(selfFound), color = GREEN },
             { label = "Races represented", value = tostring(factions), color = ORANGE },
         })
-        local filter = setFilters(frame, {
-            { id = "all", label = "All races" }, { id = "Horde", label = "Horde" }, { id = "Alliance", label = "Alliance" },
-        })
+        setFilters(frame, {})
         frame.title:SetText("Faction race overview")
         frame.subtitle:SetText("A guild-level snapshot of each race represented in your guild connection.")
-        setHeaders(frame, { "Race", "Faction", "Members / Avg. level", "Addon / Self-Found", "Class mix" }, { "race", "faction", "members", "addonUsers", "classes" }, "members")
-        groups = filterAndSort(frame, groups, function(group) return filter == "all" or group.faction == filter end, function(group, key)
+        setHeaders(frame, { "Race", "Members / Avg. level", "Addon / Self-Found", "Class mix" }, { "race", "members", "addonUsers", "classes" }, "members", OVERVIEW_COLUMN_X, OVERVIEW_COLUMN_WIDTH, -130)
+        groups = filterAndSort(frame, groups, function() return true end, function(group, key)
             if key == "race" then return group.race or "" end
-            if key == "faction" then return group.faction or "" end
             if key == "addonUsers" then return group.addonUsers or 0 end
             if key == "classes" then return classSummary(group.classes) end
             return group.members or 0
         end)
         for _, group in ipairs(groups) do
             count = count + 1
-            setRow(frame, count, { group.race, group.faction, group.members .. " / " .. group.averageLevel, group.addonUsers .. " / " .. group.selfFound, classSummary(group.classes) }, ORANGE)
+            setRow(frame, count, { group.race, group.members .. " / " .. group.averageLevel, group.addonUsers .. " / " .. group.selfFound, classSummary(group.classes) }, ORANGE)
         end
     elseif frame.tab == "Verification" then
         local verified, compatible, attention, offline = 0, 0, 0, 0
@@ -425,7 +526,7 @@ function Dashboard:Refresh()
             { label = "Offline", value = tostring(offline), color = GRAY },
         })
         local filter = setFilters(frame, {
-            { id = "all", label = "All members" }, { id = "attention", label = "Needs attention" }, { id = "verified", label = "Verified" }, { id = "compatible", label = "Compatible" },
+            { id = "all", label = "All members" }, { id = "attention", label = "Needs attention", flash = attention > 0 }, { id = "verified", label = "Verified" }, { id = "compatible", label = "Compatible" },
         })
         frame.title:SetText("Guild verification")
         frame.subtitle:SetText("Live presence status. Missing or stale online members are handled by the officer notification system.")
@@ -480,9 +581,15 @@ function Dashboard:Refresh()
             end
             local statusTooltip = selfFound
             if iRC.RaceLockedSync then statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus) end
+            if iRC:IsGuildAdmin() then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
             local color = verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED))
-            local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function()
-                if selectedMember.profile then iRC.AchievementsUI:Open(selectedMember.name); iRC:RequestInspection(selectedMember.name) end
+            local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
+                if mouseButton == "RightButton" then
+                    openMemberManagementMenu(frame, selectedMember)
+                elseif selectedMember.profile then
+                    iRC.AchievementsUI:Open(selectedMember.name)
+                    iRC:RequestInspection(selectedMember.name)
+                end
             end, statusTooltip)
             data.attentionSince, data.addonText = member.attentionSince, addonText
             data.columnColors = {

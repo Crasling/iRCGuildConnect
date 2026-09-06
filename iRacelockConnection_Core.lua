@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.8"
+iRC.Version = "0.2.9"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -40,6 +40,7 @@ local DEFAULT_SETTINGS = {
     debugMode = false,
     testGuildMasterOverride = false,
     suppressPresenceWarnings = false,
+    showOfficerSettingsForTesting = false,
 }
 
 iRC.DefaultConnectionRules = {
