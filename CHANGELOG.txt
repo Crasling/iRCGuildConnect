@@ -2,7 +2,18 @@
 iRacelockConnection - Changelog
 ================================================================================
 
-v0.2.5 - Verification Identity & Source Priority
+v0.2.6 -
+--------------------------------------------------------------------------------
+ [CHANGED] Renamed Total players to Total members in Guild Statistics
+ [CHANGED] Active players now shows each guild's highest observed online-member count during the last 24 hours
+ [FIX] Presence warnings now require a full 60-second confirmation window and three fresh probes before being sent
+ [NEW] Guild Found now protects incoming mail and blocks collecting external-player or Auction House items and money
+ [FIX] Guild Found mail restrictions now guard the underlying mail APIs so other addons cannot bypass the send or collection checks
+ [FIX] Guild Found now guards AcceptTrade directly, closing the short verification window in which an external trade could otherwise be accepted
+ [FIX] Guild activation requests now receive a direct activation, ruleset and presence handshake so newly installed clients cannot remain stuck as ForkEU-compatible only
+
+
+v0.2.5 - Guild Statistics & Economy Enforcement
 --------------------------------------------------------------------------------
 
  [CHANGED] Reworked Guild Statistics to discover guild names through iRC and group them dynamically under Horde and Alliance

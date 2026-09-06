@@ -52,6 +52,19 @@ function iRC:DebugMsg(message) debugMessages[#debugMessages + 1] = message end
 function iRC:GetSelfFoundEvidence() return { status = "UNVERIFIED" } end
 function iRC:GetHardcoreAchievementPoints() return 0 end
 function iRC:GetCompatibilityStats() return { source = "RaceLockedForkEU", lastSeen = now } end
+
+-- A newly installed inactive client must receive a direct bootstrap response.
+player = "Aleader"
+local beforeBootstrap = #messages
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t9", "GUILD", "Member-Soulseeker")
+assert(#messages == beforeBootstrap + 3, "GM sends activation, rules and a presence request to bootstrap the member")
+assert(messages[beforeBootstrap + 1][2]:match("^GUILD_ACTIVATION\t9\t1$"), "bootstrap starts with active guild state")
+assert(messages[beforeBootstrap + 1][3] == "WHISPER" and messages[beforeBootstrap + 1][4] == "Member-Soulseeker", "activation targets requester")
+assert(messages[beforeBootstrap + 2][2]:match("^RULES\t9\t"), "bootstrap includes current rules")
+assert(messages[beforeBootstrap + 2][3] == "WHISPER" and messages[beforeBootstrap + 2][4] == "Member-Soulseeker", "rules target requester")
+assert(messages[beforeBootstrap + 3][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
+player = "Crasjin"
+
 local function profile(name, age, override)
     db.members[iRC:NormalizeName(name)] = { name = name, addonVersion = "0.2.4", lastSeen = now - (age or 0), testGuildMasterOverride = override }
 end

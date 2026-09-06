@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.5"
+iRC.Version = "0.2.6"
 -- Increment for each local testing change. Set to nil when testing ends.
 -- Display only: TOC metadata, release tags and shared profiles use iRC.Version.
 local TEST_REVISION = nil
@@ -15,6 +15,7 @@ iRC.Prefix = "iRCConnV1"
 iRC.TestAdminNames = {
     "Crasling-Soulseeker",
     "Crasjin-Soulseeker",
+    "Crasblight-Soulseeker",
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()

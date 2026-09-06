@@ -11,7 +11,7 @@ local COMPATIBILITY_TIMEOUT = 360
 local reportedPresenceMismatches = {}
 local pendingPresenceChecks = {}
 local presenceConnection, reviewTicket, reviewAt, selectedOfficer
-local PROBE_INTERVAL, LOGIN_GRACE = 15, 60
+local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 60, 60
 local sessionStartedAt = time()
 
 local function isFreshCompatibility(lastSeen, profile)
@@ -230,20 +230,25 @@ function iRC:CheckPresenceMismatches()
             connection.newMemberChecks[id] = nil
         elseif verification.state == "missing" or verification.state == "stale" then
             local report = reportedPresenceMismatches[key]
-            -- Begin the escalation's fresh probes 30 seconds before it is due.
-            local dueAt = report and report.reportedAt + 300 or now
-            if not report or (not report.escalated and now >= dueAt - 2 * PROBE_INTERVAL) then
+            -- Begin escalation confirmation early enough to complete a full
+            -- response window without moving the five-minute escalation.
+            local dueAt = report and report.reportedAt + 300 or nil
+            if not report or (not report.escalated and now >= dueAt - CONFIRMATION_WINDOW) then
                 local check = pendingPresenceChecks[key]
                 if not check then
-                    check = { attempts = 0, nextAt = now }
+                    check = {
+                        attempts = 0,
+                        nextAt = now,
+                        readyAt = report and dueAt or math.max(now + CONFIRMATION_WINDOW, loginReadyAt),
+                    }
                     pendingPresenceChecks[key] = check
                     self:DebugMsg(self:Text("PRESENCE_CONFIRM_PENDING", member.name), 3)
                 end
-                if check.attempts < 2 then
+                if check.attempts < PROBE_ATTEMPTS then
                     if now >= check.nextAt then probeBatch[#probeBatch + 1] = check
                     else queuePresenceReview(check.nextAt - now) end
                 else
-                    local readyAt = math.max(check.nextAt, loginReadyAt, dueAt)
+                    local readyAt = math.max(check.nextAt, check.readyAt or 0, loginReadyAt)
                     if now < readyAt then queuePresenceReview(readyAt - now)
                     else
                         pendingPresenceChecks[key] = nil
@@ -260,12 +265,12 @@ function iRC:CheckPresenceMismatches()
                                 SendChatMessage(self:Text("NEW_MEMBER_WELCOME", member.name), "GUILD")
                             end
                             connection.newMemberChecks[id] = nil
-                            queuePresenceReview(300 - 2 * PROBE_INTERVAL)
+                            queuePresenceReview(300 - CONFIRMATION_WINDOW)
                         end
                     end
                 end
             elseif not report.escalated then
-                queuePresenceReview(dueAt - 2 * PROBE_INTERVAL - now)
+                queuePresenceReview(dueAt - CONFIRMATION_WINDOW - now)
             end
         end
     end

@@ -158,6 +158,12 @@ assert(grid:EncodeExternalReport(wrong, "RaceLockedDataBus"), "native compatibil
 local own = grid:BuildOwnGuildReports()[1]
 assert(own.points == 0 and own.members == 3 and own.membersLevel60 == 2)
 assert(own.rulesKnown and type(own.rules) == "table", "live iRC guild snapshots include current rule metadata")
+rows[1].online = true
+assert(grid:BuildOwnGuildReports()[1].activePlayers == 1, "24-hour activity starts with the observed online count")
+rows[2].online = true
+assert(grid:BuildOwnGuildReports()[1].activePlayers == 2, "24-hour activity records a new observed peak")
+rows[1].online, rows[2].online = nil, nil
+assert(grid:BuildOwnGuildReports()[1].activePlayers == 2, "24-hour activity retains its peak when fewer members are online")
 rows[4] = { name = "Lowbie", race = "Troll", class = "ROGUE", level = 18 }
 members.lowbie = true
 local filteredClasses = grid:BuildOwnGuildReports()[1]
@@ -263,11 +269,13 @@ local function guildReport(name, guild, race, level60, active, total, stamp, rul
 end
 guildReport("Elf-Soulseeker", "Moon Wardens", "NIGHTELF", 4, 2, 10)
 guildReport("Orc-Soulseeker", "Warsong Vanguard", "ORC", 3, 9, 20, nil, 80, 50, 55)
+guildReport("OrcTwo-Soulseeker", "Warsong Vanguard", "ORC", 3, 2, 20, time() + 1, 80, 50, 55)
 guildReport("Human-Soulseeker", "Lion Guard", "HUMAN", 3, 8, 50)
 guildReport("ElfTwo-Soulseeker", "Moon Wardens", "NIGHTELF", 4, 2, 11, time() + 1)
 local ranked = iRC:GetRaceGridOverview()
 assert(#ranked == 4 and ranked[1].guildName == "Moon Wardens" and ranked[1].members == 11, "same guild is deduplicated and newest iRC snapshot wins")
 assert(ranked[2].guildName == "Warsong Vanguard" and ranked[3].guildName == "Lion Guard" and ranked[4].guildName == "Darkspear Tribe", "guild ranking is level60, active, then total")
+assert(ranked[2].activePlayers == 9, "newer reports retain the guild's highest observed online count for 24 hours")
 assert(ranked[1].faction == "Alliance" and ranked[2].faction == "Horde", "guild race assigns the faction frame")
 assert(ranked[1].rulesKnown == nil, "older iRC reports remain valid without rule metadata")
 assert(ranked[2].rulesKnown and ranked[2].rules.sameRaceGroupsOnly and ranked[2].rules.guildGroupsOnly, "rule flags decode from new reports")

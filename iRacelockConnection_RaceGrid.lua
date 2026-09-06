@@ -97,7 +97,36 @@ local function getServerStore()
     end
     store.guildReports = store.guildReports or {}
     store.raceLockedGuildReports = store.raceLockedGuildReports or {}
+    store.guildActivity = store.guildActivity or {}
     return store
+end
+
+local function recordGuildActivity(guildName, onlinePlayers)
+    local activity = getServerStore().guildActivity
+    local key, now = normalizeGuildName(guildName), time()
+    local samples = activity[key]
+    if type(samples) ~= "table" then
+        samples = {}
+        activity[key] = samples
+    end
+    local retained = {}
+    for _, sample in ipairs(samples) do
+        if type(sample) == "table" and (tonumber(sample.timestamp) or 0) >= now - 86400 then
+            retained[#retained + 1] = sample
+        end
+    end
+    samples = retained
+    activity[key] = samples
+    local current = math.max(0, math.floor(tonumber(onlinePlayers) or 0))
+    local latest = samples[#samples]
+    if latest and latest.players == current then
+        latest.timestamp = now
+    else
+        samples[#samples + 1] = { timestamp = now, players = current }
+    end
+    local peak = current
+    for _, sample in ipairs(samples) do peak = math.max(peak, tonumber(sample.players) or 0) end
+    return peak
 end
 
 local function hexToBytes(value)
@@ -184,6 +213,7 @@ function RaceGrid:StoreGuildReport(report, silent)
     local key = normalizeGuildName(report.guildName)
     local old = reports[key]
     if old and (tonumber(old.timestamp) or 0) > (tonumber(report.timestamp) or 0) then return false end
+    report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
     report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     report.lastSeen = time()
     reports[key] = report
@@ -399,6 +429,7 @@ function RaceGrid:BuildOwnGuildReports()
         end
     end
     if group.members == 0 then return {} end
+    group.activePlayers = recordGuildActivity(guildName, group.activePlayers)
     group.averageLevel = group.totalLevel / group.members
     group.averagePoints = nil
     for class, count in pairs(group.classes) do group.classAverageLevels[class] = group.classTotals[class] / count end

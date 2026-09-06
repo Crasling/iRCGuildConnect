@@ -199,9 +199,10 @@ function iRC:SendHello()
     self:DebugMsg(self:Text("PROFILE_SENT"), 3)
 end
 
-function iRC:SendGuildActivation()
+function iRC:SendGuildActivation(targetName)
     if not self:IsInGuildConnection() or not self:IsGuildMaster() then return end
-    send(self.Prefix, table.concat({ "GUILD_ACTIVATION", WIRE_VERSION, self:IsGuildConnectionActive() and "1" or "0" }, SEP), "GUILD")
+    local distribution = targetName and "WHISPER" or "GUILD"
+    send(self.Prefix, table.concat({ "GUILD_ACTIVATION", WIRE_VERSION, self:IsGuildConnectionActive() and "1" or "0" }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("GUILD_ACTIVATION_SENT", self:IsGuildConnectionActive() and self:Text("GUILD_ACTIVE") or self:Text("GUILD_INACTIVE")), 3)
 end
 
@@ -216,9 +217,10 @@ function iRC:RequestGuildActivation()
     return true
 end
 
-function iRC:SendConnectionRules()
+function iRC:SendConnectionRules(targetName)
     if not self:IsGuildConnectionActive() or not self:IsGuildMaster() then return end
     local rules = self:GetConnectionRules()
+    local distribution = targetName and "WHISPER" or "GUILD"
     send(self.Prefix, table.concat({
         "RULES", WIRE_VERSION,
         rules.nativeTongueOnly and "1" or "0",
@@ -231,7 +233,7 @@ function iRC:SendConnectionRules()
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))),
         rules.guildGroupsOnly and "1" or "0",
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))),
-    }, SEP), "GUILD")
+    }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("RULES_SENT"), 3)
 end
 
@@ -267,7 +269,7 @@ local function senderIsKnown(sender)
     return connection and connection.members[iRC:NormalizeName(sender)] ~= nil
 end
 
-local function handleMessage(prefix, message, sender)
+local function handleMessage(prefix, message, distribution, sender)
     if prefix ~= iRC.Prefix or not iRC:IsInGuildConnection() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
@@ -278,8 +280,16 @@ local function handleMessage(prefix, message, sender)
         if active and changed then iRC:SendHello() end
         iRC:DebugMsg(iRC:Text("GUILD_ACTIVATION_RECEIVED", sender, active and iRC:Text("GUILD_ACTIVE") or iRC:Text("GUILD_INACTIVE")), 3)
         return
-    elseif kind == "GUILD_ACTIVATION_REQUEST" and parts[2] == WIRE_VERSION and iRC:IsGuildMaster() and iRC:IsGuildMemberName(sender) then
-        iRC:SendGuildActivation()
+    elseif kind == "GUILD_ACTIVATION_REQUEST" and parts[2] == WIRE_VERSION and iRC:IsGuildMaster()
+        and (distribution == "GUILD" or iRC:IsGuildMemberName(sender)) then
+        -- Bootstrap the requesting client directly. A guild broadcast can be
+        -- missed while its roster and addon-message state are still loading,
+        -- leaving that client inactive and therefore unable to send HELLO.
+        iRC:SendGuildActivation(sender)
+        if iRC:IsGuildConnectionActive() then
+            iRC:SendConnectionRules(sender)
+            send(iRC.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION, "REQUEST" }, SEP), "WHISPER", sender)
+        end
         return
     end
     if not iRC:IsGuildConnectionActive() then return end
@@ -363,7 +373,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             iRC:SendConnectionRules()
         end)
     elseif event == "CHAT_MSG_ADDON" then
-        local prefix, message, _, sender = ...
-        handleMessage(prefix, message, sender)
+        local prefix, message, distribution, sender = ...
+        handleMessage(prefix, message, distribution, sender)
     end
 end)

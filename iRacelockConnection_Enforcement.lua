@@ -18,6 +18,9 @@ local observedGroupRestrictions
 local restrictedTradeCancelled = false
 local lastMailRestrictionReason
 local pendingGuildFoundTradePartners = {}
+local originalSendMail, originalTakeInboxItem, originalTakeInboxMoney, originalAutoLootMailItem
+local originalAcceptTrade
+local inboxRestrictionNotices = {}
 
 local warningFrame = CreateFrame("Frame", "iRCSelfFoundWarning", UIParent)
 warningFrame:SetSize(620, 32)
@@ -146,6 +149,23 @@ function Enforcement:CheckTradeRestriction()
     if CancelTrade then CancelTrade() end
 end
 
+function Enforcement:InstallTradeAPIGuard()
+    if originalAcceptTrade or type(_G.AcceptTrade) ~= "function" then return end
+    originalAcceptTrade = _G.AcceptTrade
+    _G.AcceptTrade = function(...)
+        if isLevel60GuildFoundActive() then
+            local partnerName = getTradePartnerName()
+            local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
+            if not allowed then
+                if partnerName and iRC.RequestRaceLockedTradeVerification then iRC:RequestRaceLockedTradeVerification(partnerName) end
+                Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED", partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
+                return
+            end
+        end
+        return originalAcceptTrade(...)
+    end
+end
+
 function Enforcement:UpdateMailRestriction()
     local button = getSendMailButton()
     if not button or not button.SetEnabled then return end
@@ -190,6 +210,81 @@ function Enforcement:InstallMailRecipientGuard()
     field:HookScript("OnTextChanged", function()
         Enforcement:UpdateMailRestriction()
     end)
+end
+
+local function getInboxRestriction(index)
+    if not isLevel60GuildFoundActive() or not GetInboxHeaderInfo then return false end
+    local packageIcon, _, sender, _, money, codAmount, _, hasItem, _, _, _, canReply, isGameMaster = GetInboxHeaderInfo(index)
+    if not sender or sender == "" then return false end
+
+    -- Auction House proceeds and purchases are external economy even though
+    -- their sender is a system entity rather than a player character.
+    if packageIcon == 134939 then return true, sender end
+    if GetInboxInvoiceInfo then
+        local invoiceType = GetInboxInvoiceInfo(index)
+        if invoiceType then return true, sender end
+    end
+
+    local allowed = iRC:GetGuildFoundTradeStatus(sender)
+    if allowed then return false end
+    local containsValue = (tonumber(money) or 0) > 0 or (tonumber(codAmount) or 0) > 0 or hasItem
+    if not containsValue then return false end
+
+    -- Quest rewards and other game-generated deliveries remain usable. They
+    -- cannot be replied to; ordinary player mail can.
+    if canReply == false or isGameMaster then return false end
+    return true, sender
+end
+
+function Enforcement:IsInboxMailRestricted(index)
+    return getInboxRestriction(index)
+end
+
+function Enforcement:ShowInboxRestriction(index, sender)
+    local key = tostring(index) .. ":" .. tostring(sender or "")
+    if inboxRestrictionNotices[key] then return end
+    inboxRestrictionNotices[key] = true
+    self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_INBOX_BLOCKED", sender or iRC:Text("GUILD_FOUND_UNKNOWN_SENDER")))
+end
+
+function Enforcement:InstallMailAPIGuards()
+    if not originalSendMail and type(_G.SendMail) == "function" then
+        originalSendMail = _G.SendMail
+        _G.SendMail = function(recipient, ...)
+            if isLevel60GuildFoundActive() then
+                local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient)
+                if not allowed then
+                    Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient or "", reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
+                    return
+                end
+            end
+            return originalSendMail(recipient, ...)
+        end
+    end
+    if not originalTakeInboxItem and type(_G.TakeInboxItem) == "function" then
+        originalTakeInboxItem = _G.TakeInboxItem
+        _G.TakeInboxItem = function(index, ...)
+            local blocked, sender = getInboxRestriction(index)
+            if blocked then Enforcement:ShowInboxRestriction(index, sender); return end
+            return originalTakeInboxItem(index, ...)
+        end
+    end
+    if not originalTakeInboxMoney and type(_G.TakeInboxMoney) == "function" then
+        originalTakeInboxMoney = _G.TakeInboxMoney
+        _G.TakeInboxMoney = function(index, ...)
+            local blocked, sender = getInboxRestriction(index)
+            if blocked then Enforcement:ShowInboxRestriction(index, sender); return end
+            return originalTakeInboxMoney(index, ...)
+        end
+    end
+    if not originalAutoLootMailItem and type(_G.AutoLootMailItem) == "function" then
+        originalAutoLootMailItem = _G.AutoLootMailItem
+        _G.AutoLootMailItem = function(index, ...)
+            local blocked, sender = getInboxRestriction(index)
+            if blocked then Enforcement:ShowInboxRestriction(index, sender); return end
+            return originalAutoLootMailItem(index, ...)
+        end
+    end
 end
 
 function Enforcement:CloseRestrictedAuctionHouse()
@@ -319,11 +414,15 @@ frame:RegisterEvent("TRADE_UPDATE")
 frame:RegisterEvent("TRADE_CLOSED")
 frame:RegisterEvent("AUCTION_HOUSE_SHOW")
 frame:RegisterEvent("MAIL_SHOW")
+frame:RegisterEvent("MAIL_INBOX_UPDATE")
+frame:RegisterEvent("MAIL_SEND_INFO_UPDATE")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
 frame:SetScript("OnEvent", function(_, event, unit)
     if event == "PLAYER_LOGIN" then
         protectExistingGroup(true)
+        Enforcement:InstallTradeAPIGuard()
+        Enforcement:InstallMailAPIGuards()
         Enforcement:Refresh()
     elseif event == "PLAYER_ENTERING_WORLD" then
         iRC.SelfFoundAuraReady = false
@@ -340,11 +439,20 @@ frame:SetScript("OnEvent", function(_, event, unit)
         restrictedTradeCancelled = false
         pendingGuildFoundTradePartners = {}
     elseif event == "TRADE_SHOW" or event == "TRADE_UPDATE" then
+        Enforcement:InstallTradeAPIGuard()
         Enforcement:CheckTradeRestriction()
     elseif event == "AUCTION_HOUSE_SHOW" then
         Enforcement:CloseRestrictedAuctionHouse()
     elseif event == "MAIL_SHOW" then
+        inboxRestrictionNotices = {}
+        Enforcement:InstallMailAPIGuards()
         Enforcement:InstallMailRecipientGuard()
+        Enforcement:UpdateMailRestriction()
+    elseif event == "MAIL_INBOX_UPDATE" then
+        inboxRestrictionNotices = {}
+        Enforcement:InstallMailAPIGuards()
+    elseif event == "MAIL_SEND_INFO_UPDATE" then
+        Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_SEND_SUCCESS" then
         Enforcement:UpdateMailRestriction()

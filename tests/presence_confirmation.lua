@@ -95,8 +95,8 @@ advance(44); assert(#notices == 0, "no warnings during first 60 seconds after re
 advance(1)
 assert(#notices == 2 and notices[1].at == started + 60, "first confirmed officer/whisper notice after startup grace")
 local firstNotice = now
-advance(270); assert(probeCount() == 3)
-advance(15); assert(probeCount() == 4 and #notices == 2)
+advance(270); assert(probeCount() == 6)
+advance(15); assert(probeCount() == 6 and #notices == 2)
 advance(15)
 assert(#notices == 5 and notices[5][2] == "GUILD" and now == firstNotice + 300, "escalation rechecks before officer/whisper/guild notice")
 
@@ -128,8 +128,8 @@ assert(#notices == 0, "offline member is never warned")
 roster[3].online = true
 guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(1)
 local reconnectedAt = now
-advance(29); assert(#notices == 0)
-advance(1); assert(#notices == 2 and now == reconnectedAt + 30, "relogin requires a new probe round")
+advance(59); assert(#notices == 0)
+advance(1); assert(#notices == 2 and now == reconnectedAt + 60, "relogin requires a full confirmation window")
 
 reset()
 iRC:ScheduleNewMemberAddonCheck("guid:Player-1-Target")
@@ -138,7 +138,8 @@ assert(#notices == 0, "new member gets a response window before welcome/missing 
 reset()
 iRC:ScheduleNewMemberAddonCheck("guid:Player-1-Target")
 advance(31); assert(#notices == 0)
-advance(1); assert(#notices == 3 and notices[3][2] == "GUILD", "missing new member welcome follows two probes and waits")
+advance(30); assert(#notices == 0)
+advance(1); assert(#notices == 3 and notices[3][2] == "GUILD", "missing new member welcome follows three probes and a full confirmation window")
 iRC:CheckNewMemberAddon("guid:Player-1-Target")
 assert(#notices == 3, "welcome is not repeated")
 
@@ -150,8 +151,8 @@ assert(#notices == 0, "old notifier cannot send when another iRC officer now win
 roster[2].online = false
 guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(1)
 local handoffAt = now
-advance(29); assert(#notices == 0)
-advance(1); assert(#notices == 2 and now == handoffAt + 30, "officer logout elects next client and requires fresh probes")
+advance(59); assert(#notices == 0)
+advance(1); assert(#notices == 2 and now == handoffAt + 60, "officer logout elects next client and requires a full fresh confirmation window")
 
 reset()
 roster[2].online = true; respond("Aofficer")
@@ -179,4 +180,4 @@ iRC:CheckPresenceMismatches(); advance(60)
 assert(#notices == 0, "test admin warning suppression blocks officer, whisper, and guild messages")
 iRC:GetSettings().suppressPresenceWarnings = false
 iRC.TestAdminName = nil
-print("Presence confirmation tests passed: probes/retry, reload grace, late iRC/ForkEU replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")
+print("Presence confirmation tests passed: three-probe confirmation, reload grace, late iRC/ForkEU replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")
