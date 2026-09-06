@@ -9,15 +9,37 @@ local PRESENCE_TIMEOUT = 135
 -- minutes.  Do not apply iRC's much shorter active-poll timeout to that source.
 local COMPATIBILITY_TIMEOUT = 360
 local reportedPresenceMismatches = {}
+local pendingPresenceChecks = {}
+local presenceConnection, reviewTicket, reviewAt, selectedOfficer
+local PROBE_INTERVAL, LOGIN_GRACE = 15, 60
+local sessionStartedAt = time()
+
+function iRC:ResetPresenceNotificationChecks()
+    reportedPresenceMismatches, pendingPresenceChecks = {}, {}
+    presenceConnection, reviewTicket, reviewAt, selectedOfficer = nil, nil, nil, nil
+end
+
+local function queuePresenceReview(delay)
+    if not C_Timer or not C_Timer.After then return end
+    local at = time() + math.max(1, delay)
+    if reviewAt and reviewAt <= at then return end
+    local ticket = {}
+    reviewTicket, reviewAt = ticket, at
+    C_Timer.After(math.max(1, delay), function()
+        if reviewTicket ~= ticket then return end
+        reviewTicket, reviewAt = nil, nil
+        iRC:CheckPresenceMismatches()
+    end)
+end
 
 local function memberKey(name, guid)
     if guid and guid ~= "" then return "guid:" .. guid end
     return "name:" .. iRC:NormalizeName(name)
 end
 
-function iRC:GetMemberAttentionSince(name, verification)
-    local connection = self:GetConnection()
-    if not connection then return nil end
+function iRC:GetMemberAttentionSince(name, verification, connection)
+    if connection == nil then connection = self:GetConnection() end
+    if not connection or connection.active ~= true then return nil end
     connection.attentionSince = connection.attentionSince or {}
     local key = self:NormalizeName(name)
     local state = verification and verification.state
@@ -45,13 +67,18 @@ function iRC:RefreshGuildRoster()
     if GuildRoster then GuildRoster() end
 end
 
-function iRC:GetMemberVerification(name, online, profile)
+function iRC:GetMemberVerification(name, online, profile, context)
     if not online then return { state = "offline", label = "Offline" } end
-    if self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName()) then
+    local connection
+    if context then connection = context.connection else connection = self:GetConnection() end
+    if not connection or connection.active ~= true then return { state = "inactive", label = self:Text("GUILD_VERIFICATION_INACTIVE") } end
+    local key = self:NormalizeName(name)
+    if key == (context and context.selfKey or self:NormalizeName(self:GetPlayerName())) then
         return { state = "verified", label = "This client" }
     end
-    local compatibility = self.GetCompatibilityStats and self:GetCompatibilityStats(name)
-    local compatibilityMember = self.GetCompatibilityMember and self:GetCompatibilityMember(name)
+    local compatibilityMember = (connection.compatibilityMembers or {})[key]
+    local compatibility = compatibilityMember and compatibilityMember.stats
+    local synced = self.RaceLockedSync and (connection.guildFoundRoster or {})[key]
     local guildFound = compatibilityMember and compatibilityMember.guildFound
     local compatiblePresence = compatibilityMember and compatibilityMember.presence
     local sessionStartedAt = self.ConnectionSessionStartedAt or 0
@@ -60,6 +87,9 @@ function iRC:GetMemberVerification(name, online, profile)
         if profileAge <= PRESENCE_TIMEOUT then
             return { state = "verified", label = "Verified " .. math.max(0, math.floor(profileAge)) .. "s ago" }
         end
+    end
+    if synced and synced.source == "RaceLocked" and synced.lastSeen and time() - synced.lastSeen <= COMPATIBILITY_TIMEOUT then
+        return { state = "compatible", label = self:Text("RL_ROSTER_PRESENT") }
     end
     if guildFound and guildFound.source == "RaceLocked" and guildFound.lastSeen then
         local guildFoundAge = time() - guildFound.lastSeen
@@ -91,25 +121,38 @@ function iRC:GetMemberVerification(name, online, profile)
 end
 
 function iRC:IsPresenceNotificationLeader()
-    if not self:IsGuildAdmin() then return false end
-    local candidate, count = nil, GetNumGuildMembers and GetNumGuildMembers(true) or 0
+    local connection = self:GetConnection()
+    if not connection or connection.active ~= true or not self:IsGuildAdmin() then return false end
+    local ownName = self:NormalizeName(self:GetPlayerName())
+    -- This running client is known to have iRC. IsGuildAdmin includes the
+    -- enabled testing overrides, even when the game roster shows member rank.
+    local candidate = { name = self:GetPlayerName(), rankIndex = self:IsGuildMaster() and 0 or 1 }
+    local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
+    local now, sessionStartedAt = time(), self.ConnectionSessionStartedAt or 0
     for index = 1, count do
         local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(index)
-        if name and online and type(rankIndex) == "number" and rankIndex <= 1 then
-            local profile = self:FindConnectionProfile(name)
-            if self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName()) then profile = self:GetLocalProfile() end
-            local verification = self:GetMemberVerification(name, true, profile)
-            if verification.state == "verified" or verification.state == "compatible" then
-                if not candidate or rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name)) then
+        if name and online and self:NormalizeName(name) ~= ownName then
+            local profile = connection.members[self:NormalizeName(name)]
+            local lastSeen = profile and tonumber(profile.lastSeen)
+            -- Compatible presence proves RaceLocked/ForkEU is running, not
+            -- iRC's notification handler. Only direct, current-session iRC
+            -- profiles can participate in this election.
+            if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= PRESENCE_TIMEOUT then
+                if self:IsTestGuildMasterName(name)
+                    or (self:IsTestAdminName(name) and profile.testGuildMasterOverride == true) then rankIndex = 0 end
+                if type(rankIndex) == "number" and rankIndex >= 0 and rankIndex <= 1
+                    and (rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name))) then
                     candidate = { name = name, rankIndex = rankIndex }
                 end
             end
         end
     end
-    return candidate and self:NormalizeName(candidate.name) == self:NormalizeName(self:GetPlayerName()) or false
+    return self:NormalizeName(candidate.name) == ownName, candidate.name
 end
 
 local function announcePresenceMismatch(member, verification, escalated)
+    -- Re-elect immediately before publishing, not just when the probes began.
+    if not iRC:IsPresenceNotificationLeader() or not SendChatMessage then return false end
     local reason = verification.label or iRC:Text("PRESENCE_NO_LIVE_RESPONSE")
     local officerMessage = escalated
         and iRC:Text("PRESENCE_OFFICER_ESCALATION", member.name, reason)
@@ -124,92 +167,123 @@ local function announcePresenceMismatch(member, verification, escalated)
             SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", member.name), "GUILD")
         end
     end
+    return true
 end
 
 function iRC:CheckPresenceMismatches()
-    if not self:IsPresenceNotificationLeader() then
-        self:DebugMsg(self:Text("PRESENCE_NOTIFICATION_NOT_LEADER"), 3)
+    local connection = self:GetConnection()
+    if not connection or connection.active ~= true then self:ResetPresenceNotificationChecks(); return end
+    if presenceConnection ~= connection then
+        self:ResetPresenceNotificationChecks()
+        presenceConnection = connection
+    end
+    local isLeader, leaderName = self:IsPresenceNotificationLeader()
+    local leaderKey = leaderName and self:NormalizeName(leaderName)
+    if selectedOfficer ~= leaderKey then
+        selectedOfficer, pendingPresenceChecks = leaderKey, {}
+        if leaderName then self:DebugMsg(self:Text("PRESENCE_OFFICER_SELECTED", leaderName), 3) end
+    end
+    if not isLeader then
+        pendingPresenceChecks, reviewTicket, reviewAt = {}, nil, nil
+        self:DebugMsg(leaderName and self:Text("PRESENCE_NOTIFICATION_NOT_LEADER", leaderName)
+            or self:Text("PRESENCE_NOTIFICATION_INELIGIBLE"), 3)
         return
     end
     self:DebugMsg(self:Text("PRESENCE_NOTIFICATION_LEADER"), 3)
+    local now, probeBatch, currentMembers = time(), {}, {}
+    local loginReadyAt = (self.ConnectionSessionStartedAt or sessionStartedAt) + LOGIN_GRACE
+    connection.newMemberChecks = connection.newMemberChecks or {}
+    connection.newMemberWelcomeNotices = connection.newMemberWelcomeNotices or {}
     for _, member in ipairs(self:GetGuildRosterRows()) do
         local key = self:NormalizeName(member.name)
+        local id = memberKey(member.name, member.guid)
+        currentMembers[key] = true
         local verification = member.verification or { state = "missing" }
         if not member.online then
-            reportedPresenceMismatches[key] = nil
+            reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
         elseif verification.state == "verified" or verification.state == "compatible" then
             if reportedPresenceMismatches[key] then self:DebugMsg(self:Text("PRESENCE_RECOVERED", member.name), 3) end
-            reportedPresenceMismatches[key] = nil
+            reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
+            connection.newMemberChecks[id] = nil
         elseif verification.state == "missing" or verification.state == "stale" then
             local report = reportedPresenceMismatches[key]
-            if not report then
-                report = { reportedAt = time(), escalated = false }
-                reportedPresenceMismatches[key] = report
-                self:DebugMsg(self:Text("PRESENCE_MISMATCH", member.name, verification.label or ""), 2)
-                announcePresenceMismatch(member, verification, false)
-                if C_Timer and C_Timer.After then
-                    C_Timer.After(300, function()
-                        if iRC.CheckPresenceMismatches then iRC:CheckPresenceMismatches() end
-                    end)
+            -- Begin the escalation's fresh probes 30 seconds before it is due.
+            local dueAt = report and report.reportedAt + 300 or now
+            if not report or (not report.escalated and now >= dueAt - 2 * PROBE_INTERVAL) then
+                local check = pendingPresenceChecks[key]
+                if not check then
+                    check = { attempts = 0, nextAt = now }
+                    pendingPresenceChecks[key] = check
+                    self:DebugMsg(self:Text("PRESENCE_CONFIRM_PENDING", member.name), 3)
                 end
-            elseif not report.escalated and time() - report.reportedAt >= 300 then
-                report.escalated = true
-                announcePresenceMismatch(member, verification, true)
+                if check.attempts < 2 then
+                    if now >= check.nextAt then probeBatch[#probeBatch + 1] = check
+                    else queuePresenceReview(check.nextAt - now) end
+                else
+                    local readyAt = math.max(check.nextAt, loginReadyAt, dueAt)
+                    if now < readyAt then queuePresenceReview(readyAt - now)
+                    else
+                        pendingPresenceChecks[key] = nil
+                        if report then
+                            if not announcePresenceMismatch(member, verification, true) then queuePresenceReview(1); return end
+                            report.escalated = true
+                        else
+                            if not announcePresenceMismatch(member, verification, false) then queuePresenceReview(1); return end
+                            reportedPresenceMismatches[key] = { reportedAt = now, escalated = false }
+                            self:DebugMsg(self:Text("PRESENCE_MISMATCH", member.name, verification.label or ""), 2)
+                            if connection.newMemberChecks[id] and not connection.newMemberWelcomeNotices[id] and SendChatMessage and self:IsPresenceNotificationLeader() then
+                                connection.newMemberWelcomeNotices[id] = now
+                                SendChatMessage(self:Text("NEW_MEMBER_WELCOME", member.name), "GUILD")
+                            end
+                            connection.newMemberChecks[id] = nil
+                            queuePresenceReview(300 - 2 * PROBE_INTERVAL)
+                        end
+                    end
+                end
+            elseif not report.escalated then
+                queuePresenceReview(dueAt - 2 * PROBE_INTERVAL - now)
             end
         end
+    end
+    for key in pairs(pendingPresenceChecks) do if not currentMembers[key] then pendingPresenceChecks[key] = nil end end
+    for key in pairs(reportedPresenceMismatches) do if not currentMembers[key] then reportedPresenceMismatches[key] = nil end end
+    if #probeBatch > 0 then
+        -- One guild-wide batch covers all pending members. A poll merely
+        -- received from another client is not evidence that we tried a probe.
+        local ircSent = self:RequestGuildPresence(false)
+        local compatibleSent = self.Compatibility and self.Compatibility.RequestPresenceCheck and self.Compatibility:RequestPresenceCheck()
+        for _, check in ipairs(probeBatch) do
+            if ircSent and compatibleSent then check.attempts = check.attempts + 1 end
+            check.nextAt = now + PROBE_INTERVAL
+        end
+        self:DebugMsg(self:Text(ircSent and compatibleSent and "PRESENCE_CONFIRM_PROBE" or "PRESENCE_CONFIRM_UNAVAILABLE", #probeBatch), 3)
+        queuePresenceReview(PROBE_INTERVAL)
     end
 end
 
 function iRC:CheckNewMemberAddon(memberId)
+    if not self:IsGuildConnectionActive() then return true end
     local connection = self:GetConnection()
     if not connection then return true end
-    connection.newMemberWelcomeNotices = connection.newMemberWelcomeNotices or {}
+    if connection.newMemberWelcomeNotices and connection.newMemberWelcomeNotices[memberId] then return true end
     connection.newMemberChecks = connection.newMemberChecks or {}
-    if connection.newMemberWelcomeNotices[memberId] then return true end
-    local newMember
-    for _, member in ipairs(self:GetGuildRosterRows()) do
-        if memberKey(member.name, member.guid) == memberId then newMember = member break end
-    end
-    if not newMember or not newMember.online then return true end
-    local checkStartedAt = connection.newMemberChecks[memberId] or time()
-    if (newMember.profile and newMember.profile.lastSeen and newMember.profile.lastSeen >= checkStartedAt)
-        or newMember.compatibility
-        or (newMember.compatibilityMember and newMember.compatibilityMember.presence
-            and (tonumber(newMember.compatibilityMember.presence.lastSeen) or 0) >= checkStartedAt) then
-        connection.newMemberChecks[memberId] = nil
-        return true
-    end
-    if not self:IsPresenceNotificationLeader() then return false end
-    connection.newMemberWelcomeNotices[memberId] = time()
-    connection.newMemberChecks[memberId] = nil
-    if SendChatMessage then
-        SendChatMessage(self:Text("NEW_MEMBER_WELCOME", newMember.name), "GUILD")
-    end
-    return true
+    connection.newMemberChecks[memberId] = connection.newMemberChecks[memberId] or time()
+    self:CheckPresenceMismatches()
+    return connection.newMemberChecks[memberId] == nil
 end
 
 function iRC:ScheduleNewMemberAddonCheck(memberId)
-    if not C_Timer or not C_Timer.After then return end
+    if not self:IsGuildConnectionActive() or not C_Timer or not C_Timer.After then return end
     local connection = self:GetConnection()
     if not connection then return end
     connection.newMemberChecks = connection.newMemberChecks or {}
     connection.newMemberChecks[memberId] = time()
     self:DebugMsg(self:Text("NEW_MEMBER_CHECK", memberId), 3)
-    C_Timer.After(2, function()
-        -- ForkEU responds to this public presence heartbeat with PONG.  Every
-        -- iRC client sends it, so detecting a new guild member never depends
-        -- on the local player being an officer.
-        if iRC.Compatibility and iRC.Compatibility.BroadcastSelfFound then
-            iRC.Compatibility:BroadcastSelfFound("PING")
-        end
-        if iRC:IsPresenceNotificationLeader() then iRC:RequestGuildPresence(true) end
-    end)
-    C_Timer.After(10, function()
-        if iRC.CheckNewMemberAddon then iRC:CheckNewMemberAddon(memberId) end
-    end)
+    queuePresenceReview(2)
 end
 
 function iRC:CheckGuildRosterForNewMembers()
+    if not self:IsGuildConnectionActive() then return end
     local connection = self:GetConnection()
     local count = GetNumGuildMembers and GetNumGuildMembers(true) or 0
     if not connection or count < 1 or not GetGuildRosterInfo then return end
@@ -238,20 +312,29 @@ end
 function iRC:GetGuildRosterRows()
     local rows, count = {}, GetNumGuildMembers and GetNumGuildMembers(true) or 0
     local selfName = self:GetPlayerName()
+    -- One connection snapshot for this synchronous pass; do not cache across
+    -- events, so incoming presence/rules and guild changes apply immediately.
+    local connection = self:GetConnection()
+    local active = connection and connection.active == true
+    local profiles = connection and connection.members or {}
+    local compatibleMembers = active and connection.compatibilityMembers or {}
+    local context = { connection = connection, selfKey = self:NormalizeName(selfName) }
     for index = 1, count do
         local name, _, rankIndex, level, className, _, _, _, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
         if name then
-            local profile = self:FindConnectionProfile(name)
-            local compatibility = self.GetCompatibilityStats and self:GetCompatibilityStats(name) or nil
-            local compatibilityMember = self.GetCompatibilityMember and self:GetCompatibilityMember(name) or nil
+            local key = self:NormalizeName(name)
+            local profile = profiles[key]
+            local compatibilityMember = compatibleMembers[key]
+            local compatibility = compatibilityMember and compatibilityMember.stats
+            local syncedStatus = active and self.RaceLockedSync and self.RaceLockedSync:GetStatus(name, connection)
             local race = profile and profile.race or getRaceFromGuid(guid) or "Unknown"
             if self:NormalizeName(name) == self:NormalizeName(selfName) then
                 profile = self:GetLocalProfile()
                 race = profile.race
                 guid = profile.guid
             end
-            local verification = self:GetMemberVerification(name, online and true or false, profile)
-            local attentionSince = self:GetMemberAttentionSince(name, verification)
+            local verification = self:GetMemberVerification(name, online and true or false, profile, context)
+            local attentionSince = self:GetMemberAttentionSince(name, verification, connection or false)
             local combinedSource = profile and compatibility and ("iRC + " .. (compatibility.source or "RaceLocked")) or nil
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
@@ -259,14 +342,17 @@ function iRC:GetGuildRosterRows()
                 race = race, online = online and true or false, profile = profile,
                 compatibility = compatibility,
                 compatibilityMember = compatibilityMember,
+                raceLockedStatus = syncedStatus or false,
+                hasParticipationSnapshot = true,
                 -- A member has exactly one canonical row. iRC is preferred when
                 -- present; compatible counters only fill missing data and are
                 -- never added to iRC counters.
-                points = (profile and profile.points) or (compatibility and compatibility.points) or 0,
+                points = 0,
+                hardcorePoints = nil,
                 selfFound = profile and profile.selfFound or (compatibilityMember and compatibilityMember.selfFound) or false,
                 addonVersion = profile and profile.addonVersion or nil,
                 statistics = (profile and profile.statistics) or (compatibility and compatibility.statistics) or nil,
-                source = combinedSource or (profile and "iRC") or (compatibility and compatibility.source) or nil,
+                source = combinedSource or (profile and "iRC") or (compatibility and compatibility.source) or (syncedPoints and "RaceLocked") or nil,
                 verification = verification,
                 attentionSince = attentionSince,
             }
@@ -302,7 +388,6 @@ function iRC:GetRaceOverview()
         end
         group.members = group.members + 1
         group.totalLevel = group.totalLevel + (row.level or 1)
-        group.points = group.points + (row.points or 0)
         if row.profile or row.compatibility then group.addonUsers = group.addonUsers + 1 end
         if row.selfFound then group.selfFound = group.selfFound + 1 end
         group.classes[row.class or "UNKNOWN"] = (group.classes[row.class or "UNKNOWN"] or 0) + 1
@@ -327,7 +412,6 @@ function iRC:GetChampions()
     end
     table.sort(champions, function(a, b)
         if a.level ~= b.level then return a.level > b.level end
-        if a.points ~= b.points then return a.points > b.points end
         return string.lower(a.name) < string.lower(b.name)
     end)
     return champions
@@ -338,7 +422,7 @@ function iRC:GetLeaderboard()
     for _, row in ipairs(self:GetGuildRosterRows()) do
         if row.profile or row.compatibility then
             row.leaderboard = {
-                source = row.source or "iRC", points = row.points, level = row.level, statistics = row.statistics or {},
+                source = row.source or "iRC", level = row.level, statistics = row.statistics or {},
             }
             leaders[#leaders + 1] = row
         end
@@ -359,10 +443,14 @@ frame:SetScript("OnEvent", function(_, event)
         if C_Timer and C_Timer.NewTicker then
             C_Timer.NewTicker(15, function()
                 if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+                -- Detect expired iRC presence even if WoW still lists the
+                -- previous notifier online (for example, addon disabled).
+                if iRC:IsGuildConnectionActive() and iRC:IsGuildAdmin() then queuePresenceReview(1) end
             end)
         end
     elseif event == "GUILD_ROSTER_UPDATE" then
         iRC:CheckGuildRosterForNewMembers()
+        if iRC:IsGuildConnectionActive() and iRC:IsGuildAdmin() then queuePresenceReview(1) end
         if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
     end
 end)

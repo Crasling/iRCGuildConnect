@@ -2,6 +2,24 @@
  iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.4 - Guild Activation, Verification & Compatibility
+--------------------------------------------------------------------------------
+
+ [NEW] Guild Masters must explicitly enable iRC for each guild before sharing, verification, compatibility data, or guild rules start
+ [NEW] Guild Masters can set a shared guild race, defaulting to the Guild Master's own race when iRC is activated
+ [NEW] Added Guild Found status, Guild Master review controls, gold-discrepancy checks, guild-death tracking and level-60 statistics
+ [NEW] Added optional RaceLocked and RaceLockedForkEU compatibility for shared roster, rule and Race Overview data
+ [NEW] Added manual Race Overview sharing and refresh controls when global sharing is enabled
+ [CHANGED] HardcoreAchievements and TrollFound are optional; iRC loads normally without either addon
+ [CHANGED] Achievement points are temporarily excluded from Race Overview, Verification, Champions and Leaderboard while statistics are reworked
+ [CHANGED] Active Verification filters now use the same orange glow style as iWR
+ [FIX] Missing-addon warnings now wait for confirmation and a login grace period, reducing false warnings after login or reload
+ [FIX] Reduced duplicate startup sync messages and delayed hidden data-channel joins until normal chat channels have loaded
+ [FIX] Presence notifications automatically move to another eligible online officer when the current notifier leaves
+ [FIX] Race Overview now uses the correct fixed guilds and counts verified and compatible members once, including known offline members
+ [FIX] Improved dashboard performance for large guild rosters
+ [FIX] Fixed options and minimap settings errors that could prevent the settings window from opening
+
 v0.2.2 - Race Overview & Connection Dashboard
 --------------------------------------------------------------------------------
 

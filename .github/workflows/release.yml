@@ -125,6 +125,7 @@ jobs:
             'ignore:' \
             '  - .release-changelog.md' \
             '  - .release.pkgmeta' \
+            '  - tests' \
             > .release.pkgmeta
 
       - name: Build and Publish Release

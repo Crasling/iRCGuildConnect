@@ -18,7 +18,13 @@ SlashCmdList.IRC = function(message)
         iRC:OpenConnectionDashboard()
     elseif command == "status" then
         local connection = iRC:GetConnection()
-        if connection then iRC:Print(iRC:Text("COMMAND_CONNECTED", connection.guildName)) else iRC:Print(L.COMMAND_NOT_CONNECTED) end
+        if connection and iRC:IsGuildConnectionActive() then
+            iRC:Print(iRC:Text("COMMAND_CONNECTED", connection.guildName))
+        elseif connection then
+            iRC:Print(iRC:Text("COMMAND_GUILD_INACTIVE", connection.guildName))
+        else
+            iRC:Print(L.COMMAND_NOT_CONNECTED)
+        end
     else
         iRC:Print(L.COMMAND_HELP)
     end

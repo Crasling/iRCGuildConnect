@@ -4,12 +4,15 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.2"
+iRC.Version = "0.2.4"
+-- Increment for each local testing change. Set to nil when testing ends.
+-- Display only: TOC metadata, release tags and shared profiles use iRC.Version.
+local TEST_REVISION = nil
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
--- Testing-only authority override. Remove this before a public release.
-iRC.TestGuildMasterName = "Jujukhan-Soulseeker"
+-- Testing-only controls are restricted to the explicit local admin UI.
+iRC.TestAdminName = "Crasjin-Soulseeker"
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
 iRC.Colors = {
@@ -34,9 +37,11 @@ local DEFAULT_SETTINGS = {
     achievementScale = 1,
     shareGlobalRaceGrid = false,
     debugMode = false,
+    testGuildMasterOverride = false,
 }
 
 iRC.DefaultConnectionRules = {
+    guildRace = "",
     nativeTongueOnly = false,
     selfFoundOnly = false,
     level60GuildFound = false,
@@ -44,6 +49,12 @@ iRC.DefaultConnectionRules = {
     sameRaceGroupsOnly = false,
     allowLevel60MixedRaceGroups = false,
 }
+
+iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL" }
+iRC.GuildRaceTBCOrder = { "DRAENEI", "BLOODELF" }
+local GuildRaceLookup = {}
+for _, race in ipairs(iRC.GuildRaceOrder) do GuildRaceLookup[race] = true end
+for _, race in ipairs(iRC.GuildRaceTBCOrder) do GuildRaceLookup[race] = true end
 
 iRC.LDBroker = LibStub and LibStub("LibDataBroker-1.1", true)
 iRC.LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
@@ -70,8 +81,12 @@ function iRC:Text(key, ...)
     return value
 end
 
+function iRC:GetDisplayVersion()
+    return TEST_REVISION and (self.Version .. "." .. TEST_REVISION) or self.Version
+end
+
 function iRC:PrintLoaded()
-    print(self:Text("ADDON_PREFIX") .. self:Text("LOADED", self.DisplayName, self.Version))
+    print(self:Text("ADDON_PREFIX") .. self:Text("LOADED", self.DisplayName, self:GetDisplayVersion()))
 end
 
 function iRC:CloseWindowsExcept(keptFrame)
@@ -247,30 +262,39 @@ end
 
 function iRC:GetConnection()
     local key = self:GetGuildKey()
-    if not key then return nil end
+    -- Dropdown initialization can read rules before ADDON_LOADED restores the DB.
+    -- Let callers use defaults until then, without creating early saved state.
+    if not key or not iRCDB then return nil end
     iRCDB.connections = iRCDB.connections or {}
     local connection = iRCDB.connections[key]
     if not connection then
-        connection = { key = key, guildName = GetGuildInfo("player"), rulesVersion = 1, members = {} }
+        connection = { key = key, guildName = GetGuildInfo("player"), rulesVersion = 1, active = false, members = {} }
         iRCDB.connections[key] = connection
     end
+    if connection.active == nil then connection.active = false end
     connection.members = connection.members or {}
     connection.rules = connection.rules or {}
     for key, value in pairs(self.DefaultConnectionRules) do
         if connection.rules[key] == nil then connection.rules[key] = value end
     end
+    if connection.rules.guildRace == "" and self:IsGuildMaster() then
+        local _, raceFile = UnitRace("player")
+        connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
+    end
     return connection
 end
 
 function iRC:IsGuildAdmin()
-    if self:IsTestGuildMaster() then return true end
-    local _, _, rankIndex = GetGuildInfo and GetGuildInfo("player")
+    if self:IsGuildMaster() then return true end
+    if not GetGuildInfo then return false end
+    local _, _, rankIndex = GetGuildInfo("player")
     return type(rankIndex) == "number" and rankIndex <= 1
 end
 
 function iRC:IsGuildMaster()
-    if self:IsTestGuildMaster() then return true end
-    local _, _, rankIndex = GetGuildInfo and GetGuildInfo("player")
+    if self:IsTestGuildMaster() or self:IsTestAdminGuildMaster() then return true end
+    if not GetGuildInfo then return false end
+    local _, _, rankIndex = GetGuildInfo("player")
     return rankIndex == 0
 end
 
@@ -291,12 +315,40 @@ function iRC:IsTestGuildMasterName(name)
     return GetRealmName and string.lower(GetRealmName()) == string.lower(testRealm) or false
 end
 
+function iRC:IsTestAdminName(name)
+    if type(name) ~= "string" or name == "" then return false end
+
+    local configuredName = self.TestAdminName
+    if type(configuredName) ~= "string" or configuredName == "" then return false end
+    if string.lower(name) == string.lower(configuredName) then return true end
+
+    local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
+    if not testName or name:find("-", 1, true) or string.lower(name) ~= string.lower(testName) then
+        return false
+    end
+    return GetRealmName and string.lower(GetRealmName()) == string.lower(testRealm) or false
+end
+
 function iRC:IsTestGuildMaster()
     return self:IsTestGuildMasterName(self:GetPlayerName())
 end
 
+function iRC:IsTestAdmin()
+    return self:IsTestAdminName(self:GetPlayerName())
+end
+
+function iRC:IsTestAdminGuildMaster()
+    return self:IsTestAdmin() and self:GetSettings().testGuildMasterOverride == true
+end
+
+function iRC:ActivateGuildForTesting()
+    if not self:IsTestAdmin() then return false end
+    self:GetSettings().testGuildMasterOverride = true
+    return self:SetGuildConnectionActive(true)
+end
+
 function iRC:IsGuildMasterName(name)
-    if self:IsTestGuildMasterName(name) then return true end
+    if self:IsTestGuildMasterName(name) or self:IsTestAdminName(name) then return true end
     if type(name) ~= "string" or not GetNumGuildMembers or not GetGuildRosterInfo then return false end
     for index = 1, GetNumGuildMembers(true) do
         local memberName, _, rankIndex = GetGuildRosterInfo(index)
@@ -318,6 +370,21 @@ function iRC:GetGuildFoundTradeStatus(name)
     if type(name) ~= "string" or name == "" then return false, "Choose a guild member first." end
     if not self:IsGuildMemberName(name) then
         return false, name .. " is not in your guild."
+    end
+
+    if self.RaceLockedSync then
+        local ownVerified, ownClean = self.RaceLockedSync:GetLocalRawStatus()
+        local own = self.RaceLockedSync:GetStatus(self:GetPlayerName())
+        if own then
+            if own.verified ~= nil then ownVerified = own.verified end
+            if own.clean ~= nil then ownClean = own.clean end
+        end
+        if not ownVerified or not ownClean then return false, self:Text("RL_LOCAL_INELIGIBLE") end
+        local status = self.RaceLockedSync:GetStatus(name)
+        if status and (status.lastSeen or status.gmTimestamp) then
+            if status.verified == true and status.clean == true then return true end
+            return false, self:Text("RL_MEMBER_INELIGIBLE", name)
+        end
     end
 
     local profile = self:FindConnectionProfile(name)
@@ -342,7 +409,7 @@ function iRC:GetGuildFoundTradeStatus(name)
 end
 
 function iRC:IsGuildOnlyGroup()
-    if not self:IsInGuildConnection() then return false end
+    if not self:IsGuildConnectionActive() then return false end
     local inRaid = IsInRaid and IsInRaid()
     local memberCount = inRaid and (GetNumGroupMembers and GetNumGroupMembers() or 0) or (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0)
     if memberCount < 1 then return false end
@@ -350,6 +417,71 @@ function iRC:IsGuildOnlyGroup()
         local unit = inRaid and "raid" .. index or "party" .. index
         if (not UnitIsUnit or not UnitIsUnit(unit, "player")) and not self:IsGuildMemberName(UnitName(unit)) then return false end
     end
+    return true
+end
+
+function iRC:NormalizeGuildRace(race)
+    local token = tostring(race or ""):upper():gsub("%s+", "")
+    if token == "UNDEAD" then token = "SCOURGE" end
+    return GuildRaceLookup[token] and token or ""
+end
+
+function iRC:GetAvailableGuildRaces()
+    local races = {}
+    for _, race in ipairs(self.GuildRaceOrder) do races[#races + 1] = race end
+    if self:SupportsTBCPlayableRaces() then
+        for _, race in ipairs(self.GuildRaceTBCOrder) do races[#races + 1] = race end
+    end
+    return races
+end
+
+function iRC:GetGuildRace()
+    return self:NormalizeGuildRace(self:GetConnectionRules().guildRace)
+end
+
+function iRC:SetGuildRace(race)
+    if not self:IsGuildMaster() then return false end
+    local normalizedRace = self:NormalizeGuildRace(race)
+    if normalizedRace == "" then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.rules.guildRace = normalizedRace
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:IsGuildConnectionActive()
+    local connection = self:GetConnection()
+    return connection and connection.active == true or false
+end
+
+function iRC:SetGuildConnectionActive(active, receivedFromGuild)
+    if not receivedFromGuild and not self:IsGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    active = active and true or false
+    if connection.active == active then return false end
+    connection.active = active
+    if active and not receivedFromGuild and self:GetGuildRace() == "" then
+        local _, raceFile = UnitRace("player")
+        connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
+    end
+    if not active then
+        if self.ResetPresenceNotificationChecks then self:ResetPresenceNotificationChecks() end
+        connection.attentionSince = {}
+        connection.newMemberChecks = {}
+    end
+    if not receivedFromGuild and self.SendGuildActivation then self:SendGuildActivation() end
+    if active and not receivedFromGuild then
+        if self.SendConnectionRules then self:SendConnectionRules() end
+        if self.SendHello then self:SendHello() end
+        if self.Compatibility and self.Compatibility.BroadcastAll then self.Compatibility:BroadcastAll() end
+    end
+    if active and self.RaceLockedSync then self.RaceLockedSync:Broadcast() end
+    if active and self.RefreshGuildRoster then self:RefreshGuildRoster() end
+    if self.Enforcement then self.Enforcement:Refresh() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
 

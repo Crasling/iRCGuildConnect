@@ -27,7 +27,7 @@ warningFrame.text:SetTextColor(1, 0.10, 0.10)
 warningFrame:Hide()
 
 local function isRuleEnabled(key)
-    return iRC:IsInGuildConnection() and iRC:GetConnectionRules()[key] == true
+    return iRC:IsGuildConnectionActive() and iRC:GetConnectionRules()[key] == true
 end
 
 local function isLevel60GuildFoundActive()

@@ -97,7 +97,7 @@ function Dashboard:Create()
         self.attentionTimerElapsed = self.attentionTimerElapsed + elapsed
         if self.attentionTimerElapsed >= 1 then
             self.attentionTimerElapsed = 0
-            Dashboard:Refresh()
+            Dashboard:RenderVisibleRows()
         end
     end)
     tinsert(UISpecialFrames, frame:GetName())
@@ -156,6 +156,7 @@ function Dashboard:Create()
         if iRC.Compatibility and iRC.Compatibility.BroadcastAll then
             iRC.Compatibility:BroadcastAll()
         end
+        if iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
         Dashboard:Refresh()
     end)
 
@@ -181,13 +182,17 @@ function Dashboard:Create()
     end
     frame.filterButtons, frame.filters, frame.headers = {}, {}, {}
     for index = 1, 4 do
-        local button = CreateFrame("Button", nil, main, "UIPanelButtonTemplate")
+        local button = CreateFrame("Button", nil, main)
         button:SetSize(124, 23)
         button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 130, -126)
         button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
         button.activeGlow:SetAllPoints(button)
-        button.activeGlow:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.26)
-        button.activeGlow:Hide()
+        button.activeGlow:SetColorTexture(0, 0, 0, 0)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        button.text:SetPoint("CENTER")
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints(button)
+        button.highlight:SetColorTexture(1, 1, 1, 0.08)
         button:Hide()
         frame.filterButtons[index] = button
     end
@@ -220,6 +225,8 @@ function Dashboard:Create()
     frame.content:SetHeight(1)
     scroll:SetScrollChild(frame.content)
     frame.rows = {}
+    frame.rowData = {}
+    scroll:HookScript("OnVerticalScroll", function() Dashboard:RenderVisibleRows() end)
     frame.tab = "Overview"
     return frame
 end
@@ -249,12 +256,9 @@ local function setFilters(frame, choices)
         local choice = choices[index]
         if choice then
             local active = choice.id == selected
-            button:SetText((active and "• " or "") .. choice.label)
-            button:SetEnabled(true)
-            button.activeGlow:SetShown(active)
-            if button.GetFontString and button:GetFontString() then
-                button:GetFontString():SetTextColor(unpack(active and ORANGE or GRAY))
-            end
+            button.text:SetText(choice.label)
+            button.activeGlow:SetColorTexture(active and 1 or 0, active and 0.59 or 0, active and 0.09 or 0, active and 0.25 or 0)
+            button.text:SetFontObject(active and GameFontHighlight or GameFontNormal)
             button:SetScript("OnClick", function()
                 frame.filters[frame.tab] = choice.id
                 Dashboard:Refresh()
@@ -292,9 +296,15 @@ local function setSummaryCards(frame, cards)
     end
 end
 
-local function setRow(frame, index, values, color, onClick)
-    local row = frame.rows[index]
-    if not row then row = makeRow(frame.content, index); frame.rows[index] = row end
+local function setRow(frame, index, values, color, onClick, tooltip)
+    local data = { values = values, color = color, onClick = onClick, tooltip = tooltip }
+    frame.rowData[index] = data
+    return data
+end
+
+local function renderRow(row, data)
+    local values, color, onClick, tooltip = data.values, data.color, data.onClick, data.tooltip
+    if data.attentionSince then values[4] = data.addonText .. "\n" .. formatAttentionTimer(data.attentionSince) end
     for column = 1, 5 do
         row.columns[column]:SetText(values[column] or "")
         row.columns[column]:SetTextColor(unpack(column == 1 and (color or ORANGE) or GRAY))
@@ -302,7 +312,31 @@ local function setRow(frame, index, values, color, onClick)
     local border = color or ORANGE
     row:SetBackdropBorderColor(border[1], border[2], border[3], 0.62)
     row:SetScript("OnClick", onClick)
+    row:SetScript("OnEnter", tooltip and function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(tooltip, 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end or nil)
+    row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     row:Show()
+end
+
+function Dashboard:RenderVisibleRows()
+    local frame = self.frame
+    if not frame or not frame.rowData then return end
+    local first = math.floor(frame.scroll:GetVerticalScroll() / 60) + 1
+    local visible = math.max(0, math.min(#frame.rowData - first + 1, math.ceil(frame.scroll:GetHeight() / 60) + 1))
+    for slot = 1, visible do
+        local index = first + slot - 1
+        local row = frame.rows[slot]
+        if not row then row = makeRow(frame.content, index); frame.rows[slot] = row end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPRIGHT", frame.content, "TOPRIGHT", 0, -((index - 1) * 60))
+        renderRow(row, frame.rowData[index])
+    end
+    for slot = visible + 1, #frame.rows do frame.rows[slot]:Hide() end
 end
 
 local function classSummary(classes)
@@ -313,9 +347,11 @@ local function classSummary(classes)
 end
 
 function Dashboard:Refresh()
+    self.pendingRefresh = nil
     local frame = self:Create()
+    frame.rowData = {}
     local connection = iRC:GetConnection()
-    frame.status:SetText(connection and (iRC.Colors.Green .. "Connected: " .. iRC.Colors.Reset .. connection.guildName) or (iRC.Colors.Red .. "No guild connection" .. iRC.Colors.Reset))
+    frame.status:SetText(connection and (iRC:IsGuildConnectionActive() and (iRC.Colors.Green .. "Connected: " .. iRC.Colors.Reset .. connection.guildName) or (iRC.Colors.Yellow .. iRC:Text("DASHBOARD_STATUS_INACTIVE") .. " " .. iRC.Colors.Reset .. connection.guildName)) or (iRC.Colors.Red .. "No guild connection" .. iRC.Colors.Reset))
     for name, tab in pairs(frame.tabs) do
         local active = name == frame.tab
         tab:SetBackdropColor(active and 0.24 or 0.08, active and 0.16 or 0.06, active and 0.04 or 0.04, 0.96)
@@ -361,7 +397,7 @@ function Dashboard:Refresh()
             local state = member.verification and member.verification.state
             if state == "verified" then verified = verified + 1
             elseif state == "compatible" then compatible = compatible + 1
-            elseif state == "offline" then offline = offline + 1
+            elseif state == "offline" or state == "inactive" then offline = offline + 1
             else attention = attention + 1 end
         end
         setSummaryCards(frame, {
@@ -375,15 +411,15 @@ function Dashboard:Refresh()
         })
         frame.title:SetText("Guild verification")
         frame.subtitle:SetText("Live presence status. Missing or stale online members are handled by the officer notification system.")
-        setHeaders(frame, { "Member", "Race / Class", "Level", "Live status", "Self-Found / Points" }, { "name", "race", "level", "status", "points" }, "name")
+        setHeaders(frame, { "Member", "Race / Class", "Level", "Live status", "Self-Found" }, { "name", "race", "level", "status", "selfFound" }, "name")
         members = filterAndSort(frame, members, function(member)
             local state = member.verification and member.verification.state or "missing"
-            return filter == "all" or state == filter or (filter == "attention" and state ~= "verified" and state ~= "compatible" and state ~= "offline")
+            return filter == "all" or state == filter or (filter == "attention" and state ~= "verified" and state ~= "compatible" and state ~= "offline" and state ~= "inactive")
         end, function(member, key)
             if key == "name" then return member.name or "" end
             if key == "race" then return (member.race or "") .. (member.class or "") end
             if key == "status" then return member.verification and member.verification.state or "missing" end
-            if key == "points" then return member.points or 0 end
+            if key == "selfFound" then return member.selfFound and 1 or 0 end
             return member.level or 0
         end)
         for _, member in ipairs(members) do
@@ -395,15 +431,18 @@ function Dashboard:Refresh()
                 or (member.compatibility and (sourceLabel(member.source) .. " · " .. verification.label))
                 or verification.label
             local attentionTimer = formatAttentionTimer(member.attentionSince)
+            local addonText = addon
             if attentionTimer then addon = addon .. "\n" .. attentionTimer end
             local selfFound = member.profile and (member.selfFound and "Active" or "Inactive")
                 or ((member.compatibility or compatiblePresence) and (member.selfFound and "Active (ForkEU)" or "Inactive (ForkEU)"))
                 or "Unknown"
             local selectedMember = member
-            local color = verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or (verification.state == "offline" and GRAY or RED))
-            setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, selfFound .. " / " .. member.points }, color, function()
+            if iRC.RaceLockedSync then selfFound = selfFound .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, true, member.raceLockedStatus) end
+            local color = verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED))
+            local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, selfFound }, color, function()
                 if selectedMember.profile then iRC.AchievementsUI:Open(selectedMember.name); iRC:RequestInspection(selectedMember.name) end
-            end)
+            end, iRC.RaceLockedSync and iRC.RaceLockedSync:DescribeStatus(member.name, false, member.raceLockedStatus))
+            data.attentionSince, data.addonText = member.attentionSince, addonText
         end
     elseif frame.tab == "Champions" then
         local _, race = UnitRace("player")
@@ -412,28 +451,28 @@ function Dashboard:Refresh()
         setSummaryCards(frame, {
             { label = "Your race", value = race or "Unknown", color = ORANGE },
             { label = "Champions", value = tostring(#champions), color = GREEN },
-            { label = "Top level", value = tostring(top and top.level or 0), color = ORANGE },
-            { label = "Top achievement points", value = tostring(top and top.points or 0), color = ORANGE },
+            { label = "iRC profiles", value = tostring((function() local n = 0; for _, member in ipairs(champions) do if member.profile then n = n + 1 end end; return n end)()), color = GREEN },
+            { label = "Highest level", value = tostring(top and top.level or 0), color = ORANGE },
         })
         local filter = setFilters(frame, {
             { id = "all", label = "All sources" }, { id = "irc", label = "iRC only" }, { id = "compatible", label = "Compatible" },
         })
         frame.title:SetText("Champions of " .. (race or "your race"))
-        frame.subtitle:SetText("Guild members of your race, ranked by level and achievement points.")
-        setHeaders(frame, { "Champion", "Class", "Level", "Achievement Points", "Source" }, { "name", "class", "level", "points", "source" }, "level")
+        frame.subtitle:SetText("Guild members of your race, ranked by level. Achievement statistics are temporarily disabled.")
+        setHeaders(frame, { "Champion", "Class", "Level", "Status", "Source" }, { "name", "class", "level", "status", "source" }, "level")
         champions = filterAndSort(frame, champions, function(member)
             return filter == "all" or (filter == "irc" and member.profile) or (filter == "compatible" and member.compatibility and not member.profile)
         end, function(member, key)
             if key == "name" then return member.name or "" end
             if key == "class" then return member.class or "" end
-            if key == "points" then return member.points or 0 end
+            if key == "status" then return member.verification and member.verification.state or "" end
             if key == "source" then return member.source or "" end
             return member.level or 0
         end)
         for _, member in ipairs(champions) do
             count = count + 1
             local selectedMember = member
-            setRow(frame, count, { "#" .. count .. " " .. displayMemberName(member.name), member.class, tostring(member.level), tostring(member.points or 0), (member.profile or member.compatibility) and sourceLabel(member.source or "iRC") or "Not detected" }, member.profile and GREEN or (member.compatibility and RED or ORANGE), function()
+            setRow(frame, count, { "#" .. count .. " " .. displayMemberName(member.name), member.class, tostring(member.level), member.verification and member.verification.label or "Unknown", (member.profile or member.compatibility) and sourceLabel(member.source or "iRC") or "Not detected" }, member.profile and GREEN or (member.compatibility and RED or ORANGE), function()
                 if selectedMember.profile then iRC.AchievementsUI:Open(selectedMember.name); iRC:RequestInspection(selectedMember.name) end
             end)
         end
@@ -448,14 +487,14 @@ function Dashboard:Refresh()
             { label = "Ranked members", value = tostring(#leaderboard), color = ORANGE },
             { label = "iRC profiles", value = tostring(verified), color = GREEN },
             { label = "Compatible profiles", value = tostring(compatible), color = RED },
-            { label = "Top achievement points", value = tostring(top and top.points or 0), color = ORANGE },
+            { label = "Highest level", value = tostring(top and top.level or 0), color = ORANGE },
         })
         local filter = setFilters(frame, {
             { id = "all", label = "All sources" }, { id = "irc", label = "iRC only" }, { id = "compatible", label = "Compatible" },
         })
         frame.title:SetText("Connection leaderboard")
-        frame.subtitle:SetText("Guild rankings with source-aware progress data. A character is represented once.")
-        setHeaders(frame, { "Name", "Level", "Achievement Points", "Guild", "Source" }, { "name", "level", "points", "guild", "source" }, "points")
+        frame.subtitle:SetText("Guild roster by level and addon source. Achievement statistics are temporarily disabled.")
+        setHeaders(frame, { "Name", "Level", "Guild", "Source", "Status" }, { "name", "level", "guild", "source", "status" }, "level")
         local connection = iRC:GetConnection()
         local guildName = connection and connection.guildName or "Unknown"
         leaderboard = filterAndSort(frame, leaderboard, function(member)
@@ -465,14 +504,14 @@ function Dashboard:Refresh()
             if key == "name" then return member.name or "" end
             if key == "guild" then return guildName end
             if key == "source" then return score.source or member.source or "" end
-            if key == "points" then return score.points or member.points or 0 end
+            if key == "status" then return member.verification and member.verification.state or "" end
             return score.level or member.level or 0
         end)
         for _, member in ipairs(leaderboard) do
             count = count + 1
             local score = member.leaderboard or {}
             local selectedMember = member
-            setRow(frame, count, { "#" .. count .. " " .. displayMemberName(member.name), tostring(score.level or member.level or 1), tostring(score.points or member.points or 0), guildName, sourceLabel(score.source or "iRC") }, member.profile and GREEN or RED, function()
+            setRow(frame, count, { "#" .. count .. " " .. displayMemberName(member.name), tostring(score.level or member.level or 1), guildName, sourceLabel(score.source or "iRC"), member.verification and member.verification.label or "Unknown" }, member.profile and GREEN or RED, function()
                 if selectedMember.profile then
                     iRC.AchievementsUI:Open(selectedMember.name)
                     if iRC:NormalizeName(selectedMember.name) ~= iRC:NormalizeName(iRC:GetPlayerName()) then iRC:RequestInspection(selectedMember.name) end
@@ -480,9 +519,9 @@ function Dashboard:Refresh()
             end)
         end
     end
-    for index = count + 1, #frame.rows do frame.rows[index]:Hide() end
     frame.content:SetHeight(math.max(1, count * 60))
-    frame.scroll:SetVerticalScroll(0)
+    frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll(), math.max(0, count * 60 - frame.scroll:GetHeight())))
+    self:RenderVisibleRows()
 end
 
 function Dashboard:Open()
@@ -503,7 +542,15 @@ function Dashboard:Toggle()
 end
 
 function Dashboard:RefreshIfShown()
-    if self.frame and self.frame:IsShown() then self:Refresh() end
+    if not self.frame or not self.frame:IsShown() or self.pendingRefresh then return end
+    if not C_Timer or not C_Timer.After then self:Refresh(); return end
+    local ticket = {}
+    self.pendingRefresh = ticket
+    C_Timer.After(0.2, function()
+        if Dashboard.pendingRefresh ~= ticket then return end
+        Dashboard.pendingRefresh = nil
+        if Dashboard.frame and Dashboard.frame:IsShown() then Dashboard:Refresh() end
+    end)
 end
 
 function iRC:OpenConnectionDashboard()

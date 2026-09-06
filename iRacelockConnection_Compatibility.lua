@@ -24,9 +24,9 @@ local function registerPrefix(prefix)
     if RegisterAddonMessagePrefix then return RegisterAddonMessagePrefix(prefix) end
 end
 
-local function send(prefix, message, distribution)
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(prefix, message, distribution) end
-    if SendAddonMessage then return SendAddonMessage(prefix, message, distribution) end
+local function send(prefix, message, distribution, target)
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(prefix, message, distribution, target) end
+    if SendAddonMessage then return SendAddonMessage(prefix, message, distribution, target) end
 end
 
 local function positiveNumber(value, fallback)
@@ -83,7 +83,7 @@ function Compatibility:GetLocalStats(source)
         name = profile.name,
         guid = profile.guid,
         level = profile.level,
-        points = readExternalMetric(apiPrefix .. "GetPlayerAchievementPoints", profile.points),
+        points = readExternalMetric(apiPrefix .. "GetPlayerAchievementPoints", iRC:GetHardcoreAchievementPoints()),
         statistics = {
             enemiesSlain = readExternalMetric(apiPrefix .. "GetPlayerEnemiesSlain", statistics.enemiesSlain),
             dungeonBosses = readExternalMetric(apiPrefix .. "GetPlayerDungeonCompletions", statistics.dungeonBosses),
@@ -93,7 +93,7 @@ function Compatibility:GetLocalStats(source)
 end
 
 function Compatibility:StoreStats(entry)
-    if not entry or not entry.name or not iRC:IsInGuildConnection() then return end
+    if not entry or not entry.name or not iRC:IsGuildConnectionActive() then return end
     local connection = iRC:GetConnection()
     connection.compatibilityMembers = connection.compatibilityMembers or {}
     local key = iRC:NormalizeName(entry.name)
@@ -107,7 +107,7 @@ function Compatibility:StoreStats(entry)
 end
 
 function Compatibility:StoreSelfFound(name, selfFound, source)
-    if not name or not iRC:IsInGuildConnection() then return end
+    if not name or not iRC:IsGuildConnectionActive() then return end
     local connection = iRC:GetConnection()
     connection.compatibilityMembers = connection.compatibilityMembers or {}
     local key = iRC:NormalizeName(name)
@@ -124,7 +124,7 @@ function Compatibility:StoreSelfFound(name, selfFound, source)
 end
 
 function Compatibility:StoreGuildFoundVerification(name, verified, clean, source)
-    if not name or not iRC:IsInGuildConnection() then return end
+    if not name or not iRC:IsGuildConnectionActive() then return end
     local connection = iRC:GetConnection()
     connection.compatibilityMembers = connection.compatibilityMembers or {}
     local key = iRC:NormalizeName(name)
@@ -141,6 +141,7 @@ function Compatibility:StoreGuildFoundVerification(name, verified, clean, source
 end
 
 function iRC:GetCompatibilityMember(name)
+    if not self:IsGuildConnectionActive() then return nil end
     local connection = self:GetConnection()
     return connection and connection.compatibilityMembers and connection.compatibilityMembers[self:NormalizeName(name)] or nil
 end
@@ -151,8 +152,9 @@ function iRC:GetCompatibilityStats(name)
 end
 
 function Compatibility:BroadcastStats()
-    if not iRC:IsInGuildConnection() then return end
+    if not iRC:IsGuildConnectionActive() then return end
     for prefix, source in pairs(STATS_PREFIXES) do
+        local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
         local entry = self:GetLocalStats(source)
         if entry.name and entry.name ~= "" and entry.guid and entry.guid ~= "" then
             local statistics = entry.statistics or {}
@@ -160,34 +162,46 @@ function Compatibility:BroadcastStats()
                 "3", entry.name, entry.guid, tostring(entry.points), tostring(entry.level),
                 tostring(statistics.enemiesSlain or 0), tostring(statistics.dungeonBosses or 0), tostring(statistics.jumps or 0),
             }, SEPARATOR)
-            if #payload <= 255 then send(prefix, payload, "GUILD") end
+            if #payload <= 255 and not (loaded and loaded(source)) then send(prefix, payload, "GUILD") end
             self:StoreStats(entry)
         end
     end
 end
 
 function Compatibility:BroadcastSelfFound(messageType)
-    if not iRC:IsInGuildConnection() then return end
-    send(SELF_FOUND_PREFIX, messageType .. "," .. (iRC:GetSelfFoundState() and "1" or "0"), "GUILD")
+    if not iRC:IsGuildConnectionActive() then return end
+    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
+    if not (loaded and loaded("RaceLockedForkEU")) then
+        send(SELF_FOUND_PREFIX, messageType .. "," .. (iRC:GetSelfFoundState() and "1" or "0"), "GUILD")
+    end
     self:StoreSelfFound(iRC:GetPlayerName(), iRC:GetSelfFoundState(), "iRC")
 end
 
 function Compatibility:BroadcastAll()
-    if not iRC:IsInGuildConnection() then return end
+    if not iRC:IsGuildConnectionActive() then return end
     self:BroadcastStats()
     send("RaceLockedForkEU", REQUEST_PAYLOAD, "GUILD")
     self:BroadcastSelfFound("PING")
+    if iRC.RaceLockedSync then iRC.RaceLockedSync:Broadcast() end
     iRC:DebugMsg(iRC:Text("FORKEU_REFRESH_SENT"), 3)
 end
 
+function Compatibility:RequestPresenceCheck()
+    if not iRC:IsGuildConnectionActive() then return false end
+    if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
+    -- An explicit probe is needed even with ForkEU co-installed; its periodic
+    -- broadcaster may not run during our confirmation window.
+    send(SELF_FOUND_PREFIX, "PING," .. (iRC:GetSelfFoundState() and "1" or "0"), "GUILD")
+    send("RaceLockedForkEU", REQUEST_PAYLOAD, "GUILD")
+    return true
+end
+
 function iRC:RequestRaceLockedTradeVerification(targetName)
-    if not self:IsInGuildConnection() or type(targetName) ~= "string" or targetName == "" then return false end
+    if not self:IsGuildConnectionActive() or type(targetName) ~= "string" or targetName == "" then return false end
     local targetKey = self:NormalizeName(targetName)
     local requestedAt = pendingRaceLockedTradeRequests[targetKey]
     if requestedAt and time() - requestedAt < 6 then return true end
-    local evidence = self:GetSelfFoundEvidence()
-    local isVerified = (UnitLevel("player") or 0) >= 60
-        and (evidence.status == "VERIFIED" or evidence.status == "LEVEL_60_EXCEPTION")
+    local isVerified = self:GetGuildFoundTradeStatus(self:GetPlayerName()) == true
     pendingRaceLockedTradeRequests[targetKey] = time()
     send("RaceLocked", "TV:" .. (isVerified and "1" or "0"), "WHISPER", targetName)
     return true
@@ -212,6 +226,7 @@ local function handleSelfFound(message, sender)
 end
 
 local function handleGuildFoundRoster(message, sender)
+    if iRC.RaceLockedSync then return end -- The full roster protocol has its own receiver.
     if not iRC:IsGuildMemberName(sender) or type(message) ~= "string" then return end
     local name, verified, clean = message:match("^S:([^,]+),([01]),([01]),")
     if name and iRC:NormalizeName(name) == iRC:NormalizeName(sender) then
@@ -223,17 +238,21 @@ local function handleTradeVerification(message, sender)
     if not iRC:IsGuildMemberName(sender) or type(message) ~= "string" then return end
     local verified = message:match("^TV:([01])$")
     if not verified then return end
+    -- The original owns its trade exchange when installed alongside iRC.
+    if iRC.RaceLockedSync and iRC.RaceLockedSync:IsOriginalLoaded() then
+        iRC.RaceLockedSync:StoreTradeStatus(sender, verified == "1")
+        return
+    end
     local senderKey = iRC:NormalizeName(sender)
     local requestedAt = pendingRaceLockedTradeRequests[senderKey]
     if requestedAt and time() - requestedAt <= 6 then
         pendingRaceLockedTradeRequests[senderKey] = nil
     else
-        local evidence = iRC:GetSelfFoundEvidence()
-        local localVerified = (UnitLevel("player") or 0) >= 60
-            and (evidence.status == "VERIFIED" or evidence.status == "LEVEL_60_EXCEPTION")
+        local localVerified = iRC:GetGuildFoundTradeStatus(iRC:GetPlayerName()) == true
         send("RaceLocked", "TV:" .. (localVerified and "1" or "0"), "WHISPER", sender)
     end
     Compatibility:StoreGuildFoundVerification(sender, verified == "1", verified == "1", RACELOCKED_SOURCE)
+    if iRC.RaceLockedSync then iRC.RaceLockedSync:StoreTradeStatus(sender, verified == "1") end
     local member = iRC:GetCompatibilityMember(sender)
     if member and member.guildFound then member.guildFound.tradeHandshakeAt = time() end
     if iRC.Enforcement and iRC.Enforcement.CheckTradeRestriction then iRC.Enforcement:CheckTradeRestriction() end
@@ -253,6 +272,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if C_Timer and C_Timer.After then C_Timer.After(4, function() Compatibility:BroadcastAll() end) end
         if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(60, function() Compatibility:BroadcastAll() end) end
     elseif event == "CHAT_MSG_ADDON" then
+        if not iRC:IsGuildConnectionActive() then return end
         local prefix, message, _, sender = ...
         if STATS_PREFIXES[prefix] then
             if prefix == "RaceLocked" then handleTradeVerification(message, sender) end

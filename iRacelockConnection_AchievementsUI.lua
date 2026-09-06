@@ -36,18 +36,6 @@ local RACE_LABELS = {
     ORC = "Orc", SCOURGE = "Undead", TAUREN = "Tauren", TROLL = "Troll", BLOODELF = "Blood Elf",
 }
 
--- ForkEU's published guild slots. These are display data only; iRC never treats them as guild membership or verification data.
-local FORKEU_GUILD_NAMES = {
-    HUMAN = "Northshire Survivors",
-    NIGHTELF = "Children of Elune",
-    DWARF = "—",
-    GNOME = "—",
-    ORC = "—",
-    TROLL = "Darkspear Tribe",
-    TAUREN = "Fear The Beef",
-    SCOURGE = "WE are FORSAKEN",
-}
-
 local RACES_BY_FACTION = {
     Horde = { "TROLL", "ORC", "SCOURGE", "TAUREN" },
     Alliance = { "HUMAN", "DWARF", "NIGHTELF", "GNOME" },
@@ -175,6 +163,10 @@ local function makeRaceCard(parent)
     card.rank = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     card.rank:SetPoint("TOPRIGHT", -14, -16)
     card.rank:SetTextColor(unpack(COLORS.gold))
+    card.freshness = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.freshness:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -27)
+    card.freshness:SetPoint("RIGHT", card, "RIGHT", -14, 0)
+    card.freshness:SetJustifyH("LEFT")
     card.guildLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     card.guildLabel:SetPoint("TOP", card, "TOP", 0, -65)
     card.guildLabel:SetText("Guilds")
@@ -192,7 +184,7 @@ local function makeRaceCard(parent)
     card.membersLabel:SetText("Total players")
     card.pointsLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     card.pointsLabel:SetPoint("TOP", card, "TOP", 102, -104)
-    card.pointsLabel:SetText("Guild AP")
+    card.pointsLabel:SetText("Level 60")
     card.average = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     card.average:SetPoint("TOP", card.averageLabel, "BOTTOM", 0, -3)
     card.members = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -213,6 +205,30 @@ local function makeRaceCard(parent)
     card.classBar:SetPoint("TOPRIGHT", -16, -168)
     card.classBar:SetHeight(7)
     card.classSegments = {}
+    card.metrics = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.metrics:SetPoint("TOPLEFT", 12, -184)
+    card.metrics:SetPoint("TOPRIGHT", -12, -184)
+    card.metrics:SetJustifyH("CENTER")
+    card:EnableMouse(true)
+    card:SetScript("OnEnter", function(self)
+        if not GameTooltip or not self.report then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(iRC:GetRaceOverviewGuildName(self.report.race) or "—")
+        if self.report.timestamp and self.report.timestamp > 0 then GameTooltip:AddLine(iRC:Text("RL_GRID_UPDATED", date("%Y-%m-%d %H:%M", self.report.timestamp))) end
+        if self.report.source then GameTooltip:AddLine(iRC:Text("RL_GRID_SOURCE", self.report.source)) end
+        GameTooltip:AddLine(iRC:Text("RL_GRID_AP_SOURCE"), 1, 1, 1, true)
+        if self.report.populationSource == "verified_compatible" then
+            GameTooltip:AddLine(iRC:Text("RL_GRID_POPULATION", self.report.verifiedMembers or 0, self.report.compatibleMembers or 0), 1, 1, 1, true)
+        else
+            GameTooltip:AddLine(iRC:Text("RL_GRID_EXTERNAL_POPULATION"), 1, 1, 1, true)
+        end
+        if self.report.cached then GameTooltip:AddLine(iRC:Text("RL_GRID_CACHED"), 1, 0.65, 0) end
+        for class, average in pairs(self.report.classAverageLevels or {}) do
+            GameTooltip:AddLine(iRC:Text("RL_GRID_CLASS_LEVEL", class, average))
+        end
+        GameTooltip:Show()
+    end)
+    card:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     return card
 end
 
@@ -374,6 +390,23 @@ function UI:Create()
     frame.contentTitle = main:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.contentTitle:SetPoint("TOPLEFT", 15, -14)
     frame.contentTitle:SetTextColor(unpack(COLORS.gold))
+    frame.raceRefresh = CreateFrame("Button", nil, main, "UIPanelButtonTemplate")
+    frame.raceRefresh:SetSize(125, 23)
+    frame.raceRefresh:SetPoint("TOPRIGHT", -14, -9)
+    frame.raceRefresh:SetText(iRC:Text("RL_GRID_REFRESH"))
+    frame.raceRefresh:SetScript("OnClick", function()
+        if iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
+        UI:Refresh()
+    end)
+    frame.raceRefresh:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(iRC:Text("RL_GRID_REFRESH"))
+        GameTooltip:AddLine(iRC:Text("RL_GRID_REFRESH_TIP"), 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    frame.raceRefresh:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    frame.raceRefresh:Hide()
     frame.contentSubtitle = main:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.contentSubtitle:SetPoint("TOPLEFT", frame.contentTitle, "BOTTOMLEFT", 0, -5)
     frame.contentSubtitle:SetPoint("RIGHT", main, "RIGHT", -22, 0)
@@ -676,19 +709,19 @@ local function setRaceCard(card, group, rank)
     card.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
     card.race:SetText(RACE_LABELS[group.race] or group.race)
     card.rank:SetText("#" .. rank)
-    card.guild:SetText(FORKEU_GUILD_NAMES[group.race] or "—")
-    if group.guildName and group.guildName ~= "" then card.guild:SetText(group.guildName) end
+    card.guild:SetText(iRC:GetRaceOverviewGuildName(group.race) or "—")
     card.average:SetText(group.averageLevel or 0)
     card.members:SetText(group.members or 0)
-    card.points:SetText(formatNumber(group.points))
+    card.points:SetText(formatNumber(group.membersLevel60 or 0))
+    card.report = group
+    card.freshness:SetText(group.source and iRC:Text(group.cached and "RL_GRID_CACHED" or "RL_GRID_RECENT") or "")
+    card.metrics:SetText(iRC:Text("RL_GRID_METRICS", group.guildDeaths ~= nil and tostring(group.guildDeaths) or "—"))
     updateClassBreakdown(card, group.classes, group.members)
     card:Show()
 end
 
 local function emptyRaceGroup(race, faction)
-    -- Leave guildName empty: setRaceCard then uses ForkEU's published slot
-    -- name for that race instead of incorrectly reusing the player's guild.
-    return { race = race, faction = faction, guildName = "", members = 0, averageLevel = 0, points = 0, classes = {} }
+    return { race = race, faction = faction, guildName = iRC:GetRaceOverviewGuildName(race), members = 0, averageLevel = 0, points = 0, classes = {} }
 end
 
 local function updateRacePodium(frame, rankedGroups)
@@ -712,11 +745,11 @@ local function updateRacePodium(frame, rankedGroups)
         if group then
             entry.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
             entry.race:SetText(RACE_LABELS[group.race] or group.race)
-            entry.points:SetText(formatNumber(group.points) .. " Guild AP")
+            entry.points:SetText(formatNumber(group.members or 0) .. " players")
         else
             entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
             entry.race:SetText("No data")
-            entry.points:SetText("0 Guild AP")
+            entry.points:SetText("0 players")
         end
         entry:Show()
     end
@@ -724,11 +757,11 @@ local function updateRacePodium(frame, rankedGroups)
 end
 
 local function updateRaceOverview(frame)
-    local groupsByRace, totalPoints = {}, 0
+    local groupsByRace, totalPlayers = {}, 0
     local overviewGroups, overviewSource = iRC:GetRaceGridOverview()
     for _, group in ipairs(overviewGroups) do
         groupsByRace[group.race] = group
-        totalPoints = totalPoints + (group.points or 0)
+        totalPlayers = totalPlayers + (group.members or 0)
     end
 
     local allGroups = {}
@@ -739,14 +772,14 @@ local function updateRaceOverview(frame)
         end
     end
     table.sort(allGroups, function(a, b)
-        if a.points ~= b.points then return a.points > b.points end
         if a.members ~= b.members then return a.members > b.members end
+        if a.averageLevel ~= b.averageLevel then return a.averageLevel > b.averageLevel end
         return a.race < b.race
     end)
     local ranks = {}
     for index, group in ipairs(allGroups) do ranks[group.race] = index end
 
-    local rowHeight, gap, contentWidth = 178, 9, 675
+    local rowHeight, gap, contentWidth = 214, 9, 675
     updateRacePodium(frame, allGroups)
     local usedCards, yOffset = 0, 95
 
@@ -791,22 +824,14 @@ local function updateRaceOverview(frame)
     frame.scrollContent:SetHeight(math.max(1, yOffset - gap))
     frame.scroll:SetVerticalScroll(0)
     frame.contentTitle:SetText("RaceLocked Overview")
-    if next(groupsByRace) == nil then
-        frame.contentSubtitle:SetText("No live race data is available yet. Enable global race-grid sharing to receive public iRC reports; published RaceLocked and ForkEU guild names remain as a fallback.")
-    elseif overviewSource == "global" then
-        frame.contentSubtitle:SetText("Live iRC reports from the iRacelockConnection channel. Character data is self-reported and the shown guild is the largest reporting guild for each race.")
-    elseif overviewSource == "racelocked" then
-        frame.contentSubtitle:SetText("Live RaceLocked and ForkEU guild reports, combined with your local iRC guild roster. Each guild and race is counted once.")
-    elseif overviewSource == "combined" then
-        frame.contentSubtitle:SetText("Live iRC, RaceLocked, and ForkEU data combined. iRC uses one source per guild and race, so characters are never counted twice.")
-    else
-        frame.contentSubtitle:SetText("Ranked iRC guild progress. Enable global race-grid sharing to merge live reports from other iRC guilds; published RaceLocked and ForkEU guild names remain as a fallback.")
-    end
-    return totalPoints
+    frame.contentSubtitle:SetText(iRC:Text("RL_GRID_OVERVIEW_DESC"))
+    return totalPlayers
 end
 
 function UI:Refresh()
+    self.pendingRefresh = nil
     local frame = self:Create()
+    frame.raceRefresh:SetShown(frame.category == "Race Overview")
     local profile, completed = getProfile(frame)
     local name = profile and profile.name or frame.subjectName or iRC:GetPlayerName()
     local race, class, level = profile and profile.race or "Unknown", profile and profile.class or "Unknown", profile and profile.level or 1
@@ -827,7 +852,7 @@ function UI:Refresh()
     elseif frame.category == "Race Overview" then
         local connection = iRC:GetConnection()
         frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray .. "  Guild race progression" .. iRC.Colors.Reset)
-        frame.pointsLabel:SetText("Guild Achievement Points")
+        frame.pointsLabel:SetText("Reported Players")
         frame.points.value:SetText(formatNumber(updateRaceOverview(frame)))
     else
         updateAchievementRows(frame, profile, completed)
@@ -879,5 +904,13 @@ function UI:Toggle()
 end
 
 function UI:RefreshIfShown()
-    if self.frame and self.frame:IsShown() then self:Refresh() end
+    if not self.frame or not self.frame:IsShown() or self.pendingRefresh then return end
+    if not C_Timer or not C_Timer.After then self:Refresh(); return end
+    local ticket = {}
+    self.pendingRefresh = ticket
+    C_Timer.After(0.2, function()
+        if UI.pendingRefresh ~= ticket then return end
+        UI.pendingRefresh = nil
+        if UI.frame and UI.frame:IsShown() then UI:Refresh() end
+    end)
 end

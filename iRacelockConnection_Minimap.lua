@@ -32,7 +32,7 @@ local function createDataObject()
         end,
         OnTooltipShow = function(tooltip)
             local colors = iRC.Colors
-            tooltip:SetText(colors.iRC .. iRC.DisplayName .. colors.Green .. " v" .. iRC.Version, 1, 1, 1)
+            tooltip:SetText(colors.iRC .. iRC.DisplayName .. colors.Green .. " v" .. iRC:GetDisplayVersion(), 1, 1, 1)
             tooltip:AddLine(" ")
             tooltip:AddLine(colors.Yellow .. "Left Click: " .. colors.Orange .. "Toggle achievements", 1, 1, 1)
             tooltip:AddLine(colors.Yellow .. "Shift-Left Click: " .. colors.Orange .. "Toggle connection dashboard", 1, 1, 1)
