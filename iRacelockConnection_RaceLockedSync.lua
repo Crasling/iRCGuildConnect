@@ -84,10 +84,15 @@ function Sync:GetStatus(name, snapshot)
     if iRC:NormalizeName(name) == iRC:NormalizeName(iRC:GetPlayerName()) then
         entry.verified, entry.clean, entry.tamperAt = self:GetLocalRawStatus()
     end
+    local effectiveVerified = entry.gmVerified
+    local effectiveClean = entry.gmClean
+    if effectiveVerified == nil then effectiveVerified = entry.verified end
+    if effectiveClean == nil then effectiveClean = entry.clean end
     return {
-        -- Reported client state is authoritative. GM decisions are retained as
-        -- separate audit metadata and never replace an actual response.
-        verified = entry.verified, clean = entry.clean, source = entry.source,
+        -- Keep the member report as audit metadata, but use an explicit Guild
+        -- Master decision as the effective Guild Found result. Addon presence
+        -- is evaluated separately, so an override cannot hide a missing client.
+        verified = effectiveVerified, clean = effectiveClean, source = entry.source,
         lastSeen = entry.lastSeen, gmTimestamp = entry.gmTimestamp,
         overrideSource = entry.overrideSource, directOverride = entry.directOverride,
         tamperAt = entry.tamperAt, rawVerified = entry.verified, rawClean = entry.clean,

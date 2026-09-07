@@ -324,6 +324,8 @@ local sidebarItems = {
 local standardSidebarItems = {
     { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
+    { type = "header", label = L.MANAGEMENT_HEADER, guildFoundOnly = true },
+    { type = "tab", label = L.GUILDFOUND_TOOLS_TAB, index = 9, guildFoundOnly = true },
     { type = "header", label = "Other Addons" },
     { type = "tab", label = "iWillRemember", index = 5 },
     { type = "tab", label = "iNeedIfYouNeed", index = 6 },
@@ -331,18 +333,19 @@ local standardSidebarItems = {
     { type = "tab", label = "iSealTwist", index = 8 },
 }
 for _, item in ipairs(standardSidebarItems) do sidebarItems[#sidebarItems + 1] = item end
-sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.GUILDFOUND_TOOLS_TAB, index = 9, guildFoundOnly = true }
 if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "header", label = L.TEST_ADMIN_HEADER }
     sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 10 }
 end
 local sidebarY = -6
+local guildFoundSidebarHeader
 for _, item in ipairs(sidebarItems) do
     if item.type == "header" then
         local headerText = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         headerText:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 12, sidebarY - 2)
         headerText:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
         headerText:SetText(item.label)
+        if item.guildFoundOnly then guildFoundSidebarHeader = headerText end
         sidebarY = sidebarY - 20
     else
         local button = CreateFrame("Button", nil, sidebar)
@@ -447,7 +450,7 @@ selfFoundOnlyCheck, y = CreateSettingsCheckbox(connectionContent, "Self-Found on
     function() return iRC:GetConnectionRules().selfFoundOnly end,
     function(value) iRC:SetConnectionRule("selfFoundOnly", value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Level 60 Self-Found Options", y - 2)
-level60GuildFoundCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Guild Found", "At level 60, replace Self-Found with Guild Found. Item exchange is limited to verified guild members; iRC blocks the Auction House and transactions outside the guild.", y,
+level60GuildFoundCheck, y = CreateSettingsCheckbox(connectionContent, L.LEVEL60_GUILD_FOUND, L.LEVEL60_GUILD_FOUND_DESC, y,
     function() return iRC:GetConnectionRules().level60GuildFound end,
     function(value) iRC:SetConnectionRule("level60GuildFound", value) end, 18)
 level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 SF Exception", "At level 60, iRC stops enforcing Self-Found and Guild Found economic limits. You may trade, send mail, and use the Auction House normally.", y,
@@ -656,6 +659,7 @@ end
 
 local function Refresh()
     local guildFoundAvailable = CanUseGuildFoundTools()
+    if guildFoundSidebarHeader then guildFoundSidebarHeader:SetShown(guildFoundAvailable) end
     if sidebarButtons[9] then sidebarButtons[9]:SetShown(guildFoundAvailable) end
     if selectedTab == 9 and not guildFoundAvailable then ShowTab(1) end
     if guildFoundAuditText then

@@ -459,9 +459,12 @@ local function handleMessage(prefix, message, sender)
         return
     end
     local report = parseGuildReport(parts)
-    if not report or fullNameKey(report.name) ~= fullNameKey(sender) then return end
+    -- WoW may qualify the channel sender with its realm while the profile in
+    -- the payload uses the character's short name. Compare them using iRC's
+    -- canonical character-name form without weakening the sender check.
+    if not report or iRC:NormalizeName(report.name) ~= iRC:NormalizeName(sender) then return end
     iRC:CheckForNewVersion(report.addonVersion)
-    if RaceGrid:StoreGuildReport(report) then lastRefreshActivityAt = GetTime() end
+    RaceGrid:StoreGuildReport(report)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
 end
 

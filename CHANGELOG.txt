@@ -2,6 +2,16 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.12 - Guild Found Management & Statistics Fixes
+--------------------------------------------------------------------------------
+ [FIX] Receiving another guild's statistics no longer starts or resets the local Refresh / Share cooldown
+ [FIX] Guild Statistics now accepts valid reports when WoW includes the sender's realm in the channel name
+ [FIX] Guild Master verification decisions now update a level 60 member's displayed Guild Found and gold status while addon presence remains independently verified
+ [CHANGED] Guild Found tools are grouped under a dedicated Management category in the options panel
+ [CHANGED] The Level 60 Guild Found description now explains its gold-status and item-transaction monitoring
+ [CHANGED] Guild Statistics cards are shorter and no longer display guild deaths
+
+
 v0.2.11 - Guild Found Security & Audit
 --------------------------------------------------------------------------------
  [CHANGED] Guild Statistics refresh now uses a five-minute shared cooldown to prevent repeated channel traffic
