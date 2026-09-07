@@ -380,7 +380,7 @@ function RaceGrid:PublishFromClick()
     if not self:IsEnabled() then return false end
     local remaining = self:GetRefreshCooldownRemaining()
     if remaining > 0 then
-        iRC:Print(iRC:Text("RACEGRID_REFRESH_COOLDOWN_ACTIVE", math.ceil(remaining)))
+        iRC:DebugMsg(iRC:Text("RACEGRID_REFRESH_COOLDOWN_ACTIVE", math.ceil(remaining)), 3)
         return false
     end
     lastRefreshActivityAt = GetTime()

@@ -46,8 +46,7 @@ local function isRuleEnabled(key)
 end
 
 local function isLevel60GuildFoundActive()
-    return isRuleEnabled("selfFoundOnly") and isRuleEnabled("level60GuildFound")
-        and (UnitLevel("player") or 0) >= 60 and not iRC:GetSelfFoundState()
+    return iRC:IsGuildFoundRequired() and (UnitLevel("player") or 0) >= 60 and not iRC:GetSelfFoundState()
 end
 
 local function getNativeLanguage()
@@ -134,6 +133,7 @@ function Enforcement:CheckTradeRestriction()
     if allowed then return end
 
     restrictedTradeCancelled = true
+    iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_CANCELLED", partnerName, reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
     if CancelTrade then CancelTrade() end
 end
@@ -146,6 +146,7 @@ function Enforcement:InstallTradeAPIGuard()
             local partnerName = getTradePartnerName()
             local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
             if not allowed then
+                iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
                 Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED", partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
                 return
             end
@@ -181,6 +182,7 @@ function Enforcement:UpdateMailRestriction()
     end
     if not allowed and reason ~= lastMailRestrictionReason then
         lastMailRestrictionReason = reason
+        iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
         self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient, reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
     elseif allowed then
         lastMailRestrictionReason = nil
@@ -226,6 +228,7 @@ function Enforcement:IsInboxMailRestricted(index)
 end
 
 function Enforcement:ShowInboxRestriction(index, sender)
+    iRC:RecordGuildFoundAudit("INBOX_BLOCKED", sender)
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_INBOX_BLOCKED", sender or iRC:Text("GUILD_FOUND_UNKNOWN_SENDER")))
 end
 
@@ -236,6 +239,7 @@ function Enforcement:InstallMailAPIGuards()
             if isLevel60GuildFoundActive() then
                 local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient)
                 if not allowed then
+                    iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
                     Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient or "", reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
                     return
                 end
@@ -271,6 +275,7 @@ end
 
 function Enforcement:CloseRestrictedAuctionHouse()
     if not isLevel60GuildFoundActive() then return end
+    iRC:RecordGuildFoundAudit("AUCTION_HOUSE_BLOCKED", "")
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_AUCTION_HOUSE_CLOSED"))
     local closeAuctionHouse = function()
         if not isLevel60GuildFoundActive() then return end

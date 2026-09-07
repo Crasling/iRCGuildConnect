@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.10"
+iRC.Version = "0.2.11"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -532,6 +532,30 @@ function iRC:GetConnectionRules()
     return connection and connection.rules or self.DefaultConnectionRules
 end
 
+function iRC:MarkGuildFoundRequired(connection)
+    connection = connection or self:GetConnection()
+    local guildKey = self:GetGuildKey()
+    if not connection or not guildKey then return false end
+    connection.guildFoundEverActive = true
+    iRCCharDB = iRCCharDB or {}
+    iRCCharDB.guildFoundGuilds = iRCCharDB.guildFoundGuilds or {}
+    iRCCharDB.guildFoundGuilds[guildKey] = true
+    return true
+end
+
+function iRC:IsGuildFoundRequired()
+    local connection = self:GetConnection()
+    local guildKey = self:GetGuildKey()
+    if not connection or not guildKey then return false end
+    local rules = connection.rules or self.DefaultConnectionRules
+    if rules.selfFoundOnly == true and rules.level60GuildFound == true then
+        self:MarkGuildFoundRequired(connection)
+        return true
+    end
+    return connection.guildFoundEverActive == true
+        or (iRCCharDB and iRCCharDB.guildFoundGuilds and iRCCharDB.guildFoundGuilds[guildKey] == true)
+end
+
 function iRC:SetConnectionRule(key, value)
     if not self:IsGuildMaster() or self.DefaultConnectionRules[key] == nil then return false end
     local connection = self:GetConnection()
@@ -542,6 +566,7 @@ function iRC:SetConnectionRule(key, value)
     elseif value and key == "allowLevel60WithoutSelfFound" then
         connection.rules.level60GuildFound = false
     end
+    if connection.rules.selfFoundOnly and connection.rules.level60GuildFound then self:MarkGuildFoundRequired(connection) end
     self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end

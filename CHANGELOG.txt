@@ -2,6 +2,15 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.11 - Guild Found Security & Audit
+--------------------------------------------------------------------------------
+ [CHANGED] Guild Statistics refresh now uses a five-minute shared cooldown to prevent repeated channel traffic
+ [FIX] Relayed guild rules must match the last ruleset received from guild leadership before another member can share them
+ [NEW] Rank 0 and rank 1 members can review level 60 Guild Found economy audit and reported restriction events
+ [FIX] Level 60 Guild Found protection remains active from the verified guild backup and cannot be disabled by changing only one local ruleset value
+ [NEW] Ruleset senders and receivers now confirm that identical timestamps contain identical rule data
+
+
 v0.2.10 - Guild Found Verification
 --------------------------------------------------------------------------------
  [NEW] Officers can right-click members in Verification to review Self-Found and Guild Found reports, contact them or request fresh addon data
@@ -19,7 +28,6 @@ v0.2.10 - Guild Found Verification
  [CHANGED] Debug mode now shows the send and receive progress of split Guild Statistics report packages
  [FIX] Incomplete public report packages now expire safely and cannot grow the receive cache without limit
  [FIX] RaceLockedForkEU presence remains compatible after the cleanup and is identified by its correct source in verification
- [CHANGED] Guild Statistics refresh now has a five-minute shared cooldown and shows the remaining wait when another refresh is attempted
 
 
 v0.2.9 - Performance

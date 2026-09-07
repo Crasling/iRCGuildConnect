@@ -12,6 +12,10 @@ local function IsAddonLoadedCompat(addonName)
     return false
 end
 
+local function CanUseGuildFoundTools()
+    return iRC:IsGuildAdmin() and iRC:IsGuildFoundRequired()
+end
+
 local function CreateSectionHeader(parent, text, yOffset)
     local header = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     header:SetHeight(24)
@@ -292,11 +296,14 @@ local iWRContainer, iWRContent = CreateTabContent()
 local iNIFContainer, iNIFContent = CreateTabContent()
 local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
+local guildFoundContainer, guildFoundContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, adminContainer }
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer }
 local sidebarButtons = {}
+local selectedTab = 1
 
 local function ShowTab(index)
+    selectedTab = index
     for tabIndex, tab in ipairs(tabContents) do tab:SetShown(tabIndex == index) end
     for tabIndex, button in pairs(sidebarButtons) do
         if tabIndex == index then
@@ -324,9 +331,10 @@ local standardSidebarItems = {
     { type = "tab", label = "iSealTwist", index = 8 },
 }
 for _, item in ipairs(standardSidebarItems) do sidebarItems[#sidebarItems + 1] = item end
+sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.GUILDFOUND_TOOLS_TAB, index = 9, guildFoundOnly = true }
 if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "header", label = L.TEST_ADMIN_HEADER }
-    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 9 }
+    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 10 }
 end
 local sidebarY = -6
 for _, item in ipairs(sidebarItems) do
@@ -350,6 +358,7 @@ for _, item in ipairs(sidebarItems) do
         highlight:SetAllPoints(button)
         highlight:SetColorTexture(1, 1, 1, 0.08)
         button:SetScript("OnClick", function() ShowTab(item.index) end)
+        button.guildFoundOnly = item.guildFoundOnly
         sidebarButtons[item.index] = button
         sidebarY = sidebarY - 28
     end
@@ -608,6 +617,19 @@ for _, addon in ipairs(companionAddons) do
     end
 end
 
+local guildFoundAuditText
+do
+    local y = -12
+    _, y = CreateSectionHeader(guildFoundContent, L.GUILDFOUND_TOOLS_TITLE, y)
+    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_TOOLS_DESC, y, "GameFontDisableSmall")
+    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_SETTINGS_HEADER, y - 4)
+    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_ENFORCEMENT_LOCKED, y, "GameFontHighlight")
+    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_AUDIT_HEADER, y - 4)
+    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_DESC, y, "GameFontDisableSmall")
+    guildFoundAuditText, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_EMPTY, y, "GameFontHighlightSmall")
+    guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
+end
+
 local testGuildMasterCheck, suppressWarningsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
 if iRC:IsTestAdmin() then
     y = -12
@@ -633,6 +655,20 @@ if iRC:IsTestAdmin() then
 end
 
 local function Refresh()
+    local guildFoundAvailable = CanUseGuildFoundTools()
+    if sidebarButtons[9] then sidebarButtons[9]:SetShown(guildFoundAvailable) end
+    if selectedTab == 9 and not guildFoundAvailable then ShowTab(1) end
+    if guildFoundAuditText then
+        local records = iRC.GetGuildFoundAuditRecords and iRC:GetGuildFoundAuditRecords() or {}
+        local lines = {}
+        for index = #records, math.max(1, #records - 14), -1 do
+            local record = records[index]
+            lines[#lines + 1] = iRC:Text("GUILDFOUND_AUDIT_ROW",
+                date("%Y-%m-%d %H:%M", record.occurredAt or 0), record.player or "?",
+                iRC:Text("GUILDFOUND_AUDIT_ACTION_" .. tostring(record.action)), record.target or "-")
+        end
+        guildFoundAuditText:SetText(#lines > 0 and table.concat(lines, "\n") or L.GUILDFOUND_AUDIT_EMPTY)
+    end
     if debugModeCheck then debugModeCheck:Refresh() end
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()

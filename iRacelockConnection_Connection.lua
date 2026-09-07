@@ -14,6 +14,7 @@ local ignoreGuildUpdatesUntil = 0
 local seenGroupViolations = {}
 local RULE_AUTHORITY_TIMEOUT = 135
 local incidentUploadAt = {}
+local guildFoundAuditUploadAt = {}
 iRC.ConnectionSessionStartedAt = time()
 
 local function registerPrefix(prefix)
@@ -176,6 +177,34 @@ local function getRulesAuthority()
     return bestName, bestRank
 end
 
+local function rulesBackupFingerprint(rules, timestampHex, timestampSource)
+    rules = rules or {}
+    return table.concat({
+        rules.nativeTongueOnly and "1" or "0",
+        rules.selfFoundOnly and "1" or "0",
+        rules.level60GuildFound and "1" or "0",
+        rules.allowLevel60WithoutSelfFound and "1" or "0",
+        rules.sameRaceGroupsOnly and "1" or "0",
+        rules.allowLevel60MixedRaceGroups and "1" or "0",
+        iRC:NormalizeGuildRace(rules.guildRace),
+        tostring(math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))),
+        rules.guildGroupsOnly and "1" or "0",
+        tostring(math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))),
+        tostring(rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 60),
+        tostring(timestampHex or "0"):lower(),
+        tostring(timestampSource or ""):gsub("[%c]", " "):sub(1, 80),
+    }, SEP)
+end
+
+local function rulesBackupChecksum(value)
+    local first, second = 1, 0
+    for index = 1, #value do
+        first = (first + value:byte(index)) % 65521
+        second = (second + first) % 65521
+    end
+    return string.format("%04x%04x", second, first)
+end
+
 function iRC:IsRulesetBroadcaster()
     local name, rank = getRulesAuthority()
     return name ~= nil and self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName()), name, rank
@@ -187,7 +216,17 @@ function iRC:SendConnectionRules(targetName)
     local rules = self:GetConnectionRules()
     local connection = self:GetConnection()
     local timestampHex, timestampSource = self:EnsureConnectionRulesTimestamp(connection)
+    -- A non-GM client may only relay the exact ruleset it previously received.
+    -- This prevents a same-rank elected broadcaster from propagating locally
+    -- edited values while retaining the Guild Master's timestamp and source.
+    if not self:IsGuildMaster()
+        and (connection.receivedRulesBackupVersion ~= 1
+            or connection.receivedRulesBackup ~= rulesBackupFingerprint(rules, timestampHex, timestampSource)) then
+        self:DebugMsg(self:Text("RULES_RELAY_BLOCKED_BACKUP"), 2)
+        return false
+    end
     local distribution = targetName and "WHISPER" or "GUILD"
+    local backup = rulesBackupFingerprint(rules, timestampHex, timestampSource)
     send(self.Prefix, table.concat({
         "RULES", WIRE_VERSION,
         rules.nativeTongueOnly and "1" or "0",
@@ -203,6 +242,7 @@ function iRC:SendConnectionRules(targetName)
         tostring(rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 60),
         timestampHex,
         tostring(timestampSource or ""):gsub("[%c]", " "):sub(1, 80),
+        rulesBackupChecksum(backup),
     }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("RULES_SENT"), 3)
 end
@@ -236,6 +276,75 @@ end
 
 local function cleanWireText(value, limit)
     return tostring(value or ""):gsub("[%c]", " "):sub(1, limit)
+end
+
+local GUILD_FOUND_AUDIT_ACTIONS = {
+    TRADE_BLOCKED = true,
+    MAIL_BLOCKED = true,
+    INBOX_BLOCKED = true,
+    AUCTION_HOUSE_BLOCKED = true,
+}
+
+function iRC:StoreGuildFoundAudit(record)
+    if type(record) ~= "table" or not GUILD_FOUND_AUDIT_ACTIONS[record.action] then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.guildFoundAudit = connection.guildFoundAudit or {}
+    local id = cleanWireText(record.id, 100)
+    if id == "" then return false end
+    for _, existing in ipairs(connection.guildFoundAudit) do
+        if existing.id == id then return false end
+    end
+    connection.guildFoundAudit[#connection.guildFoundAudit + 1] = {
+        id = id,
+        player = cleanWireText(record.player, 80),
+        occurredAt = math.floor(tonumber(record.occurredAt) or time()),
+        action = record.action,
+        target = cleanWireText(record.target, 80),
+        receivedAt = time(),
+    }
+    while #connection.guildFoundAudit > 200 do table.remove(connection.guildFoundAudit, 1) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:GetGuildFoundAuditRecords()
+    local connection = self:GetConnection()
+    return connection and connection.guildFoundAudit or {}
+end
+
+function iRC:RecordGuildFoundAudit(action, target)
+    if (UnitLevel("player") or 0) < 60 or not self:IsGuildFoundRequired()
+        or not GUILD_FOUND_AUDIT_ACTIONS[action] then return false end
+    local occurredAt = time()
+    local player = self:GetPlayerName()
+    local id = table.concat({ self:NormalizeName(player), occurredAt, action, cleanWireText(target, 40) }, ":")
+    self:StoreGuildFoundAudit({ id = id, player = player, occurredAt = occurredAt, action = action, target = target })
+    send(self.Prefix, table.concat({ "GF_AUDIT", WIRE_VERSION, id, tostring(occurredAt), action, cleanWireText(target, 80) }, SEP), "GUILD")
+    self:DebugMsg(self:Text("GUILDFOUND_AUDIT_SENT", action), 3)
+    return true
+end
+
+function iRC:UploadGuildFoundAudit(targetName)
+    local targetRank = getRosterRank(targetName)
+    if targetRank == nil or targetRank > 1 then return false end
+    local key, now = self:NormalizeName(targetName), time()
+    if guildFoundAuditUploadAt[key] and now - guildFoundAuditUploadAt[key] < 300 then return false end
+    guildFoundAuditUploadAt[key] = now
+    local records, sentCount = self:GetGuildFoundAuditRecords(), 0
+    for index = #records, math.max(1, #records - 19), -1 do
+        local record = records[index]
+        if record.player and self:NormalizeName(record.player) == self:NormalizeName(self:GetPlayerName())
+            and now - (tonumber(record.occurredAt) or 0) <= 604800 then
+            send(self.Prefix, table.concat({
+                "GF_AUDIT", WIRE_VERSION, cleanWireText(record.id, 100), tostring(record.occurredAt),
+                record.action, cleanWireText(record.target, 80),
+            }, SEP), "WHISPER", targetName)
+            sentCount = sentCount + 1
+        end
+    end
+    if sentCount > 0 then self:DebugMsg(self:Text("GUILDFOUND_AUDIT_HISTORY_SENT", sentCount, targetName), 3) end
+    return sentCount > 0
 end
 
 function iRC:SendGroupViolation(record)
@@ -341,6 +450,7 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:StoreMemberProfile(profile)
             iRC:DebugMsg(iRC:Text("PROFILE_RECEIVED", sender), 3)
             iRC:UploadOfficerIncidentsToGM(sender)
+            iRC:UploadGuildFoundAudit(sender)
         end
     elseif kind == "PRESENCE_REQUEST" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         if parts[3] == "OFFICER_POLL" then
@@ -370,6 +480,16 @@ local function handleMessage(prefix, message, distribution, sender)
         end
     elseif kind == "GROUP_VIOLATION_ACK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         if iRC.MarkGroupViolationReported then iRC:MarkGroupViolationReported(parts[3]) end
+    elseif kind == "GF_AUDIT" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) and iRC:IsGuildAdmin() then
+        local occurredAt, action = tonumber(parts[4]), parts[5]
+        if occurredAt and occurredAt <= time() + 300 and occurredAt >= time() - 604800
+            and GUILD_FOUND_AUDIT_ACTIONS[action] then
+            iRC:StoreGuildFoundAudit({
+                id = cleanWireText(parts[3], 100), player = sender, occurredAt = occurredAt,
+                action = action, target = cleanWireText(parts[6], 80),
+            })
+            iRC:DebugMsg(iRC:Text("GUILDFOUND_AUDIT_RECEIVED", action, sender), 3)
+        end
     elseif kind == "INCIDENT_UPLOAD" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local _, _, ownRankIndex = GetGuildInfo and GetGuildInfo("player")
         local occurredAt = tonumber(parts[5])
@@ -387,6 +507,16 @@ local function handleMessage(prefix, message, distribution, sender)
     elseif kind == "INSPECT_DATA" and parts[2] == WIRE_VERSION then
         local profile = profileFromWire(parts, 4)
         if profile and senderIsKnown(sender) and iRC:NormalizeName(profile.name) == iRC:NormalizeName(sender) then iRC:StoreMemberProfile(profile) end
+    elseif kind == "RULES_ACK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local connection = iRC:GetConnection()
+        local timestampHex, timestampSource = iRC:EnsureConnectionRulesTimestamp(connection)
+        local expected = rulesBackupChecksum(rulesBackupFingerprint(iRC:GetConnectionRules(), timestampHex, timestampSource))
+        if tostring(parts[3] or ""):lower() == tostring(timestampHex):lower()
+            and tostring(parts[4] or ""):lower() == expected then
+            iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_VERIFIED", sender, timestampHex), 3)
+        else
+            iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_ACK_MISMATCH", sender), 1)
+        end
     elseif kind == "RULES" and parts[2] == WIRE_VERSION then
         local connection = iRC:GetConnection()
         local timestampHex = tostring(parts[14] or "0"):lower()
@@ -399,6 +529,25 @@ local function handleMessage(prefix, message, distribution, sender)
         if senderRank == 0 then timestampSource = sender end
         local timestampSourceValid = incomingTimestamp == 0
             or (timestampSource ~= "" and iRC:IsGuildMasterName(timestampSource))
+        local incomingRules = {
+            nativeTongueOnly = parts[3] == "1",
+            selfFoundOnly = parts[4] == "1",
+            level60GuildFound = parts[5] == "1",
+            allowLevel60WithoutSelfFound = parts[6] == "1",
+            sameRaceGroupsOnly = parts[7] == "1",
+            allowLevel60MixedRaceGroups = parts[8] == "1",
+            guildRace = iRC:NormalizeGuildRace(parts[9]),
+            sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[10]) or 1))),
+            guildGroupsOnly = parts[11] == "1",
+            guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[12]) or 1))),
+            guildContacts = tostring(parts[13] or ""):sub(1, 60),
+        }
+        local incomingBackup = rulesBackupFingerprint(incomingRules, timestampHex, timestampSource)
+        local incomingChecksum = tostring(parts[16] or ""):lower()
+        local checksumValid = incomingChecksum == "" or incomingChecksum == rulesBackupChecksum(incomingBackup)
+        local sameStampMatches = incomingTimestamp ~= savedTimestamp or not connection
+            or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
+            or connection.receivedRulesBackup == incomingBackup
         local authorityName, authorityRank = getRulesAuthority()
         local senderIsAuthority = senderRank ~= nil and (authorityRank == nil or senderRank < authorityRank
             or (senderRank == authorityRank and (not authorityName
@@ -406,24 +555,22 @@ local function handleMessage(prefix, message, distribution, sender)
                 or iRC:NormalizeName(authorityName) == iRC:NormalizeName(sender))))
         local timestampAccepted = senderRank == 0 or incomingTimestamp >= savedTimestamp
         if connection and senderIsAuthority and validTimestamp and incomingTimestamp <= time() + 300
-            and timestampSourceValid and timestampAccepted then
-            connection.rules.nativeTongueOnly = parts[3] == "1"
-            connection.rules.selfFoundOnly = parts[4] == "1"
-            connection.rules.level60GuildFound = parts[5] == "1"
-            connection.rules.allowLevel60WithoutSelfFound = parts[6] == "1"
-            connection.rules.sameRaceGroupsOnly = parts[7] == "1"
-            connection.rules.allowLevel60MixedRaceGroups = parts[8] == "1"
-            connection.rules.guildRace = iRC:NormalizeGuildRace(parts[9])
-            connection.rules.sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[10]) or 1)))
-            connection.rules.guildGroupsOnly = parts[11] == "1"
-            connection.rules.guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[12]) or 1)))
-            connection.rules.guildContacts = tostring(parts[13] or ""):sub(1, 60)
+            and timestampSourceValid and timestampAccepted and checksumValid and sameStampMatches then
+            for key, value in pairs(incomingRules) do connection.rules[key] = value end
             connection.rulesTimestampHex = timestampHex
             connection.rulesTimestampSource = timestampSource
+            connection.receivedRulesBackup = incomingBackup
+            connection.receivedRulesBackupVersion = 1
+            connection.receivedRulesChecksum = rulesBackupChecksum(incomingBackup)
+            if incomingRules.selfFoundOnly and incomingRules.level60GuildFound then iRC:MarkGuildFoundRequired(connection) end
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.Enforcement then iRC.Enforcement:Refresh() end
             iRC:DebugMsg(iRC:Text("RULES_RECEIVED", sender), 3)
+            send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex, connection.receivedRulesChecksum }, SEP), "WHISPER", sender)
         elseif connection and senderRank ~= nil then
+            if not checksumValid or not sameStampMatches then
+                iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_MISMATCH", sender, timestampHex), 1)
+            end
             iRC:DebugMsg(iRC:Text("RULES_IGNORED_LOWER_AUTHORITY", sender), 3)
         end
     end
