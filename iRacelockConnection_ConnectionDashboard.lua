@@ -253,43 +253,166 @@ function Dashboard:Create()
     frame.rows = {}
     frame.rowData = {}
     frame.memberMenu = CreateFrame("Frame", "iRCMemberManagementMenu", frame, "BackdropTemplate")
-    frame.memberMenu:SetSize(270, 128)
+    frame.memberMenu:SetSize(336, 160)
     frame.memberMenu:SetFrameStrata("DIALOG")
     frame.memberMenu:SetClampedToScreen(true)
     setBackdrop(frame.memberMenu, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
     frame.memberMenu:Hide()
     local menuTitle = frame.memberMenu:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    menuTitle:SetPoint("TOPLEFT", 12, -11)
-    menuTitle:SetPoint("TOPRIGHT", -30, -11)
+    menuTitle:SetPoint("TOPLEFT", 16, -12)
+    menuTitle:SetPoint("TOPRIGHT", -34, -12)
     menuTitle:SetJustifyH("LEFT")
     frame.memberMenu.title = menuTitle
+    local menuHint = frame.memberMenu:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    menuHint:SetPoint("TOPLEFT", menuTitle, "BOTTOMLEFT", 0, -3)
+    menuHint:SetText(iRC:Text("MEMBER_MENU_ACTION_HINT"))
+    frame.memberMenu.hint = menuHint
     local menuClose = CreateFrame("Button", nil, frame.memberMenu, "UIPanelCloseButton")
     menuClose:SetPoint("TOPRIGHT", 4, 4)
+
+    frame.memberReport = CreateFrame("Frame", "iRCGuildFoundReportFrame", frame, "BackdropTemplate")
+    frame.memberReport:SetSize(640, 290)
+    frame.memberReport:SetPoint("CENTER", frame, "CENTER", 85, 0)
+    frame.memberReport:SetFrameStrata("DIALOG")
+    setBackdrop(frame.memberReport, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
+    local reportShade = frame.memberReport:CreateTexture(nil, "BACKGROUND", nil, -8)
+    reportShade:SetPoint("TOPLEFT", 4, -4)
+    reportShade:SetPoint("BOTTOMRIGHT", -4, 4)
+    reportShade:SetColorTexture(0, 0, 0, 0.96)
+    frame.memberReport:Hide()
+    local reportTitle = frame.memberReport:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    reportTitle:SetPoint("TOPLEFT", 18, -17)
+    reportTitle:SetPoint("TOPRIGHT", -42, -17)
+    reportTitle:SetJustifyH("LEFT")
+    reportTitle:SetTextColor(unpack(ORANGE))
+    reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
+    local reportClose = CreateFrame("Button", nil, frame.memberReport, "UIPanelCloseButton")
+    reportClose:SetPoint("TOPRIGHT", 4, 4)
+    local reportBody = frame.memberReport:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    reportBody:SetPoint("TOPLEFT", 18, -52)
+    reportBody:SetPoint("BOTTOMRIGHT", -18, 18)
+    reportBody:SetJustifyH("LEFT")
+    reportBody:SetJustifyV("TOP")
+    reportBody:SetWordWrap(true)
+    frame.memberReport.body = reportBody
+
+    local function statusWord(value, trueKey, falseKey)
+        if value == nil then return iRC:Text("RL_STATUS_UNKNOWN") end
+        return iRC:Text(value and trueKey or falseKey)
+    end
+
+    local function showGuildFoundReport(targetName)
+        local status = iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(targetName)
+        local member
+        for _, rosterMember in ipairs(iRC:GetGuildRosterRows()) do
+            if iRC:NormalizeName(rosterMember.name) == iRC:NormalizeName(targetName) then member = rosterMember break end
+        end
+        local level = member and tonumber(member.level) or 0
+        if member and level < 60 then
+            frame.memberReport:SetSize(640, 190)
+            reportTitle:SetText(iRC:Text("SF_REPORT_TITLE"))
+            local liveState = member.verification and member.verification.state
+            local hasSelfFoundStatus = liveState == "verified" or liveState == "compatible"
+            local selfFoundStatus = not hasSelfFoundStatus and iRC:Text("GF_SELF_FOUND_UNKNOWN")
+                or iRC:Text(member.selfFound and "GF_SELF_FOUND_ACTIVE" or "GF_SELF_FOUND_INACTIVE")
+            reportBody:SetText(table.concat({
+                iRC:Text("GF_REPORT_MEMBER", displayMemberName(targetName)),
+                iRC:Text("GF_REPORT_LEVEL", level),
+                iRC:Text("GF_REPORT_SOURCE", member.source or iRC:Text("RL_STATUS_UNKNOWN")),
+                "",
+                iRC:Text("GF_REPORT_SELF_FOUND", selfFoundStatus),
+            }, "\n"))
+        elseif not status then
+            frame.memberReport:SetSize(640, 190)
+            reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
+            reportBody:SetText(iRC:Text("GF_REPORT_NO_DATA", displayMemberName(targetName)))
+        else
+            frame.memberReport:SetSize(640, 290)
+            reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
+            local lines = {
+                iRC:Text("GF_REPORT_MEMBER", displayMemberName(targetName)),
+                iRC:Text("GF_REPORT_SOURCE", status.source or iRC:Text("RL_STATUS_UNKNOWN")),
+                iRC:Text("GF_REPORT_RECEIVED", status.lastSeen and date("%Y-%m-%d %H:%M", status.lastSeen) or iRC:Text("RL_STATUS_UNKNOWN")),
+                "",
+                iRC:Text("GF_REPORT_RAW_VERIFIED", statusWord(status.rawVerified, "GF_HISTORY_VERIFIED", "GF_HISTORY_UNVERIFIED")),
+                iRC:Text("GF_REPORT_RAW_CLEAN", statusWord(status.rawClean, "GF_GOLD_CLEAN", "GF_GOLD_FLAGGED")),
+            }
+            if status.tamperAt and status.tamperAt > 0 then
+                lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
+            end
+            if status.gmTimestamp then
+                lines[#lines + 1] = ""
+                local gmVerified = status.gmVerified == nil and iRC:Text("RL_OVERRIDE_RESET")
+                    or statusWord(status.gmVerified, "RL_VERIFIED", "RL_UNVERIFIED")
+                local gmClean = status.gmClean == nil and iRC:Text("RL_OVERRIDE_RESET")
+                    or statusWord(status.gmClean, "RL_CLEAN", "RL_FLAGGED")
+                lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_VALUES", gmVerified, gmClean)
+                lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_SOURCE", status.overrideSource or iRC:Text("RL_STATUS_UNKNOWN"), date("%Y-%m-%d %H:%M", status.gmTimestamp))
+            end
+            reportBody:SetText(table.concat(lines, "\n"))
+        end
+        frame.memberReport:Show()
+    end
+
     local menuActions = {
-        { label = "MEMBER_MENU_WHISPER_IRC", run = function(targetName)
+        { group = "MEMBER_MENU_GROUP_DETAILS", label = "MEMBER_MENU_VIEW_REPORT", run = showGuildFoundReport },
+        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_WHISPER_IRC", run = function(targetName)
             if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_IRC"), "WHISPER", nil, targetName) end
         end },
-        { label = "MEMBER_MENU_WHISPER_FORKEU", run = function(targetName)
-            if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_FORKEU"), "WHISPER", nil, targetName) end
+        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_WHISPER_RACELOCKED", run = function(targetName)
+            if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_RACELOCKED"), "WHISPER", nil, targetName) end
         end },
-        { label = "MEMBER_MENU_REQUEST_IRC", run = function(targetName)
+        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_REQUEST_IRC", run = function(targetName)
             if iRC:IsGuildConnectionActive() then
                 iRC:RequestInspection(targetName)
                 iRC:Print(iRC:Text("MEMBER_REQUEST_SENT", displayMemberName(targetName)))
             end
         end },
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_APPROVE", gmOnly = true, maxLevelOnly = true, tone = "approve", run = function(targetName)
+            iRC.RaceLockedSync:SetOverride(targetName, true, true)
+        end },
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_UNVERIFY", gmOnly = true, maxLevelOnly = true, tone = "danger", run = function(targetName)
+            iRC.RaceLockedSync:SetOverride(targetName, false, nil)
+        end },
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_FLAG", gmOnly = true, maxLevelOnly = true, tone = "danger", run = function(targetName)
+            iRC.RaceLockedSync:SetOverride(targetName, nil, false)
+        end },
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_RESET", gmOnly = true, maxLevelOnly = true, tone = "reset", run = function(targetName)
+            iRC.RaceLockedSync:SetOverride(targetName, nil, nil)
+        end },
     }
-    for index, action in ipairs(menuActions) do
-        local button = CreateFrame("Button", nil, frame.memberMenu, "UIPanelButtonTemplate")
-        button:SetSize(246, 24)
-        button:SetPoint("TOPLEFT", 12, -(31 + (index - 1) * 29))
-        button:SetText(iRC:Text(action.label))
+    frame.memberMenu.actionButtons = {}
+    frame.memberMenu.groupLabels = {}
+    for _, action in ipairs(menuActions) do
+        if not frame.memberMenu.groupLabels[action.group] then
+            local groupLabel = frame.memberMenu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            groupLabel:SetText(iRC:Text(action.group))
+            groupLabel:SetTextColor(unpack(ORANGE))
+            frame.memberMenu.groupLabels[action.group] = groupLabel
+        end
+        local button = CreateFrame("Button", nil, frame.memberMenu, "BackdropTemplate")
+        button:SetSize(304, 28)
+        setBackdrop(button, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", 12, 0)
+        button.text:SetPoint("RIGHT", -10, 0)
+        button.text:SetJustifyH("LEFT")
+        button.text:SetText(iRC:Text(action.label))
+        local highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        highlight:SetPoint("TOPLEFT", 3, -3)
+        highlight:SetPoint("BOTTOMRIGHT", -3, 3)
+        highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.16)
         button.runAction = action.run
+        button.gmOnly = action.gmOnly
+        button.maxLevelOnly = action.maxLevelOnly
+        button.group = action.group
+        button.tone = action.tone
         button:SetScript("OnClick", function(self)
             local targetName = frame.memberMenu.targetName
             frame.memberMenu:Hide()
             if targetName then self.runAction(targetName) end
         end)
+        frame.memberMenu.actionButtons[#frame.memberMenu.actionButtons + 1] = button
     end
     scroll:HookScript("OnVerticalScroll", function() Dashboard:RenderVisibleRows() end)
     frame.tab = "Overview"
@@ -376,6 +499,32 @@ local function openMemberManagementMenu(frame, member)
     local cursorX, cursorY = GetCursorPosition()
     menu.targetName = member.name
     menu.title:SetText(displayMemberName(member.name))
+    local yOffset, currentGroup = 54, nil
+    for _, groupLabel in pairs(menu.groupLabels) do groupLabel:Hide() end
+    for _, button in ipairs(menu.actionButtons) do
+        local shown = (not button.gmOnly or iRC:IsGuildMaster())
+            and (not button.maxLevelOnly or (tonumber(member.level) or 0) >= 60 or iRC:IsTestAdminGuildMaster())
+        button:SetShown(shown)
+        if shown then
+            local eligible = not button.maxLevelOnly or (tonumber(member.level) or 0) >= 60
+            button:SetEnabled(eligible)
+            if currentGroup ~= button.group then
+                currentGroup = button.group
+                local groupLabel = menu.groupLabels[currentGroup]
+                groupLabel:ClearAllPoints()
+                groupLabel:SetPoint("TOPLEFT", 18, -yOffset)
+                groupLabel:Show()
+                yOffset = yOffset + 19
+            end
+            button:ClearAllPoints()
+            button:SetPoint("TOPLEFT", 16, -yOffset)
+            local border = not eligible and GRAY or (button.tone == "approve" and GREEN or (button.tone == "danger" and RED or (button.tone == "reset" and GRAY or ORANGE)))
+            button:SetBackdropBorderColor(border[1], border[2], border[3], button.tone and 0.9 or 0.45)
+            button.text:SetTextColor(border[1], border[2], border[3])
+            yOffset = yOffset + 31
+        end
+    end
+    menu:SetHeight(yOffset + 12)
     menu:ClearAllPoints()
     menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / scale, cursorY / scale)
     menu:Show()
@@ -512,6 +661,12 @@ function Dashboard:Refresh()
     elseif frame.tab == "Verification" then
         local verified, compatible, attention, offline = 0, 0, 0, 0
         local members = iRC:GetGuildRosterRows()
+        local rules = iRC:GetConnectionRules() or {}
+        local usesSelfFound = rules.selfFoundOnly == true
+        local usesGuildFound = usesSelfFound and rules.level60GuildFound == true
+            and rules.allowLevel60WithoutSelfFound ~= true
+        local progressHeader = usesGuildFound and iRC:Text("VERIFICATION_PROGRESS_SF_GF_COLUMN")
+            or (usesSelfFound and iRC:Text("VERIFICATION_PROGRESS_COLUMN") or iRC:Text("VERIFICATION_ONLY_COLUMN"))
         for _, member in ipairs(members) do
             local state = member.verification and member.verification.state
             if state == "verified" then verified = verified + 1
@@ -531,7 +686,7 @@ function Dashboard:Refresh()
         frame.title:SetText("Guild verification")
         frame.subtitle:SetText("Live presence status. Missing or stale online members are handled by the officer notification system.")
         setHeaders(frame,
-            { "Member", "Race / Class", "Level", "Live status", iRC:Text("VERIFICATION_PROGRESS_COLUMN"), iRC:Text("VERIFICATION_STATUS_COLUMN") },
+            { "Member", "Race / Class", "Level", "Live status", progressHeader, iRC:Text("VERIFICATION_STATUS_COLUMN") },
             { "name", "race", "level", "status", "progress", "clean" }, "name")
         members = filterAndSort(frame, members, function(member)
             local state = member.verification and member.verification.state or "missing"
@@ -542,8 +697,12 @@ function Dashboard:Refresh()
             if key == "status" then return member.verification and member.verification.state or "missing" end
             local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
             if key == "progress" then
-                if (member.level or 0) < 60 then return member.selfFound and 1 or 0 end
-                return guildFoundStatus and (guildFoundStatus.verified and 1 or 0) or 0
+                if usesSelfFound and (member.level or 0) < 60 then return member.selfFound and 1 or 0 end
+                if usesGuildFound and (member.level or 0) >= 60 then
+                    return guildFoundStatus and (guildFoundStatus.verified and 1 or 0) or 0
+                end
+                local state = member.verification and member.verification.state
+                return (state == "verified" or state == "compatible") and 1 or 0
             end
             if key == "clean" then return guildFoundStatus and (guildFoundStatus.clean and 1 or 0) or -1 end
             return member.level or 0
@@ -559,25 +718,35 @@ function Dashboard:Refresh()
             local attentionTimer = formatAttentionTimer(member.attentionSince)
             local addonText = addon
             if attentionTimer then addon = addon .. "\n" .. attentionTimer end
-            local selfFound = member.profile and (member.selfFound and "Active" or "Inactive")
-                or ((member.compatibility or compatiblePresence) and (member.selfFound and "Active (ForkEU)" or "Inactive (ForkEU)"))
-                or "Unknown"
+            local liveState = verification.state
+            local hasLiveAddon = liveState == "verified" or liveState == "compatible"
+            local selfFound = not hasLiveAddon and "Unknown"
+                or (member.selfFound and "Active" or "Inactive")
             local selectedMember = member
             local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
-            local hasSelfFoundSource = member.profile or member.compatibility or compatiblePresence or guildFoundStatus
+            local hasSelfFoundSource = hasLiveAddon
             local progressText, progressColor
-            if (member.level or 0) < 60 then
-                progressText = hasSelfFoundSource and (member.selfFound and iRC:Text("SELF_FOUND_ACTIVE") or iRC:Text("SELF_FOUND_INACTIVE"))
-                    or iRC:Text("RL_STATUS_UNKNOWN")
+            if usesSelfFound and (member.level or 0) < 60 then
+                progressText = hasSelfFoundSource and iRC:Text("VERIFICATION_SELF_FOUND", iRC:Text(member.selfFound and "SELF_FOUND_ACTIVE" or "SELF_FOUND_INACTIVE"))
+                    or iRC:Text("VERIFICATION_SELF_FOUND_UNKNOWN")
                 progressColor = hasSelfFoundSource and (member.selfFound and GREEN or RED) or GRAY
-            else
+            elseif usesGuildFound and (member.level or 0) >= 60 then
                 local verified = guildFoundStatus and guildFoundStatus.verified == true
-                progressText = iRC:Text(verified and "RL_VERIFIED" or "RL_UNVERIFIED")
-                progressColor = verified and GREEN or RED
+                progressText = iRC:Text("VERIFICATION_GUILD_FOUND", iRC:Text(hasLiveAddon and verified and "RL_VERIFIED" or "RL_UNVERIFIED"))
+                progressColor = hasLiveAddon and verified and GREEN or RED
+            else
+                progressText = iRC:Text(hasLiveAddon and "RL_VERIFIED" or "RL_UNVERIFIED")
+                progressColor = hasLiveAddon and GREEN or RED
             end
-            local cleanText = iRC:Text("RL_STATUS_UNKNOWN")
-            if guildFoundStatus and guildFoundStatus.clean ~= nil then
-                cleanText = iRC:Text(guildFoundStatus.clean and "RL_CLEAN" or "RL_FLAGGED")
+            local belowMaxLevel = (member.level or 0) < 60
+            local lowerLevelStatusOK = liveState == "verified" or liveState == "compatible"
+            local lowerLevelOffline = liveState == "offline" or liveState == "inactive"
+            local cleanText = belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
+                or (lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")) or iRC:Text("RL_STATUS_UNKNOWN")
+            if not lowerLevelStatusOK then
+                cleanText = iRC:Text(lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")
+            elseif (member.level or 0) >= 60 and guildFoundStatus and guildFoundStatus.clean ~= nil then
+                cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text(guildFoundStatus.clean and "RL_CLEAN" or "RL_FLAGGED"))
             end
             local statusTooltip = selfFound
             if iRC.RaceLockedSync then statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus) end
@@ -587,14 +756,16 @@ function Dashboard:Refresh()
                 if mouseButton == "RightButton" then
                     openMemberManagementMenu(frame, selectedMember)
                 elseif selectedMember.profile then
-                    iRC.AchievementsUI:Open(selectedMember.name)
+                    iRC.MainUI:Open(selectedMember.name, true)
                     iRC:RequestInspection(selectedMember.name)
                 end
             end, statusTooltip)
             data.attentionSince, data.addonText = member.attentionSince, addonText
             data.columnColors = {
                 [5] = progressColor,
-                [6] = guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY,
+                [6] = not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
+                    or (belowMaxLevel and GREEN
+                    or (guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY)),
             }
         end
     elseif frame.tab == "Incidents" then
@@ -641,80 +812,6 @@ function Dashboard:Refresh()
                 incident.players or iRC:Text("GROUP_VIOLATION_UNKNOWN_PLAYER"),
                 iRC:Text("INCIDENT_UPLOADED"),
             }, RED, nil, incident.reason)
-        end
-    elseif frame.tab == "Champions" then
-        local _, race = UnitRace("player")
-        local champions = iRC:GetChampions()
-        local top = champions[1]
-        setSummaryCards(frame, {
-            { label = "Your race", value = race or "Unknown", color = ORANGE },
-            { label = "Champions", value = tostring(#champions), color = GREEN },
-            { label = "iRC profiles", value = tostring((function() local n = 0; for _, member in ipairs(champions) do if member.profile then n = n + 1 end end; return n end)()), color = GREEN },
-            { label = "Highest level", value = tostring(top and top.level or 0), color = ORANGE },
-        })
-        local filter = setFilters(frame, {
-            { id = "all", label = "All sources" }, { id = "irc", label = "iRC only" }, { id = "compatible", label = "Compatible" },
-        })
-        frame.title:SetText("Champions of " .. (race or "your race"))
-        frame.subtitle:SetText("Guild members of your race, ranked by level. Achievement statistics are temporarily disabled.")
-        setHeaders(frame, { "Champion", "Class", "Level", "Status", "Source" }, { "name", "class", "level", "status", "source" }, "level")
-        champions = filterAndSort(frame, champions, function(member)
-            return filter == "all" or (filter == "irc" and member.profile) or (filter == "compatible" and member.compatibility and not member.profile)
-        end, function(member, key)
-            if key == "name" then return member.name or "" end
-            if key == "class" then return member.class or "" end
-            if key == "status" then return member.verification and member.verification.state or "" end
-            if key == "source" then return member.source or "" end
-            return member.level or 0
-        end)
-        for _, member in ipairs(champions) do
-            count = count + 1
-            local selectedMember = member
-            setRow(frame, count, { "#" .. count .. " " .. displayMemberName(member.name), member.class, tostring(member.level), member.verification and member.verification.label or "Unknown", (member.profile or member.compatibility) and sourceLabel(member.source or "iRC") or "Not detected" }, member.profile and GREEN or (member.compatibility and RED or ORANGE), function()
-                if selectedMember.profile then iRC.AchievementsUI:Open(selectedMember.name); iRC:RequestInspection(selectedMember.name) end
-            end)
-        end
-    else
-        local leaderboard = iRC:GetLeaderboard()
-        local top = leaderboard[1]
-        local verified, compatible = 0, 0
-        for _, member in ipairs(leaderboard) do
-            if member.profile then verified = verified + 1 elseif member.compatibility then compatible = compatible + 1 end
-        end
-        setSummaryCards(frame, {
-            { label = "Ranked members", value = tostring(#leaderboard), color = ORANGE },
-            { label = "iRC profiles", value = tostring(verified), color = GREEN },
-            { label = "Compatible profiles", value = tostring(compatible), color = RED },
-            { label = "Highest level", value = tostring(top and top.level or 0), color = ORANGE },
-        })
-        local filter = setFilters(frame, {
-            { id = "all", label = "All sources" }, { id = "irc", label = "iRC only" }, { id = "compatible", label = "Compatible" },
-        })
-        frame.title:SetText("Connection leaderboard")
-        frame.subtitle:SetText("Guild roster by level and addon source. Achievement statistics are temporarily disabled.")
-        setHeaders(frame, { "Name", "Level", "Guild", "Source", "Status" }, { "name", "level", "guild", "source", "status" }, "level")
-        local connection = iRC:GetConnection()
-        local guildName = connection and connection.guildName or "Unknown"
-        leaderboard = filterAndSort(frame, leaderboard, function(member)
-            return filter == "all" or (filter == "irc" and member.profile) or (filter == "compatible" and member.compatibility and not member.profile)
-        end, function(member, key)
-            local score = member.leaderboard or {}
-            if key == "name" then return member.name or "" end
-            if key == "guild" then return guildName end
-            if key == "source" then return score.source or member.source or "" end
-            if key == "status" then return member.verification and member.verification.state or "" end
-            return score.level or member.level or 0
-        end)
-        for _, member in ipairs(leaderboard) do
-            count = count + 1
-            local score = member.leaderboard or {}
-            local selectedMember = member
-            setRow(frame, count, { "#" .. count .. " " .. displayMemberName(member.name), tostring(score.level or member.level or 1), guildName, sourceLabel(score.source or "iRC"), member.verification and member.verification.label or "Unknown" }, member.profile and GREEN or RED, function()
-                if selectedMember.profile then
-                    iRC.AchievementsUI:Open(selectedMember.name)
-                    if iRC:NormalizeName(selectedMember.name) ~= iRC:NormalizeName(iRC:GetPlayerName()) then iRC:RequestInspection(selectedMember.name) end
-                end
-            end)
         end
     end
     frame.content:SetHeight(math.max(1, count * 60))

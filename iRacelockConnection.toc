@@ -1,6 +1,6 @@
 ## Interface: 11509
-## Title: |cffff9716iRacelockConnection |cFF00FF00v0.2.9|r
-## Version: 0.2.9
+## Title: |cffff9716iRacelockConnection |cFF00FF00v0.2.10|r
+## Version: 0.2.10
 ## Notes: |cffff9716Guild-connected race progression|n|cFFFF0000Work in progress.|r
 ## Author: Crasling
 ## IconTexture: Interface\AddOns\iRacelockConnection\Images\Logo_iRC
@@ -8,7 +8,7 @@
 ## X-Curse-Project-ID: 1682904
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
-## OptionalDeps: HardcoreAchievements, TrollFound
+## X-Embeds: LibStub, CallbackHandler-1.0, AceAddon-3.0, LibDataBroker-1.1, LibDBIcon-1.0
 ## SavedVariables: iRCDB
 ## SavedVariablesPerCharacter: iRCCharDB
 
@@ -16,7 +16,6 @@ embeds.xml
 
 iRacelockConnection_Core.lua
 iRacelockConnection_Localization_enUS.lua
-iRacelockConnection_Statistics.lua
 iRacelockConnection_Connection.lua
 iRacelockConnection_RaceGrid.lua
 iRacelockConnection_Compatibility.lua
@@ -24,9 +23,7 @@ iRacelockConnection_RaceLockedSync.lua
 iRacelockConnection_Enforcement.lua
 iRacelockConnection_Roleplay.lua
 iRacelockConnection_Guild.lua
-iRacelockConnection_GuildChallenges.lua
-iRacelockConnection_Achievements.lua
-iRacelockConnection_AchievementsUI.lua
+iRacelockConnection_MainUI.lua
 iRacelockConnection_ConnectionDashboard.lua
 iRacelockConnection_Options.lua
 iRacelockConnection_Minimap.lua

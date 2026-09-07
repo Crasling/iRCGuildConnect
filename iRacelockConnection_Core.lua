@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.9"
+iRC.Version = "0.2.10"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -34,8 +34,7 @@ iRC.ColorValues = {
 }
 
 local DEFAULT_SETTINGS = {
-    showAchievementNotifications = false,
-    achievementScale = 1,
+    mainWindowScale = 1,
     shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,
@@ -129,7 +128,7 @@ end
 function iRC:CloseWindowsExcept(keptFrame)
     local windows = {
         self.SettingsFrame,
-        self.AchievementsUI and self.AchievementsUI.frame,
+        self.MainUI and self.MainUI.frame,
         self.ConnectionDashboard and self.ConnectionDashboard.frame,
     }
     for _, window in ipairs(windows) do
@@ -239,30 +238,6 @@ function iRC:GetSelfFoundEvidence()
     return evidence
 end
 
-function iRC:HasHardcoreAchievements()
-    local isAddonLoaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-    return isAddonLoaded and isAddonLoaded("HardcoreAchievements") and true or false
-end
-
-function iRC:GetHardcoreAchievementPoints()
-    if not self:HasHardcoreAchievements() then return 0 end
-    local panel = _G.AchievementPanel
-    if panel and panel.TotalPoints and panel.TotalPoints.GetText then
-        local value = tonumber(((panel.TotalPoints:GetText() or ""):gsub(",", "")))
-        if value and value >= 0 then return value end
-    end
-    local globalData = _G.G or _G
-    local database = globalData.HardcoreAchievementsDB or _G.HardcoreAchievementsDB
-    local guid = UnitGUID and UnitGUID("player")
-    local character = database and database.chars and guid and database.chars[guid]
-    if type(character) ~= "table" or type(character.achievements) ~= "table" then return 0 end
-    local total = 0
-    for _, achievement in pairs(character.achievements) do
-        if type(achievement) == "table" and achievement.completed then total = total + (tonumber(achievement.points) or 0) end
-    end
-    return total
-end
-
 function iRC:GetPlayerName()
     if GetUnitName then return GetUnitName("player", true) or UnitName("player") end
     return UnitName("player")
@@ -290,9 +265,6 @@ function iRC:GetSettings()
     -- Public guild discovery is a core connection feature, not an optional
     -- preference. Migrate previously disabled profiles immediately.
     iRCDB.settings.shareGlobalRaceGrid = true
-    -- Achievement notifications are intentionally disabled while the
-    -- achievement system is hidden and being reworked.
-    iRCDB.settings.showAchievementNotifications = false
     iRCDB.settings.minimapButton = iRCDB.settings.minimapButton or {}
     if iRCDB.settings.minimapButton.hide == nil then
         iRCDB.settings.minimapButton.hide = iRCDB.settings.showMinimapButton == false
@@ -449,6 +421,12 @@ function iRC:GetGuildFoundTradeStatus(name)
         return false, name .. " is not in your guild."
     end
 
+    local profile = self:FindConnectionProfile(name)
+    local verification = self.GetMemberVerification and self:GetMemberVerification(name, true, profile) or nil
+    if not profile or not verification or verification.state ~= "verified" then
+        return false, name .. " does not have a current iRC response."
+    end
+
     if self.RaceLockedSync then
         local ownVerified, ownClean = self.RaceLockedSync:GetLocalRawStatus()
         local own = self.RaceLockedSync:GetStatus(self:GetPlayerName())
@@ -458,31 +436,16 @@ function iRC:GetGuildFoundTradeStatus(name)
         end
         if not ownVerified or not ownClean then return false, self:Text("RL_LOCAL_INELIGIBLE") end
         local status = self.RaceLockedSync:GetStatus(name)
-        if status and (status.lastSeen or status.gmTimestamp) then
+        if status and status.lastSeen then
             if status.verified == true and status.clean == true then return true end
             return false, self:Text("RL_MEMBER_INELIGIBLE", name)
         end
     end
 
-    local profile = self:FindConnectionProfile(name)
-    local verification = self.GetMemberVerification and self:GetMemberVerification(name, true, profile) or nil
-    if profile and verification and verification.state == "verified" then
-        local evidence = profile.selfFoundEvidence or nil
-        local status = evidence and evidence.status or "UNVERIFIED"
-        if status == "VERIFIED" or status == "LEVEL_60_EXCEPTION" then return true end
-        return false, name .. " does not have verified Self-Found history (" .. string.lower(status) .. ")."
-    end
-
-    -- RaceLocked has its own verified-and-clean Guild Found roster. Treat that
-    -- as a compatible source, never as an iRC profile, so both addons can run
-    -- together without replacing or overwriting each other's data.
-    local compatibility = self.GetCompatibilityMember and self:GetCompatibilityMember(name) or nil
-    local guildFound = compatibility and compatibility.guildFound
-    if guildFound and guildFound.source == "RaceLocked" and guildFound.verified and guildFound.clean
-        and time() - (tonumber(guildFound.lastSeen) or 0) <= 600 then
-        return true
-    end
-    return false, name .. " does not have a current iRC or RaceLocked Guild Found verification."
+    local evidence = profile.selfFoundEvidence or nil
+    local status = evidence and evidence.status or "UNVERIFIED"
+    if status == "VERIFIED" or status == "LEVEL_60_EXCEPTION" then return true end
+    return false, name .. " does not have verified Self-Found history (" .. string.lower(status) .. ")."
 end
 
 function iRC:IsGuildOnlyGroup()
@@ -632,7 +595,6 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRCDB.connections = iRCDB.connections or {}
         iRC:GetSettings()
         iRCCharDB = iRCCharDB or {}
-        iRCCharDB.achievements = iRCCharDB.achievements or {}
     elseif event == "PLAYER_LOGIN" then
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()

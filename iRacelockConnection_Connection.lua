@@ -5,7 +5,6 @@ if not iRC then return end
 local SEP = "\t"
 local WIRE_VERSION = "9"
 local requestNumber = 0
-local BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 local SECONDS_PER_DAY = 86400
 local lastPresencePollAt = 0
 local ACTIVATION_REQUEST_COOLDOWN = 10
@@ -41,98 +40,17 @@ local function split(message)
     return values
 end
 
-local function completedLookup(completed)
-    local lookup = {}
-    for key, value in pairs(completed or {}) do
-        if type(key) == "string" then lookup[key] = value else lookup[value] = true end
-    end
-    return lookup
-end
-
-local function encodeBase36(value, digits)
-    value = math.max(0, math.floor(tonumber(value) or 0))
-    local output = {}
-    for index = digits, 1, -1 do
-        output[index] = BASE36:sub((value % 36) + 1, (value % 36) + 1)
-        value = math.floor(value / 36)
-    end
-    return table.concat(output)
-end
-
-local function decodeBase36(value)
-    return value and tonumber(value, 36) or nil
-end
-
-local function completedFromWire(value, dates)
-    if not value or value == "" then return {} end
-    if value:sub(1, 1) ~= "@" then return {} end
-    local catalog = iRC.Achievements and iRC.Achievements.Catalog
-    if not catalog then return {} end
-    local completed = {}
-    local bits = value:sub(2)
-    local baseDay = dates and decodeBase36(dates:sub(1, 3)) or nil
-    local currentDay = math.floor(time() / SECONDS_PER_DAY)
-    for index = 1, #bits do
-        if bits:sub(index, index) == "1" and catalog[index] then
-            local dateStart = 4 + (index - 1) * 2
-            local dateOffset = dates and decodeBase36(dates:sub(dateStart, dateStart + 1)) or nil
-            local earnedDay = baseDay and dateOffset and dateOffset > 0 and baseDay + dateOffset - 1 or nil
-            completed[catalog[index].id] = {
-                earnedAt = earnedDay and earnedDay <= currentDay and earnedDay * SECONDS_PER_DAY or nil,
-                verifiedAt = time(),
-            }
-        end
-    end
-    return completed
-end
-
-local function completedToCompactWire(completed)
-    local catalog = iRC.Achievements and iRC.Achievements.Catalog
-    if not catalog then return nil end
-    local completedById, bits = completedLookup(completed), {}
-    for index, achievement in ipairs(catalog) do
-        bits[index] = completedById[achievement.id] and "1" or "0"
-    end
-    return "@" .. table.concat(bits)
-end
-
-local function completedDatesToWire(completed)
-    local catalog = iRC.Achievements and iRC.Achievements.Catalog
-    if not catalog then return nil end
-    local completedById, days = completedLookup(completed), {}
-    local baseDay
-    for _, achievement in ipairs(catalog) do
-        local record = completedById[achievement.id]
-        local earnedAt = type(record) == "table" and tonumber(record.earnedAt) or nil
-        if earnedAt and earnedAt > 0 then
-            local earnedDay = math.floor(earnedAt / SECONDS_PER_DAY)
-            baseDay = not baseDay and earnedDay or math.min(baseDay, earnedDay)
-        end
-    end
-    if not baseDay then return "" end
-    days[1] = encodeBase36(baseDay, 3)
-    for index, achievement in ipairs(catalog) do
-        local record = completedById[achievement.id]
-        local earnedAt = type(record) == "table" and tonumber(record.earnedAt) or nil
-        local offset = earnedAt and math.floor(earnedAt / SECONDS_PER_DAY) - baseDay + 1 or 0
-        days[index + 1] = offset > 0 and offset < 1296 and encodeBase36(offset, 2) or "00"
-    end
-    return table.concat(days)
-end
-
 local function profileWireParts(profile)
-    local stats = profile.statistics or {}
     local evidence = profile.selfFoundEvidence or {}
     return {
         iRC.Version, profile.name or "Unknown", profile.guid or "", profile.race or "Unknown", profile.class or "UNKNOWN",
-        tostring(profile.level or 1), tostring(profile.points or 0), profile.selfFound and "1" or "0",
-        tostring(stats.enemiesSlain or 0), tostring(stats.dungeonBosses or 0), tostring(stats.jumps or 0),
-        completedToCompactWire(profile.completed) or "@",
-        completedDatesToWire(profile.completionRecords or profile.completed) or "",
+        tostring(profile.level or 1), "0", profile.selfFound and "1" or "0",
+        "0", "0", "0",
+        "@", "",
         evidence.status or "UNVERIFIED",
         tostring(math.floor((tonumber(evidence.firstSelfFoundAt) or 0) / SECONDS_PER_DAY)),
         tostring(math.floor((tonumber(evidence.endedAt) or 0) / SECONDS_PER_DAY)),
-        "0", -- Reserved wire field; achievement statistics are paused.
+        "0",
         profile.shareGlobalRaceGrid and "1" or "0",
         profile.testGuildMasterOverride and "1" or "0",
     }
@@ -149,21 +67,14 @@ local function profileFromWire(parts, startIndex)
     return {
         addonVersion = parts[startIndex] or "Unknown", name = name, guid = parts[startIndex + 2] or "",
         race = parts[startIndex + 3] or "Unknown", class = parts[startIndex + 4] or "UNKNOWN",
-        level = tonumber(parts[startIndex + 5]) or 1, points = tonumber(parts[startIndex + 6]) or 0,
+        level = tonumber(parts[startIndex + 5]) or 1,
         selfFound = parts[startIndex + 7] == "1",
-        statistics = {
-            enemiesSlain = tonumber(parts[startIndex + 8]) or 0,
-            dungeonBosses = tonumber(parts[startIndex + 9]) or 0,
-            jumps = tonumber(parts[startIndex + 10]) or 0,
-        },
-        completed = completedFromWire(parts[startIndex + 11], parts[startIndex + 12]),
         selfFoundEvidence = {
             status = parts[startIndex + 13] or "UNVERIFIED",
             firstSelfFoundAt = (tonumber(parts[startIndex + 14]) or 0) * SECONDS_PER_DAY,
             endedAt = (tonumber(parts[startIndex + 15]) or 0) * SECONDS_PER_DAY,
         },
         lastSeen = time(),
-        hardcorePoints = nil,
         shareGlobalRaceGrid = parts[startIndex + 17] == "1",
         testGuildMasterOverride = parts[startIndex + 18] == "1",
     }
@@ -172,16 +83,13 @@ end
 function iRC:GetLocalProfile()
     local raceName, raceFile = UnitRace("player")
     local _, classFile = UnitClass("player")
-    local completionRecords = self.Achievements and self.Achievements:GetCompleted() or {}
     return {
         addonVersion = self.Version, name = self:GetPlayerName() or "Unknown", guid = UnitGUID("player") or "",
         race = raceFile or raceName or "Unknown", class = classFile or "UNKNOWN", level = UnitLevel("player") or 1,
-        points = 0, selfFound = self:GetSelfFoundState(), selfFoundEvidence = self:GetSelfFoundEvidence(),
-        hardcorePoints = nil,
+        selfFound = self:GetSelfFoundState(), selfFoundEvidence = self:GetSelfFoundEvidence(),
         shareGlobalRaceGrid = true,
         testGuildMasterOverride = self:IsTestAdminGuildMaster(),
-        statistics = self.Statistics and self.Statistics:GetSnapshot() or {},
-        completed = self.Achievements and self.Achievements:GetCompletedIds() or {}, completionRecords = completionRecords, lastSeen = time(),
+        lastSeen = time(),
     }
 end
 
@@ -191,7 +99,7 @@ function iRC:StoreMemberProfile(profile)
     local connection = self:GetConnection()
     if not connection then return end
     connection.members[self:NormalizeName(profile.name)] = profile
-    if self.AchievementsUI then self.AchievementsUI:RefreshIfShown() end
+    if self.MainUI then self.MainUI:RefreshIfShown() end
     if self.ConnectionDashboard then self.ConnectionDashboard:RefreshIfShown() end
 end
 
@@ -553,7 +461,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
         guildUpdatePending = true
         C_Timer.After(1, function()
             guildUpdatePending = false
-            if iRC.Achievements then iRC.Achievements:Evaluate() end
             iRC:SendGuildActivation()
             iRC:RequestGuildActivation()
             iRC:SendHello()

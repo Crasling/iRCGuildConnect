@@ -2,6 +2,26 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.10 - Guild Found Verification
+--------------------------------------------------------------------------------
+ [NEW] Officers can right-click members in Verification to review Self-Found and Guild Found reports, contact them or request fresh addon data
+ [NEW] Guild Masters can record Guild Found decisions for level 60 members directly from the Verification member menu
+ [CHANGED] Guild Found management now lives entirely in the Connection panel with a clearer grouped menu and compact reports
+ [CHANGED] RaceLocked compatibility now covers only current addon presence and Self-Found status
+ [FIX] Missing or expired addon responses always show Not verified; manual Guild Master decisions cannot replace reported status
+ [CHANGED] Removed HardcoreAchievements and TrollFound integration; iRC now uses only its own data
+ [CHANGED] LibDBIcon is bundled inside iRC and no longer treated as an external dependency
+ [CHANGED] Removed the achievement system, scores and points so iRC focuses entirely on guild rules, verification, members and statistics
+ [CHANGED] Verification now labels Self-Found, Guild-Found or general addon verification according to the guild's active rules and level exceptions
+ [CHANGED] Guild reports older than five days are automatically removed from Guild Statistics
+ [FIX] Opening the main iRC window through slash commands or member inspection now triggers the same Guild Statistics refresh as the minimap and options buttons
+ [FIX] Guild Statistics reports now use Classic-compatible custom-channel messages and safely split reports that exceed the chat-message limit
+ [CHANGED] Debug mode now shows the send and receive progress of split Guild Statistics report packages
+ [FIX] Incomplete public report packages now expire safely and cannot grow the receive cache without limit
+ [FIX] RaceLockedForkEU presence remains compatible after the cleanup and is identified by its correct source in verification
+ [CHANGED] Guild Statistics refresh now has a five-minute shared cooldown and shows the remaining wait when another refresh is attempted
+
+
 v0.2.9 - Performance
 --------------------------------------------------------------------------------
  [FIX] Guild Members now creates only the visible list rows, preventing script timeout errors in large guilds

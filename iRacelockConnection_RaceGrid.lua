@@ -9,36 +9,15 @@ local PREFIX = "iRCGridV1"
 local CHANNEL_NAME = "iRacelockConnection"
 local WIRE_VERSION = "2"
 local REPORT_INTERVAL = 120
-local REFRESH_COOLDOWN = 30
+local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
+local REPORT_MAX_AGE = 5 * 86400
 local SEP = "\t"
--- RaceLocked and its ForkEU variant publish the same RLRaceGridV1 payload on
--- separate text channels. External messages always use the native protocol.
-local RACELOCKED_CHANNELS = {
-    "RaceLockedDataBus",
-    "RaceLockedForkEUDataBus",
-}
-local RACELOCKED_CHANNEL_LOOKUP = {
-    RaceLockedDataBus = true,
-    RaceLockedForkEUDataBus = true,
-}
-local RACELOCKED_WIRE_PREFIX = "RLRaceGridV1:"
-local RACELOCKED_FIELD_SEPARATOR = string.char(1)
-
 local ALLIANCE_RACES = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HORDE_RACES = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
 local VALID_RACES = {}
 for race in pairs(ALLIANCE_RACES) do VALID_RACES[race] = true end
 for race in pairs(HORDE_RACES) do VALID_RACES[race] = true end
-
-local RACELOCKED_RACE_TOKENS = {
-    Human = "HUMAN", Dwarf = "DWARF", NightElf = "NIGHTELF", Gnome = "GNOME",
-    Orc = "ORC", Troll = "TROLL", Tauren = "TAUREN", Scourge = "SCOURGE",
-}
-local RACELOCKED_CLASS_KEYS = {
-    druids = "DRUID", rogues = "ROGUE", hunters = "HUNTER", warriors = "WARRIOR",
-    mages = "MAGE", priests = "PRIEST", warlocks = "WARLOCK", paladins = "PALADIN", shamans = "SHAMAN",
-}
 
 local function normalizeRaceToken(race)
     local token = tostring(race or ""):upper():gsub("%s+", "")
@@ -55,14 +34,26 @@ local function send(prefix, message, distribution, target)
     if distribution == "CHANNEL" then
         local id = GetChannelName and GetChannelName(target)
         if type(id) ~= "number" or id <= 0 or #message > 255 then return false end
-        local api = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
-        if api then
-            local called, result = pcall(api, prefix, message, "CHANNEL", id)
-            -- Classic commonly returns nil after a successful addon-message
-            -- send. Only an API error or an explicit false means failure.
-            return called and result ~= false
+        if not SendChatMessage then return false end
+        local hex = message:gsub(".", function(character) return string.format("%02x", string.byte(character)) end)
+        local single = prefix .. ":" .. hex
+        if #single <= 255 then
+            local called = pcall(SendChatMessage, single, "CHANNEL", nil, id)
+            if called and message:match("^GUILD_REPORT") then iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_SENDING", 1, 1), 3) end
+            return called
         end
-        return false
+
+        local messageId = string.format("%x", math.floor(GetTime() * 1000) % 0xFFFFFF)
+        local chunkSize = 210
+        local total = math.ceil(#hex / chunkSize)
+        for part = 1, total do
+            local chunk = hex:sub((part - 1) * chunkSize + 1, part * chunkSize)
+            local wire = table.concat({ prefix, "C", messageId, part, total, chunk }, ":")
+            local called = pcall(SendChatMessage, wire, "CHANNEL", nil, id)
+            if not called then return false end
+            iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_SENDING", part, total), 3)
+        end
+        return true
     end
     if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(prefix, message, distribution, target) end
     if SendAddonMessage then return SendAddonMessage(prefix, message, distribution, target) end
@@ -96,11 +87,10 @@ local function getServerStore()
     iRCDB.globalRaceGrid.servers = iRCDB.globalRaceGrid.servers or {}
     local store = iRCDB.globalRaceGrid.servers[serverKey]
     if not store then
-        store = { guildReports = {}, raceLockedGuildReports = {} }
+        store = { guildReports = {} }
         iRCDB.globalRaceGrid.servers[serverKey] = store
     end
     store.guildReports = store.guildReports or {}
-    store.raceLockedGuildReports = store.raceLockedGuildReports or {}
     store.guildActivity = store.guildActivity or {}
     return store
 end
@@ -144,6 +134,46 @@ local function hexToBytes(value)
     return table.concat(bytes)
 end
 
+local incomingChunks = {}
+local MAX_PENDING_PACKAGES = 32
+
+local function cleanIncomingChunks(now)
+    local count, oldestKey, oldestAt = 0, nil, nil
+    for key, entry in pairs(incomingChunks) do
+        if type(entry) ~= "table" or not entry.startedAt or now - entry.startedAt > 15 then
+            incomingChunks[key] = nil
+        else
+            count = count + 1
+            if not oldestAt or entry.startedAt < oldestAt then oldestKey, oldestAt = key, entry.startedAt end
+        end
+    end
+    if count >= MAX_PENDING_PACKAGES and oldestKey then incomingChunks[oldestKey] = nil end
+end
+
+local function decodeChannelWire(message, sender)
+    local direct = message:match("^" .. PREFIX .. ":([0-9a-fA-F]+)$")
+    if direct then
+        local decoded = hexToBytes(direct)
+        if decoded and decoded:match("^GUILD_REPORT") then iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_RECEIVING", 1, 1, sender), 3) end
+        return decoded
+    end
+    local messageId, part, total, chunk = message:match("^" .. PREFIX .. ":C:([0-9a-fA-F]+):(%d+):(%d+):([0-9a-fA-F]+)$")
+    part, total = tonumber(part), tonumber(total)
+    if not messageId or not part or not total or total < 2 or total > 8 or part < 1 or part > total then return nil end
+    cleanIncomingChunks(GetTime())
+    local key = fullNameKey(sender) .. ":" .. messageId
+    local entry = incomingChunks[key]
+    if not entry or entry.total ~= total or GetTime() - entry.startedAt > 15 then
+        entry = { total = total, startedAt = GetTime(), parts = {} }
+        incomingChunks[key] = entry
+    end
+    entry.parts[part] = chunk
+    iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_RECEIVING", part, total, sender), 3)
+    for index = 1, total do if not entry.parts[index] then return nil end end
+    incomingChunks[key] = nil
+    return hexToBytes(table.concat(entry.parts))
+end
+
 local function getChannelId(channelName)
     local channelId = GetChannelName and GetChannelName(channelName or CHANNEL_NAME)
     return type(channelId) == "number" and channelId > 0 and channelId or nil
@@ -170,21 +200,6 @@ function RaceGrid:EnsureChannel()
     if JoinChannelByName then
         iRC:DebugMsg(iRC:Text("RACEGRID_OWN_CHANNEL_JOIN"), 3)
         JoinChannelByName(CHANNEL_NAME)
-    end
-end
-
-function RaceGrid:EnsureRaceLockedChannels()
-    -- Receiving external race reports is independent of iRC's optional public
-    -- broadcast setting.  This keeps the overview useful without sharing the
-    -- player's own iRC report on the iRC channel.
-    if not JoinChannelByName then return end
-    for _, channelName in ipairs(RACELOCKED_CHANNELS) do
-        if not getChannelId(channelName) then
-            iRC:DebugMsg(iRC:Text("RACEGRID_CHANNEL_JOIN", channelName), 3)
-            JoinChannelByName(channelName)
-        end
-        hideChannelFromChatWindows(channelName)
-        if getChannelId(channelName) then iRC:DebugMsg(iRC:Text("RACEGRID_EXTERNAL_CHANNEL_READY", channelName), 3) end
     end
 end
 
@@ -222,151 +237,8 @@ function RaceGrid:StoreGuildReport(report, silent)
     report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     report.lastSeen = time()
     reports[key] = report
-    if not silent and iRC.AchievementsUI then iRC.AchievementsUI:RefreshIfShown() end
+    if not silent and iRC.MainUI then iRC.MainUI:RefreshIfShown() end
     return true
-end
-
-function RaceGrid:StoreRaceLockedGuildReport(report)
-    if type(report) ~= "table" or not report.race or not report.guildName then return end
-    report.race = normalizeRaceToken(report.race)
-    if not report.race or report.guildName == "" or #report.guildName > 80 then return end
-    local reports = getServerStore().raceLockedGuildReports
-    -- Received relays retain the origin timestamp; hearing stale data again
-    -- must not turn it into a fresh report.
-    report.lastSeen = report.timestamp and report.timestamp > 0 and report.timestamp or time()
-    local key = report.race .. "@" .. normalizeGuildName(report.guildName)
-    local old = reports[key]
-    if old and (old.timestamp or 0) > (report.timestamp or 0) then return false end
-    if old then
-        if old.guildDeaths ~= nil or report.guildDeaths ~= nil then report.guildDeaths = math.max(old.guildDeaths or 0, report.guildDeaths or 0) end
-        if report.membersLevel60 == nil then report.membersLevel60 = old.membersLevel60 end
-        if report.classAverageLevels == nil then report.classAverageLevels = old.classAverageLevels end
-    end
-    reports[key] = report
-    return true
-end
-
-local function parseRaceLockedGuildReport(message, channelName)
-    if type(message) ~= "string" or #message > 255 or message:sub(1, #RACELOCKED_WIRE_PREFIX) ~= RACELOCKED_WIRE_PREFIX then return nil end
-    local payload = hexToBytes(message:sub(#RACELOCKED_WIRE_PREFIX + 1))
-    if not payload then return nil end
-    local fields = {}
-    for value in (payload .. RACELOCKED_FIELD_SEPARATOR):gmatch("(.-)" .. RACELOCKED_FIELD_SEPARATOR) do fields[#fields + 1] = value end
-    local version = fields[1]
-    -- ForkEU v3 has 16 fields; original v3 has class count/average pairs.
-    local paired = (version == "v3" and #fields >= 24) or version == "v4" or version == "v5"
-    local required = version == "v5" and 27 or (version == "v4" and 25 or
-        (version == "v3" and (paired and 24 or 16) or (version == "v2" and 15 or (version == "v1" and 14))))
-    if not required or #fields < required then return nil end
-    local race = RACELOCKED_RACE_TOKENS[fields[2]]
-    local guildName = fields[3]
-    local members = validNumber(fields[4], 1, 10000)
-    local averageLevel = validNumber(fields[5], 1, 100)
-    if not race or not guildName or guildName == "" or not members or not averageLevel then return nil end
-    local classes, classAverageLevels, total = {}, paired and {} or nil, 0
-    local index = 6
-    for _, classKey in ipairs({ "druids", "rogues", "hunters", "warriors", "mages", "priests", "warlocks", "paladins", "shamans" }) do
-        local count = validNumber(fields[index], 0, members)
-        if not count then return nil end
-        classes[RACELOCKED_CLASS_KEYS[classKey]] = count
-        total = total + count
-        if paired then
-            local average = validNumber(fields[index + 1], 0, 100)
-            if not average then return nil end
-            classAverageLevels[RACELOCKED_CLASS_KEYS[classKey]] = average
-        end
-        index = index + (paired and 2 or 1)
-    end
-    if total > members then return nil end
-    local stamp = version == "v1" and 0 or validNumber(fields[paired and 24 or 15], 0, time() + 300)
-    if not stamp then return nil end
-    local averagePoints = paired and tonumber(fields[26]) or nil
-    local deaths = paired and fields[25] and validNumber(fields[25], 0, 10000000) or nil
-    local maxLevelCount = paired and fields[27] and validNumber(fields[27], 0, members) or nil
-    if (version == "v4" or version == "v5") and deaths == nil then return nil end
-    if version == "v5" and (averagePoints == nil or maxLevelCount == nil) then return nil end
-    local points = averagePoints and averagePoints * members or (not paired and version == "v3" and tonumber(fields[16]) or 0)
-    if not validNumber(points, 0, 100000000000) then return nil end
-    return {
-        source = channelName == "RaceLockedForkEUDataBus" and "RaceLockedForkEU global guild report" or "RaceLocked global guild report",
-        race = race, guildName = guildName,
-        members = members, averageLevel = averageLevel, points = points, classes = classes,
-        timestamp = stamp, classAverageLevels = classAverageLevels,
-        guildDeaths = deaths, membersLevel60 = maxLevelCount,
-        averagePoints = averagePoints, wireVersion = version, channel = channelName,
-    }
-end
-
-RaceGrid.ParseExternalReport = function(_, message, channelName) return parseRaceLockedGuildReport(message, channelName) end
-
--- Native overviews retain whole-guild snapshots between sessions. Read these
--- tables without calling native update functions or modifying their saved data.
-function RaceGrid:ImportNativeCaches()
-    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-    for _, addon in ipairs({ "RaceLocked", "RaceLockedForkEU" }) do
-        if loaded and loaded(addon) then
-            local live, saved = _G[addon .. "_GuildChampion"], _G[addon .. "AccountDB"]
-            local byRace = type(live) == "table" and live.RACE_GRID_STORED_GUILD_REPORTS_BY_RACE
-            if type(byRace) ~= "table" then byRace = type(saved) == "table" and saved.raceGridStoredGuildReportsByRace end
-            for token, rows in pairs(type(byRace) == "table" and byRace or {}) do
-                local race = normalizeRaceToken(token)
-                for _, row in pairs(type(rows) == "table" and rows or {}) do
-                    if type(row) == "table" and race and type(row.guildName) == "string" and row.guildName ~= "" then
-                        local members = validNumber(row.guildSize, 1, 10000)
-                        local average = validNumber(row.averageLevel, 1, 100, true)
-                        local stamp = validNumber(row.timestamp or 0, 0, time() + 300)
-                        local classes, averages, total, valid = {}, {}, 0, true
-                        for native, class in pairs(RACELOCKED_CLASS_KEYS) do
-                            local entry = type(row.classes) == "table" and row.classes[native] or 0
-                            local count = validNumber(type(entry) == "table" and entry.count or entry or 0, 0, members or 0)
-                            if not count then valid = false break end
-                            classes[class], total = count, total + count
-                            if type(entry) == "table" then averages[class] = validNumber(entry.averageLevel, 0, 100, true) end
-                        end
-                        if members and average and stamp and valid and total <= members then
-                            local report = {
-                                race = race, guildName = row.guildName, members = members,
-                                averageLevel = average, points = 0, classes = classes,
-                                timestamp = stamp, source = addon, importedCache = true,
-                                classAverageLevels = next(averages) and averages or nil,
-                                guildDeaths = validNumber(row.guildDeaths, 0, 10000000),
-                                membersLevel60 = validNumber(row.guildMembersLevel60, 0, members),
-                                averagePoints = nil,
-                            }
-                            local reports = getServerStore().raceLockedGuildReports
-                            local old = reports[race .. "@" .. normalizeGuildName(row.guildName)]
-                            if self:StoreRaceLockedGuildReport(report) and (not old or old.timestamp ~= stamp or old.members ~= members) then
-                                iRC:DebugMsg(iRC:Text("RL_GRID_CACHE_IMPORTED", addon, report.guildName, members), 3)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
-function RaceGrid:EncodeExternalReport(report, channelName)
-    if not normalizeRaceToken(report.race) or type(report.guildName) ~= "string" or report.guildName == "" then return nil end
-    local raceToken
-    for token, race in pairs(RACELOCKED_RACE_TOKENS) do if race == report.race then raceToken = token break end end
-    if not raceToken then return nil end
-    local original = channelName == "RaceLockedDataBus"
-    local function integer(value) return tostring(math.max(0, math.floor(tonumber(value) or 0))) end
-    local fields = { original and "v5" or "v3", raceToken, report.guildName, integer(report.members), integer(report.averageLevel) }
-    for _, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
-        fields[#fields + 1] = integer((report.classes or {})[class])
-        if original then fields[#fields + 1] = integer((report.classAverageLevels or {})[class]) end
-    end
-    fields[#fields + 1] = integer(report.timestamp)
-    if original then
-        fields[#fields + 1] = integer(report.guildDeaths)
-        fields[#fields + 1] = integer(report.members > 0 and report.points / report.members or 0)
-        fields[#fields + 1] = integer(report.membersLevel60)
-    else fields[#fields + 1] = integer(report.points) end
-    local bytes = table.concat(fields, RACELOCKED_FIELD_SEPARATOR)
-    local wire = RACELOCKED_WIRE_PREFIX .. bytes:gsub(".", function(char) return string.format("%02x", string.byte(char)) end)
-    return #wire <= 255 and wire or nil
 end
 
 local externalReady = false
@@ -377,16 +249,6 @@ function RaceGrid:GetRosterParticipation(member)
     if iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName()) then return "verified" end
     local state = member.verification and member.verification.state
     if state == "verified" or state == "compatible" then return state end
-    if member.profile and (tonumber(member.profile.lastSeen) or 0) > 0 then return "verified" end
-    local compatible = member.compatibilityMember or {}
-    for _, entry in pairs({ stats = member.compatibility, presence = compatible.presence, guildFound = compatible.guildFound }) do
-        if type(entry) == "table" and (tonumber(entry.lastSeen) or 0) > 0 then return "compatible" end
-    end
-    if iRC.RaceLockedSync then
-        local status = member.raceLockedStatus
-        if not member.hasParticipationSnapshot then status = iRC.RaceLockedSync:GetStatus(member.name) end
-        if status and (tonumber(status.lastSeen) or 0) > 0 then return "compatible" end
-    end
 end
 
 function RaceGrid:BuildOwnGuildReports()
@@ -398,7 +260,7 @@ function RaceGrid:BuildOwnGuildReports()
     local rules = iRC:GetConnectionRules() or {}
     local group = {
         race = guildRace, faction = ALLIANCE_RACES[guildRace] and "Alliance" or "Horde",
-        guildName = guildName, members = 0, activePlayers = 0, totalLevel = 0, points = 0,
+        guildName = guildName, members = 0, activePlayers = 0, totalLevel = 0,
         classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
@@ -437,7 +299,6 @@ function RaceGrid:BuildOwnGuildReports()
     if group.members == 0 then return {} end
     group.activePlayers = recordGuildActivity(guildName, group.activePlayers)
     group.averageLevel = group.totalLevel / group.members
-    group.averagePoints = nil
     for class, count in pairs(group.classes) do group.classAverageLevels[class] = group.classTotals[class] / count end
     group.totalLevel, group.classTotals = nil, nil
     return { group }
@@ -452,12 +313,6 @@ function RaceGrid:IsExternalBroadcaster()
             and time() - profile.lastSeen <= 135 and iRC:NormalizeName(member.name) < ownName then return false end
     end
     return true
-end
-
-function RaceGrid:BroadcastExternalReports(fromClick)
-    -- iRC may read these channels for compatibility, but its Guild Statistics
-    -- reports belong exclusively to the native iRC channel.
-    return false
 end
 
 function RaceGrid:BroadcastReport(fromClick)
@@ -522,9 +377,12 @@ end
 
 -- Only call synchronously from an actual UI OnClick handler.
 function RaceGrid:PublishFromClick()
-    self:ImportNativeCaches()
     if not self:IsEnabled() then return false end
-    if self:GetRefreshCooldownRemaining() > 0 then return false end
+    local remaining = self:GetRefreshCooldownRemaining()
+    if remaining > 0 then
+        iRC:Print(iRC:Text("RACEGRID_REFRESH_COOLDOWN_ACTIVE", math.ceil(remaining)))
+        return false
+    end
     lastRefreshActivityAt = GetTime()
     self:BroadcastReport(true)
     self:RequestReports(true)
@@ -597,7 +455,7 @@ local function handleMessage(prefix, message, sender)
     local parts = split(message)
     if parts[1] == "REQUEST" and (parts[2] == WIRE_VERSION or parts[2] == "1") then
         iRC:CheckForNewVersion(parts[3])
-        iRC:DebugMsg(iRC:Text("RACEGRID_REQUEST_RECEIVED", sender), 3)
+        iRC:DebugMsg(iRC:Text("RACEGRID_REQUEST_RECEIVED", sender, math.ceil(RaceGrid:GetRefreshCooldownRemaining())), 3)
         return
     end
     local report = parseGuildReport(parts)
@@ -608,11 +466,17 @@ local function handleMessage(prefix, message, sender)
 end
 
 function iRC:GetGlobalRaceOverview()
-    local stored = getServerStore().guildReports
+    local serverStore = getServerStore()
+    local stored = serverStore.guildReports
     local result = {}
-    for _, report in pairs(stored) do
-        if type(report) == "table" and normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then
-            report.cached = not report.timestamp or time() - report.timestamp > STALE_AFTER
+    local now = time()
+    for key, report in pairs(stored) do
+        local timestamp = type(report) == "table" and tonumber(report.timestamp) or nil
+        if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE then
+            stored[key] = nil
+            serverStore.guildActivity[key] = nil
+        elseif normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then
+            report.cached = now - timestamp > STALE_AFTER
             result[#result + 1] = report
         end
     end
@@ -627,7 +491,6 @@ local function guildRank(a, b)
 end
 
 function iRC:GetRaceGridOverview()
-    RaceGrid:ImportNativeCaches()
     local groups = {}
     if RaceGrid:IsEnabled() then
         for _, report in ipairs(self:GetGlobalRaceOverview()) do groups[normalizeGuildName(report.guildName)] = report end
@@ -637,20 +500,9 @@ function iRC:GetRaceGridOverview()
         groups[normalizeGuildName(report.guildName)] = report
     end
 
-    -- Native data may enrich a guild already discovered through iRC, but it
-    -- can never create or rename a Stats card on its own.
-    local native = getServerStore().raceLockedGuildReports
-    for _, report in pairs(native) do
-        local group = type(report) == "table" and groups[normalizeGuildName(report.guildName)]
-        if group and normalizeRaceToken(report.race) == group.race then
-            if group.guildDeaths == nil then group.guildDeaths = report.guildDeaths end
-        end
-    end
-
     local result = {}
     for _, group in pairs(groups) do
         group.faction = ALLIANCE_RACES[group.race] and "Alliance" or "Horde"
-        group.points, group.averagePoints = 0, nil
         result[#result + 1] = group
     end
     table.sort(result, guildRank)
@@ -674,12 +526,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
             C_Timer.After(6, function()
                 externalReady = true
                 RaceGrid:Refresh()
-                RaceGrid:EnsureRaceLockedChannels()
             end)
         else
             externalReady = true
             RaceGrid:Refresh()
-            RaceGrid:EnsureRaceLockedChannels()
         end
         if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(REPORT_INTERVAL, function()
             RaceGrid:BroadcastReport()
@@ -692,20 +542,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local channelName = select(9, ...)
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
-            local decoded = hexToBytes(message:sub(#PREFIX + 2))
+            local decoded = decodeChannelWire(message, sender)
             if decoded then handleMessage(PREFIX, decoded, sender) end
-        elseif RACELOCKED_CHANNEL_LOOKUP[channelName] then
-            local report = parseRaceLockedGuildReport(message, channelName)
-            if report then
-                RaceGrid:StoreRaceLockedGuildReport(report)
-                local connection = iRC:GetConnection()
-                if connection and normalizeGuildName(connection.guildName) == normalizeGuildName(report.guildName) and report.guildDeaths then
-                    connection.raceDeaths = connection.raceDeaths or {}
-                    connection.raceDeaths[report.race] = math.max(connection.raceDeaths[report.race] or 0, report.guildDeaths)
-                end
-                iRC:DebugMsg(iRC:Text("RACEGRID_REPORT_RECEIVED", report.source, report.guildName, report.members, report.averageLevel), 3)
-                if iRC.AchievementsUI then iRC.AchievementsUI:RefreshIfShown() end
-            end
         end
     end
 end)

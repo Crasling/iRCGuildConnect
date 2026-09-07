@@ -293,8 +293,7 @@ local iNIFContainer, iNIFContent = CreateTabContent()
 local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
-local verificationContainer, verificationContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, adminContainer, verificationContainer }
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, adminContainer }
 local sidebarButtons = {}
 
 local function ShowTab(index)
@@ -328,7 +327,6 @@ for _, item in ipairs(standardSidebarItems) do sidebarItems[#sidebarItems + 1] =
 if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "header", label = L.TEST_ADMIN_HEADER }
     sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 9 }
-    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.RL_OVERRIDE_TITLE, index = 10, officerSettings = true }
 end
 local sidebarY = -6
 for _, item in ipairs(sidebarItems) do
@@ -352,7 +350,6 @@ for _, item in ipairs(sidebarItems) do
         highlight:SetAllPoints(button)
         highlight:SetColorTexture(1, 1, 1, 0.08)
         button:SetScript("OnClick", function() ShowTab(item.index) end)
-        if item.officerSettings and not iRC:GetSettings().showOfficerSettingsForTesting then button:Hide() end
         sidebarButtons[item.index] = button
         sidebarY = sidebarY - 28
     end
@@ -375,7 +372,7 @@ scaleLabel:SetText(L.IRC_MAIN_WINDOW_SCALE)
 local scaleValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 10, 0)
 scaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-local slider = CreateFrame("Slider", "iRacelockConnectionAchievementScaleSlider", generalContent, "OptionsSliderTemplate")
+local slider = CreateFrame("Slider", "iRacelockConnectionMainWindowScaleSlider", generalContent, "OptionsSliderTemplate")
 slider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 slider:SetWidth(240)
 slider:SetMinMaxValues(0.8, 1.2)
@@ -386,17 +383,17 @@ _G[slider:GetName() .. "Text"]:SetText("")
 SetSimpleTooltip(slider, L.IRC_MAIN_WINDOW_SCALE, L.IRC_MAIN_WINDOW_SCALE_DESC)
 slider:SetScript("OnValueChanged", function(_, value)
     value = math.floor(value * 20 + 0.5) / 20
-    iRC:GetSettings().achievementScale = value
+    iRC:GetSettings().mainWindowScale = value
     scaleValue:SetText(math.floor(value * 100 + 0.5) .. "%")
-    if iRC.AchievementsUI and iRC.AchievementsUI.frame then iRC.AchievementsUI.frame:SetScale(value) end
+    if iRC.MainUI and iRC.MainUI.frame then iRC.MainUI.frame:SetScale(value) end
 end)
 y = y - 74
-_, y = CreateSettingsButton(generalContent, L.IRC_MAIN_OPEN, 180, y, function() iRC.AchievementsUI:Open(nil, true) end, L.IRC_MAIN_OPEN_DESC)
+_, y = CreateSettingsButton(generalContent, L.IRC_MAIN_OPEN, 180, y, function() iRC.MainUI:Open(nil, true) end, L.IRC_MAIN_OPEN_DESC)
 _, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, function()
-    local achievementFrame = iRC.AchievementsUI:Create()
-    achievementFrame:ClearAllPoints()
-    achievementFrame:SetPoint("CENTER")
-    iRC:Print(L.ACHIEVEMENT_WINDOW_RESET)
+    local mainFrame = iRC.MainUI:Create()
+    mainFrame:ClearAllPoints()
+    mainFrame:SetPoint("CENTER")
+    iRC:Print(L.MAIN_WINDOW_RESET_DONE)
 end, L.IRC_MAIN_WINDOW_RESET_DESC)
 generalContent:SetHeight(math.abs(y) + 20)
 
@@ -405,7 +402,7 @@ _, y = CreateSectionHeader(connectionContent, "Guild Connection", y)
 local connectionCard
 connectionCard, y = CreateConnectionStatusCard(connectionContent, y)
 local connectionStatus, connectionDetail = connectionCard.status, connectionCard.detail
-_, y = CreateInfoText(connectionContent, "Your guild shares progress, stats, and achievements through iRC.", y - 2, "GameFontDisableSmall")
+_, y = CreateInfoText(connectionContent, "Your guild shares rules, roster status, and statistics through iRC.", y - 2, "GameFontDisableSmall")
 local connectionActionsY = y - 4
 local dashboardButton = CreateSettingsButton(connectionContent, "Open connection dashboard", 210, connectionActionsY, function()
     iRC:OpenConnectionDashboard()
@@ -519,37 +516,6 @@ end, L.GUILD_CONTACTS_DESC)
 connectionContent:SetHeight(math.abs(y) + 20)
 
 y = -12
-_, y = CreateSectionHeader(verificationContent, L.RL_OVERRIDE_TITLE, y)
-_, y = CreateInfoText(verificationContent, L.RL_OVERRIDE_DESC, y, "GameFontDisableSmall")
-_, y = CreateInfoText(verificationContent, L.RL_OVERRIDE_MEMBER, y, "GameFontHighlight")
-local overrideName = CreateFrame("EditBox", nil, verificationContent, "InputBoxTemplate")
-overrideName:SetSize(240, 24)
-overrideName:SetPoint("TOPLEFT", verificationContent, "TOPLEFT", 25, y)
-overrideName:SetAutoFocus(false)
-overrideName:SetMaxLetters(80)
-overrideName:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-local overrideVerified, overrideClean = "-", "-"
-local overrideVerifiedDropdown, overrideCleanDropdown
-local function overrideValue(value)
-    if value == "1" then return true end
-    if value == "0" then return false end
-end
-overrideVerifiedDropdown, y = CreateSettingsDropdown("iRCGuildFoundVerifiedDropdown", verificationContent, L.RL_OVERRIDE_VERIFIED, nil, y - 34,
-    function() return overrideVerified end, function(value) overrideVerified = value end,
-    function() return { "-", "1", "0" } end,
-    function(value) return value == "-" and L.RL_OVERRIDE_RESET or (value == "1" and L.RL_VERIFIED or L.RL_UNVERIFIED) end)
-overrideCleanDropdown, y = CreateSettingsDropdown("iRCGuildFoundCleanDropdown", verificationContent, L.RL_OVERRIDE_CLEAN, nil, y,
-    function() return overrideClean end, function(value) overrideClean = value end,
-    function() return { "-", "1", "0" } end,
-    function(value) return value == "-" and L.RL_OVERRIDE_RESET or (value == "1" and L.RL_CLEAN or L.RL_FLAGGED) end)
-local overrideApply
-overrideApply, y = CreateSettingsButton(verificationContent, L.RL_OVERRIDE_APPLY, 220, y, function()
-    local name = (overrideName:GetText() or ""):match("^%s*(.-)%s*$")
-    if not iRC.RaceLockedSync:SetOverride(name, overrideValue(overrideVerified), overrideValue(overrideClean)) then iRC:Print(L.RL_OVERRIDE_FAILED) end
-end, L.RL_OVERRIDE_DESC)
-verificationContent:SetHeight(math.abs(y) + 20)
-
-y = -12
 _, y = CreateSectionHeader(roleplayContent, "Player Settings", y)
 local trollTalkStatus
 trollTalkStatus, y = CreateInfoText(roleplayContent, "", y, "GameFontHighlight")
@@ -590,7 +556,7 @@ do
     aboutDescription:SetWidth(470)
     aboutDescription:SetJustifyH("LEFT")
     aboutDescription:SetWordWrap(true)
-    aboutDescription:SetText(iRC.Colors.iRC .. iRC.DisplayName .. " " .. iRC.Colors.Reset .. "is a guild-connected race progression and achievement framework. Guild members using iRC can share progress, verification status, Self-Found state, and local leaderboard statistics.")
+    aboutDescription:SetText(iRC.Colors.iRC .. iRC.DisplayName .. " " .. iRC.Colors.Reset .. "connects race-locked guilds. Guild members can share rules, verification status, Self-Found state, roster information, and guild statistics.")
     y = y - aboutDescription:GetStringHeight() - 15
 
     _, y = CreateSectionHeader(aboutContent, "Links", y)
@@ -642,7 +608,7 @@ for _, addon in ipairs(companionAddons) do
     end
 end
 
-local testGuildMasterCheck, suppressWarningsCheck, showOfficerSettingsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
+local testGuildMasterCheck, suppressWarningsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
 if iRC:IsTestAdmin() then
     y = -12
     _, y = CreateSectionHeader(adminContent, L.TEST_ADMIN_TITLE, y)
@@ -660,13 +626,6 @@ if iRC:IsTestAdmin() then
     suppressWarningsCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SUPPRESS_WARNINGS, L.TEST_ADMIN_SUPPRESS_WARNINGS_DESC, y,
         function() return iRC:SuppressesPresenceWarnings() end,
         function(value) iRC:GetSettings().suppressPresenceWarnings = value and true or false end)
-    showOfficerSettingsCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SHOW_OFFICER_SETTINGS, L.TEST_ADMIN_SHOW_OFFICER_SETTINGS_DESC, y,
-        function() return iRC:GetSettings().showOfficerSettingsForTesting == true end,
-        function(value)
-            iRC:GetSettings().showOfficerSettingsForTesting = value and true or false
-            if sidebarButtons[10] then sidebarButtons[10]:SetShown(value and true or false) end
-            if not value then ShowTab(9) end
-        end)
     testActivateGuildButton, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ACTIVATE_GUILD, 190, y - 4, function()
         iRC:ActivateGuildForTesting()
     end, L.TEST_ADMIN_ACTIVATE_GUILD_DESC)
@@ -678,8 +637,6 @@ local function Refresh()
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
         suppressWarningsCheck:Refresh()
-        showOfficerSettingsCheck:Refresh()
-        if sidebarButtons[10] then sidebarButtons[10]:SetShown(iRC:GetSettings().showOfficerSettingsForTesting == true) end
         local testGuildMaster = iRC:IsTestAdminGuildMaster()
         testAdminStatus:SetText((testGuildMaster and iRC.Colors.Green or iRC.Colors.Yellow)
             .. iRC:Text(testGuildMaster and "TEST_ADMIN_STATUS_GUILD_MASTER" or "TEST_ADMIN_STATUS_MEMBER") .. iRC.Colors.Reset)
@@ -694,7 +651,7 @@ local function Refresh()
         end
     end
     minimapCheck:Refresh()
-    slider:SetValue(iRC:GetSettings().achievementScale or 1)
+    slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
     local connection = iRC:GetConnection()
     if connection then
         if iRC:IsGuildConnectionActive() then
@@ -728,13 +685,6 @@ local function Refresh()
     if not guildContactsEdit:HasFocus() then guildContactsEdit:SetText(iRC:GetConnectionRules().guildContacts or "") end
     guildContactsEdit:SetEnabled(isGuildMaster and guildActive and true or false)
     guildContactsSave:SetEnabled(isGuildMaster and guildActive and true or false)
-    overrideVerifiedDropdown:Refresh()
-    overrideCleanDropdown:Refresh()
-    overrideApply:SetEnabled(isGuildMaster and guildActive and true or false)
-    overrideName:SetEnabled(isGuildMaster and guildActive and true or false)
-    local enableOverride = isGuildMaster and guildActive and UIDropDownMenu_EnableDropDown or UIDropDownMenu_DisableDropDown
-    enableOverride(overrideVerifiedDropdown)
-    enableOverride(overrideCleanDropdown)
     broadcastButton:SetEnabled(guildActive and true or false)
     guildActivationCheck:SetEnabled(isGuildMaster and true or false)
     if isGuildMaster and guildActive then

@@ -20,7 +20,6 @@ local pendingGroupViolationKey
 local observedGroupRestrictions
 local restrictedTradeCancelled = false
 local lastMailRestrictionReason
-local pendingGuildFoundTradePartners = {}
 local originalSendMail, originalTakeInboxItem, originalTakeInboxMoney, originalAutoLootMailItem
 local originalAcceptTrade
 
@@ -134,27 +133,6 @@ function Enforcement:CheckTradeRestriction()
     local allowed, reason = iRC:GetGuildFoundTradeStatus(partnerName)
     if allowed then return end
 
-    -- Give a RaceLocked guildmate one short chance to answer its native TV
-    -- handshake before cancelling. iRC never writes RaceLocked's roster.
-    local partnerKey = iRC:NormalizeName(partnerName)
-    if not iRC:FindConnectionProfile(partnerName) and iRC.RequestRaceLockedTradeVerification then
-        local handshakeState = pendingGuildFoundTradePartners[partnerKey]
-        if not handshakeState then
-            pendingGuildFoundTradePartners[partnerKey] = "pending"
-            iRC:RequestRaceLockedTradeVerification(partnerName)
-            if C_Timer and C_Timer.After then
-                C_Timer.After(1, function()
-                    pendingGuildFoundTradePartners[partnerKey] = "attempted"
-                    Enforcement:CheckTradeRestriction()
-                end)
-            else
-                pendingGuildFoundTradePartners[partnerKey] = "attempted"
-            end
-            return
-        elseif handshakeState == "pending" then
-            return
-        end
-    end
     restrictedTradeCancelled = true
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_CANCELLED", partnerName, reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
     if CancelTrade then CancelTrade() end
@@ -168,7 +146,6 @@ function Enforcement:InstallTradeAPIGuard()
             local partnerName = getTradePartnerName()
             local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
             if not allowed then
-                if partnerName and iRC.RequestRaceLockedTradeVerification then iRC:RequestRaceLockedTradeVerification(partnerName) end
                 Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED", partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
                 return
             end
@@ -195,9 +172,6 @@ function Enforcement:UpdateMailRestriction()
         return
     end
     local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient)
-    if not allowed and not iRC:FindConnectionProfile(recipient) and iRC.RequestRaceLockedTradeVerification then
-        iRC:RequestRaceLockedTradeVerification(recipient)
-    end
     if allowed then
         if button.iRCMailRestricted then button:SetEnabled(true) end
         button.iRCMailRestricted = nil

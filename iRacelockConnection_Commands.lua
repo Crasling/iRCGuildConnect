@@ -7,10 +7,10 @@ SLASH_IRC1 = "/irc"
 SlashCmdList.IRC = function(message)
     local command, argument = (message or ""):match("^(%S*)%s*(.-)$")
     command = string.lower(command or "")
-    if command == "" or command == "achievements" or command == "achievement" then
-        iRC.AchievementsUI:Open()
+    if command == "" or command == "main" then
+        iRC.MainUI:Open(nil, true)
     elseif command == "inspect" and argument ~= "" then
-        iRC.AchievementsUI:Open(argument)
+        iRC.MainUI:Open(argument, true)
         iRC:RequestInspection(argument)
     elseif command == "options" or command == "settings" then
         iRC:OpenOptions()

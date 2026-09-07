@@ -33,7 +33,6 @@ end
 function SendChatMessage(...) notices[#notices + 1] = { at = now, ... } end
 local function sendAddon(...) addonMessages[#addonMessages + 1] = { at = now, ... } end
 C_ChatInfo = { SendAddonMessage = sendAddon, RegisterAddonMessagePrefix = function() end }
-C_AddOns = { IsAddOnLoaded = function(name) return name == "RaceLockedForkEU" end }
 C_Timer = {
     After = function(delay, callback) timers[#timers + 1] = { at = now + delay, callback = callback } end,
     NewTicker = function(_, callback) tickers[#tickers + 1] = callback end,
@@ -60,7 +59,6 @@ local iRC = private.iRC
 iRCDB, iRCCharDB = {}, {}
 function iRC:DebugMsg() end
 function iRC:GetSelfFoundEvidence() return { status = "UNVERIFIED" } end
-function iRC:GetHardcoreAchievementPoints() return 0 end
 local db = iRC:GetConnection()
 local function reset(login)
     iRC:ResetPresenceNotificationChecks()
@@ -83,7 +81,7 @@ end
 
 reset(true)
 iRC:CheckPresenceMismatches()
-assert(#notices == 0 and probeCount() == 1, "probe before warning even when ForkEU is co-installed")
+assert(#notices == 0 and probeCount() == 1, "probe before warning")
 advance(7); respond("Target"); advance(60)
 assert(#notices == 0, "late iRC login/reload response cancels warnings")
 
@@ -104,11 +102,11 @@ reset()
 iRC:CheckPresenceMismatches(); advance(20)
 iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
 advance(60)
-assert(#notices == 0, "late ForkEU response cancels pending notice")
+assert(#notices == 0, "late RaceLockedForkEU response cancels pending notice")
 
 reset()
 respond("Target")
-iRC.Compatibility:StoreStats({ name = "Target", guid = "Player-1-Target", source = "RaceLockedForkEU", level = 10 })
+iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
 advance(136)
 assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "stale", "compatibility cached alongside iRC cannot outlive that iRC profile")
 iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
@@ -180,4 +178,4 @@ iRC:CheckPresenceMismatches(); advance(60)
 assert(#notices == 0, "test admin warning suppression blocks officer, whisper, and guild messages")
 iRC:GetSettings().suppressPresenceWarnings = false
 iRC.TestAdminName = nil
-print("Presence confirmation tests passed: three-probe confirmation, reload grace, late iRC/ForkEU replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")
+print("Presence confirmation tests passed: three-probe confirmation, reload grace, late iRC/RaceLockedForkEU replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")

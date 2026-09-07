@@ -27,7 +27,7 @@ local function createDataObject()
             elseif IsShiftKeyDown and IsShiftKeyDown() then
                 iRC.ConnectionDashboard:Toggle()
             else
-                iRC.AchievementsUI:Toggle(true)
+                iRC.MainUI:Toggle(true)
             end
         end,
         OnTooltipShow = function(tooltip)

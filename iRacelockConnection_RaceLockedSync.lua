@@ -4,7 +4,7 @@ if not iRC then return end
 
 local Sync = {}
 iRC.RaceLockedSync = Sync
-local ROSTER, DEATH = "RLGFRoster", "RLGuildDeath"
+local IRC_ROSTER = "iRCGFRoster"
 local lastBroadcast, pendingRelays = {}, {}
 local moneyReady = false
 
@@ -33,15 +33,18 @@ local function validBool(value)
     return value == "1" or value == "0" or value == "-"
 end
 
-function Sync:IsOriginalLoaded()
-    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-    return loaded and loaded("RaceLocked") or false
-end
-
 local function connection()
     if not iRC:IsGuildConnectionActive() then return nil end
     local db = iRC:GetConnection()
     db.guildFoundRoster = db.guildFoundRoster or {}
+    if not db.legacyRaceLockedRosterCleared then
+        for key, entry in pairs(db.guildFoundRoster) do
+            local source = type(entry) == "table" and tostring(entry.source or "") or ""
+            local overrideSource = type(entry) == "table" and tostring(entry.overrideSource or "") or ""
+            if source:find("^RaceLocked") or overrideSource:find("^RaceLocked") then db.guildFoundRoster[key] = nil end
+        end
+        db.legacyRaceLockedRosterCleared = true
+    end
     db.raceDeaths = db.raceDeaths or {}
     db.deathReports = db.deathReports or {}
     return db
@@ -49,7 +52,7 @@ end
 
 local function refresh()
     if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
-    if iRC.AchievementsUI then iRC.AchievementsUI:RefreshIfShown() end
+    if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
 end
 
 local function send(prefix, payload, target)
@@ -57,7 +60,7 @@ local function send(prefix, payload, target)
     local api = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
     if not api then return false end
     api(prefix, payload, target and "WHISPER" or "GUILD", target)
-    iRC:DebugMsg(iRC:Text("RL_SYNC_SENT", prefix), 3)
+    iRC:DebugMsg(iRC:Text(prefix == IRC_ROSTER and "IRC_GF_SYNC_SENT" or "RL_SYNC_SENT", prefix), 3)
     return true
 end
 
@@ -81,16 +84,14 @@ function Sync:GetStatus(name, snapshot)
     if iRC:NormalizeName(name) == iRC:NormalizeName(iRC:GetPlayerName()) then
         entry.verified, entry.clean, entry.tamperAt = self:GetLocalRawStatus()
     end
-    local verified, clean = entry.verified, entry.clean
-    if entry.gmVerified ~= nil then verified = entry.gmVerified end
-    if entry.gmClean ~= nil then
-        clean = entry.gmClean
-        if clean and (entry.tamperAt or 0) > (entry.gmTimestamp or 0) then clean = false end
-    end
     return {
-        verified = verified, clean = clean, source = entry.source,
+        -- Reported client state is authoritative. GM decisions are retained as
+        -- separate audit metadata and never replace an actual response.
+        verified = entry.verified, clean = entry.clean, source = entry.source,
         lastSeen = entry.lastSeen, gmTimestamp = entry.gmTimestamp,
         overrideSource = entry.overrideSource, directOverride = entry.directOverride,
+        tamperAt = entry.tamperAt, rawVerified = entry.verified, rawClean = entry.clean,
+        gmVerified = entry.gmVerified, gmClean = entry.gmClean,
     }
 end
 
@@ -127,12 +128,6 @@ function Sync:GetLocalRawStatus()
     local history = localHistory()
     local verified = history.maxLevelSelfFound == true
     local clean, tamperAt = history.moneyDiscrepancyAt == nil, history.moneyDiscrepancyAt or 0
-    -- When both addons run, use the original's atomic state for its protocol.
-    if self:IsOriginalLoaded() then
-        if type(RaceLocked_GetLocalSelfReportVerified) == "function" then verified = RaceLocked_GetLocalSelfReportVerified() == true end
-        if type(RaceLocked_GetLocalSelfReportClean) == "function" then clean = RaceLocked_GetLocalSelfReportClean() == true end
-        if type(RaceLocked_GetLocalTamperAt) == "function" then tamperAt = RaceLocked_GetLocalTamperAt() or 0 end
-    end
     return verified, clean, tamperAt
 end
 
@@ -175,26 +170,34 @@ local function queueRelay(name)
         local current = connection()
         if not current or current.key ~= guildKey then return end
         local row = current.guildFoundRoster[key]
-        if row and row.gmTimestamp and not Sync:IsOriginalLoaded() then send(ROSTER, overridePayload("O:", row)) end
+        if row and row.gmTimestamp then send(IRC_ROSTER, overridePayload("O:", row)) end
     end)
 end
 
 function Sync:SetOverride(name, verified, clean)
     if not iRC:IsGuildMaster() or not connection() or not iRC:IsGuildMemberName(name) then return false end
+    local memberLevel
+    if GetNumGuildMembers and GetGuildRosterInfo then
+        for index = 1, GetNumGuildMembers(true) do
+            local memberName, _, _, level = GetGuildRosterInfo(index)
+            if iRC:NormalizeName(memberName) == iRC:NormalizeName(name) then
+                memberLevel = tonumber(level) or 0
+                break
+            end
+        end
+    end
+    if not memberLevel or memberLevel < 60 then
+        iRC:Print(iRC:Text("RL_OVERRIDE_LEVEL_60_ONLY"))
+        return false
+    end
     if verified ~= nil and type(verified) ~= "boolean" or clean ~= nil and type(clean) ~= "boolean" then return false end
     local entry = entryFor(name)
     local stamp = math.max(time(), (entry.gmTimestamp or 0) + 1)
     if not storeOverride(name, verified, clean, stamp, "iRC", true) then return false end
-    send(ROSTER, overridePayload("G:", entry))
+    send(IRC_ROSTER, overridePayload("G:", entry))
     iRC:Print(iRC:Text("RL_OVERRIDE_SAVED", entry.name))
     refresh()
     return true
-end
-
-function Sync:StoreTradeStatus(name, verified)
-    -- TV is an effective status, not a new raw self-report or a GM override.
-    -- Keep the richer roster authoritative whenever it exists.
-    if not self:GetStatus(name) then storeSelf(name, verified, verified, 0, "RaceLocked") end
 end
 
 function Sync:DescribeStatus(name, compact, status)
@@ -203,8 +206,16 @@ function Sync:DescribeStatus(name, compact, status)
     local verified = status.verified == nil and "RL_STATUS_UNKNOWN" or (status.verified and "RL_VERIFIED" or "RL_UNVERIFIED")
     local clean = status.clean == nil and "RL_STATUS_UNKNOWN" or (status.clean and "RL_CLEAN" or "RL_FLAGGED")
     local text = iRC:Text(verified) .. " / " .. iRC:Text(clean)
-    if status.gmTimestamp and not compact then
-        text = text .. " · " .. iRC:Text(status.directOverride and "RL_GM_DIRECT" or "RL_GM_RELAY")
+    if not compact then
+        local details = {}
+        if status.source and status.source ~= "" then details[#details + 1] = iRC:Text("RL_REPORT_SOURCE", status.source) end
+        if status.lastSeen and status.lastSeen > 0 then details[#details + 1] = iRC:Text("RL_LAST_REPORT", date("%Y-%m-%d %H:%M", status.lastSeen)) end
+        if status.tamperAt and status.tamperAt > 0 then details[#details + 1] = iRC:Text("RL_DISCREPANCY_SEEN", date("%Y-%m-%d %H:%M", status.tamperAt)) end
+        if status.gmTimestamp then
+            details[#details + 1] = iRC:Text(status.directOverride and "RL_GM_DIRECT" or "RL_GM_RELAY")
+            details[#details + 1] = iRC:Text("RL_DECISION_TIME", date("%Y-%m-%d %H:%M", status.gmTimestamp))
+        end
+        if #details > 0 then text = text .. "\n" .. table.concat(details, "\n") end
     end
     return text
 end
@@ -220,10 +231,10 @@ function Sync:ReceiveRoster(message, sender)
         if (fields[2] ~= "0" and fields[2] ~= "1") or (fields[3] ~= "0" and fields[3] ~= "1") then return end
         local tamperAt = number(fields[4], time() + 300)
         if not tamperAt then return end
-        storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "RaceLocked")
+        storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC")
         local stamp = number(fields[7], time() + 300)
         if validBool(fields[5]) and validBool(fields[6]) and stamp and stamp > 0
-            and storeOverride(name, readBool(fields[5]), readBool(fields[6]), stamp, "RaceLocked relay", false) then
+            and storeOverride(name, readBool(fields[5]), readBool(fields[6]), stamp, "iRC relay", false) then
             pendingRelays[iRC:NormalizeName(name)] = nil
         else
             queueRelay(name)
@@ -236,12 +247,12 @@ function Sync:ReceiveRoster(message, sender)
             local name, stamp = fields[index], number(fields[index + 3], time() + 300)
             if validBool(fields[index + 1]) and validBool(fields[index + 2]) and stamp
                 and storeOverride(name, readBool(fields[index + 1]), readBool(fields[index + 2]), stamp,
-                    direct and "RaceLocked GM" or "RaceLocked relay", direct) then
+                    direct and "iRC GM" or "iRC relay", direct) then
                 pendingRelays[iRC:NormalizeName(name)] = nil
             end
         end
     else return end
-    iRC:DebugMsg(iRC:Text("RL_SYNC_RECEIVED", ROSTER, sender), 3)
+    iRC:DebugMsg(iRC:Text("IRC_GF_SYNC_RECEIVED", IRC_ROSTER, sender), 3)
     refresh()
 end
 
@@ -268,12 +279,11 @@ function Sync:Broadcast()
     local name = shortName(iRC:GetPlayerName())
     local verified, clean, tamperAt = self:GetLocalRawStatus()
     storeSelf(name, verified, clean, tamperAt, "iRC")
-    if self:IsOriginalLoaded() then return end
     if (UnitLevel("player") or 0) >= 60 then
         local entry = entryFor(name)
         local msg = "S:" .. name .. "," .. wireBool(verified) .. "," .. wireBool(clean) .. "," .. tostring(tamperAt)
         if entry.gmTimestamp then msg = msg .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. entry.gmTimestamp end
-        send(ROSTER, msg)
+        send(IRC_ROSTER, msg)
     end
 end
 
@@ -290,7 +300,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
         local register = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix or RegisterAddonMessagePrefix
-        if register then for _, prefix in ipairs({ ROSTER, DEATH }) do register(prefix) end end
+        if register then register(IRC_ROSTER) end
     elseif event == "PLAYER_LOGIN" then
         Sync:ValidateMoney()
         C_Timer.After(5, function() Sync:Broadcast() end)
@@ -300,12 +310,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if event == "UNIT_AURA" and ... ~= "player" then return end
         Sync:ObserveSelfFound()
     elseif event == "PLAYER_DEAD" then
-        if Sync:RecordDeath(iRC:GetPlayerName()) and not Sync:IsOriginalLoaded() then send(DEATH, "1") end
+        Sync:RecordDeath(iRC:GetPlayerName())
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, msg, channel, sender = ...
         if channel ~= "GUILD" or type(msg) ~= "string" or #msg > 255 then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
-        if prefix == ROSTER then Sync:ReceiveRoster(msg, sender)
-        elseif prefix == DEATH and msg == "1" then Sync:RecordDeath(sender) end
+        if prefix == IRC_ROSTER then Sync:ReceiveRoster(msg, sender) end
     end
 end)

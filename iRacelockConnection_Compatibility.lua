@@ -5,105 +5,20 @@ if not iRC then return end
 local Compatibility = {}
 iRC.Compatibility = Compatibility
 
--- RaceLocked and RaceLockedForkEU use compatible v1-v3 guild-stat payloads.
--- Keep their source identity instead of treating either addon as iRC data.
-local FORKEU_SOURCE = "RaceLockedForkEU"
-local RACELOCKED_SOURCE = "RaceLocked"
-local STATS_PREFIXES = {
-    RaceLockedForkEU = FORKEU_SOURCE,
-    RaceLocked = RACELOCKED_SOURCE,
-}
-local SELF_FOUND_PREFIX = "RLAddon"
-local GUILD_FOUND_PREFIX = "RLGFRoster"
-local SEPARATOR = string.char(31)
-local REQUEST_PAYLOAD = "REQUEST"
-local pendingRaceLockedTradeRequests = {}
+-- Compatibility is deliberately limited to RaceLocked presence. iRC answers
+-- RLAddon probes with its current Self-Found state and accepts fresh RLAddon
+-- replies as proof that a guild member is using RaceLocked instead of iRC.
+local PREFIX = "RLAddon"
+local SOURCE = "RaceLockedForkEU"
 
 local function registerPrefix(prefix)
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then return C_ChatInfo.RegisterAddonMessagePrefix(prefix) end
     if RegisterAddonMessagePrefix then return RegisterAddonMessagePrefix(prefix) end
 end
 
-local function send(prefix, message, distribution, target)
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(prefix, message, distribution, target) end
-    if SendAddonMessage then return SendAddonMessage(prefix, message, distribution, target) end
-end
-
-local function positiveNumber(value, fallback)
-    value = tonumber(value) or fallback or 0
-    return value < 0 and 0 or value
-end
-
-local function split(message)
-    local fields = {}
-    for value in string.gmatch(tostring(message or ""), "([^" .. SEPARATOR .. "]+)") do fields[#fields + 1] = value end
-    return fields
-end
-
-local function parseStats(message, source)
-    local fields = split(message)
-    local version, name, guid, points, level, enemies, dungeons, jumps = fields[1]
-    if version == "1" and #fields == 5 then
-        name, guid, points, level = fields[2], fields[3], fields[4], fields[5]
-    elseif version == "2" and #fields == 7 then
-        name, guid, points, level, dungeons, jumps = fields[2], fields[3], fields[4], fields[5], fields[6], fields[7]
-    elseif version == "3" and #fields == 8 then
-        name, guid, points, level, enemies, dungeons, jumps = fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], fields[8]
-    else
-        return nil
-    end
-    if not name or name == "" or not guid or guid == "" then return nil end
-    return {
-        source = source or FORKEU_SOURCE,
-        name = name,
-        guid = guid,
-        points = positiveNumber(points),
-        level = math.max(1, positiveNumber(level, 1)),
-        statistics = {
-            enemiesSlain = positiveNumber(enemies),
-            dungeonBosses = positiveNumber(dungeons),
-            jumps = positiveNumber(jumps),
-        },
-    }
-end
-
-local function readExternalMetric(functionName, fallback)
-    local functionReference = _G[functionName]
-    if type(functionReference) ~= "function" then return fallback end
-    local ok, value = pcall(functionReference)
-    return ok and positiveNumber(value, fallback) or fallback
-end
-
-function Compatibility:GetLocalStats(source)
-    local profile = iRC:GetLocalProfile()
-    local statistics = profile.statistics or {}
-    local apiPrefix = source == RACELOCKED_SOURCE and "RaceLocked_" or "RaceLockedForkEU_"
-    return {
-        source = source or FORKEU_SOURCE,
-        name = profile.name,
-        guid = profile.guid,
-        level = profile.level,
-        points = readExternalMetric(apiPrefix .. "GetPlayerAchievementPoints", iRC:GetHardcoreAchievementPoints()),
-        statistics = {
-            enemiesSlain = readExternalMetric(apiPrefix .. "GetPlayerEnemiesSlain", statistics.enemiesSlain),
-            dungeonBosses = readExternalMetric(apiPrefix .. "GetPlayerDungeonCompletions", statistics.dungeonBosses),
-            jumps = readExternalMetric(apiPrefix .. "GetPlayerJumpCount", statistics.jumps),
-        },
-    }
-end
-
-function Compatibility:StoreStats(entry)
-    if not entry or not entry.name or not iRC:IsGuildConnectionActive() then return end
-    local connection = iRC:GetConnection()
-    connection.compatibilityMembers = connection.compatibilityMembers or {}
-    local key = iRC:NormalizeName(entry.name)
-    local member = connection.compatibilityMembers[key] or { name = entry.name }
-    member.name = entry.name
-    member.guid = entry.guid or member.guid
-    member.stats = entry
-    member.stats.lastSeen = time()
-    connection.compatibilityMembers[key] = member
-    if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+local function send(message)
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(PREFIX, message, "GUILD") end
+    if SendAddonMessage then return SendAddonMessage(PREFIX, message, "GUILD") end
 end
 
 function Compatibility:StoreSelfFound(name, selfFound, source)
@@ -113,29 +28,10 @@ function Compatibility:StoreSelfFound(name, selfFound, source)
     local key = iRC:NormalizeName(name)
     local member = connection.compatibilityMembers[key] or { name = name }
     member.name = member.name or name
-    member.selfFound = selfFound and true or false
+    member.selfFound = selfFound == true
     member.selfFoundLastSeen = time()
-    member.presence = {
-        source = source or FORKEU_SOURCE,
-        lastSeen = member.selfFoundLastSeen,
-    }
-    connection.compatibilityMembers[key] = member
-    if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
-end
-
-function Compatibility:StoreGuildFoundVerification(name, verified, clean, source)
-    if not name or not iRC:IsGuildConnectionActive() then return end
-    local connection = iRC:GetConnection()
-    connection.compatibilityMembers = connection.compatibilityMembers or {}
-    local key = iRC:NormalizeName(name)
-    local member = connection.compatibilityMembers[key] or { name = name }
-    member.name = member.name or name
-    member.guildFound = {
-        verified = verified and true or false,
-        clean = clean and true or false,
-        source = source or RACELOCKED_SOURCE,
-        lastSeen = time(),
-    }
+    member.presence = { source = source or SOURCE, lastSeen = member.selfFoundLastSeen }
+    member.guildFound = nil
     connection.compatibilityMembers[key] = member
     if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
 end
@@ -146,116 +42,30 @@ function iRC:GetCompatibilityMember(name)
     return connection and connection.compatibilityMembers and connection.compatibilityMembers[self:NormalizeName(name)] or nil
 end
 
-function iRC:GetCompatibilityStats(name)
-    local member = self:GetCompatibilityMember(name)
-    return member and member.stats or nil
-end
-
-function Compatibility:BroadcastStats()
-    if not iRC:IsGuildConnectionActive() then return end
-    for prefix, source in pairs(STATS_PREFIXES) do
-        local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-        local entry = self:GetLocalStats(source)
-        if entry.name and entry.name ~= "" and entry.guid and entry.guid ~= "" then
-            local statistics = entry.statistics or {}
-            local payload = table.concat({
-                "3", entry.name, entry.guid, tostring(entry.points), tostring(entry.level),
-                tostring(statistics.enemiesSlain or 0), tostring(statistics.dungeonBosses or 0), tostring(statistics.jumps or 0),
-            }, SEPARATOR)
-            if #payload <= 255 and not (loaded and loaded(source)) then send(prefix, payload, "GUILD") end
-            self:StoreStats(entry)
-        end
-    end
-end
-
 function Compatibility:BroadcastSelfFound(messageType)
-    if not iRC:IsGuildConnectionActive() then return end
-    local loaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-    if not (loaded and loaded("RaceLockedForkEU")) then
-        send(SELF_FOUND_PREFIX, messageType .. "," .. (iRC:GetSelfFoundState() and "1" or "0"), "GUILD")
-    end
+    if not iRC:IsGuildConnectionActive() then return false end
+    local sent = send((messageType or "PING") .. "," .. (iRC:GetSelfFoundState() and "1" or "0"))
     self:StoreSelfFound(iRC:GetPlayerName(), iRC:GetSelfFoundState(), "iRC")
+    return sent ~= false
 end
 
 function Compatibility:BroadcastAll()
-    if not iRC:IsGuildConnectionActive() then return end
-    self:BroadcastStats()
-    send("RaceLockedForkEU", REQUEST_PAYLOAD, "GUILD")
-    self:BroadcastSelfFound("PING")
-    if iRC.RaceLockedSync then iRC.RaceLockedSync:Broadcast() end
-    iRC:DebugMsg(iRC:Text("FORKEU_REFRESH_SENT"), 3)
+    return self:BroadcastSelfFound("PING")
 end
 
 function Compatibility:RequestPresenceCheck()
     if not iRC:IsGuildConnectionActive() then return false end
     if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
-    -- An explicit probe is needed even with ForkEU co-installed; its periodic
-    -- broadcaster may not run during our confirmation window.
-    send(SELF_FOUND_PREFIX, "PING," .. (iRC:GetSelfFoundState() and "1" or "0"), "GUILD")
-    send("RaceLockedForkEU", REQUEST_PAYLOAD, "GUILD")
-    return true
-end
-
-function iRC:RequestRaceLockedTradeVerification(targetName)
-    if not self:IsGuildConnectionActive() or type(targetName) ~= "string" or targetName == "" then return false end
-    local targetKey = self:NormalizeName(targetName)
-    local requestedAt = pendingRaceLockedTradeRequests[targetKey]
-    if requestedAt and time() - requestedAt < 6 then return true end
-    local isVerified = self:GetGuildFoundTradeStatus(self:GetPlayerName()) == true
-    pendingRaceLockedTradeRequests[targetKey] = time()
-    send("RaceLocked", "TV:" .. (isVerified and "1" or "0"), "WHISPER", targetName)
-    return true
-end
-
-local function handleStats(message, sender, source)
-    if not iRC:IsGuildMemberName(sender) then return end
-    if message == REQUEST_PAYLOAD and source == FORKEU_SOURCE then
-        Compatibility:BroadcastStats()
-        return
-    end
-    local entry = parseStats(message, source)
-    if entry and iRC:NormalizeName(entry.name) == iRC:NormalizeName(sender) then Compatibility:StoreStats(entry) end
+    return self:BroadcastSelfFound("PING")
 end
 
 local function handleSelfFound(message, sender)
+    if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     if not iRC:IsGuildMemberName(sender) then return end
     local messageType, value = tostring(message or ""):match("^([^,]+),([01])$")
-    if not messageType then return end
-    Compatibility:StoreSelfFound(sender, value == "1", FORKEU_SOURCE)
+    if messageType ~= "PING" and messageType ~= "PONG" then return end
+    Compatibility:StoreSelfFound(sender, value == "1", SOURCE)
     if messageType == "PING" then Compatibility:BroadcastSelfFound("PONG") end
-end
-
-local function handleGuildFoundRoster(message, sender)
-    if iRC.RaceLockedSync then return end -- The full roster protocol has its own receiver.
-    if not iRC:IsGuildMemberName(sender) or type(message) ~= "string" then return end
-    local name, verified, clean = message:match("^S:([^,]+),([01]),([01]),")
-    if name and iRC:NormalizeName(name) == iRC:NormalizeName(sender) then
-        Compatibility:StoreGuildFoundVerification(name, verified == "1", clean == "1", RACELOCKED_SOURCE)
-    end
-end
-
-local function handleTradeVerification(message, sender)
-    if not iRC:IsGuildMemberName(sender) or type(message) ~= "string" then return end
-    local verified = message:match("^TV:([01])$")
-    if not verified then return end
-    -- The original owns its trade exchange when installed alongside iRC.
-    if iRC.RaceLockedSync and iRC.RaceLockedSync:IsOriginalLoaded() then
-        iRC.RaceLockedSync:StoreTradeStatus(sender, verified == "1")
-        return
-    end
-    local senderKey = iRC:NormalizeName(sender)
-    local requestedAt = pendingRaceLockedTradeRequests[senderKey]
-    if requestedAt and time() - requestedAt <= 6 then
-        pendingRaceLockedTradeRequests[senderKey] = nil
-    else
-        local localVerified = iRC:GetGuildFoundTradeStatus(iRC:GetPlayerName()) == true
-        send("RaceLocked", "TV:" .. (localVerified and "1" or "0"), "WHISPER", sender)
-    end
-    Compatibility:StoreGuildFoundVerification(sender, verified == "1", verified == "1", RACELOCKED_SOURCE)
-    if iRC.RaceLockedSync then iRC.RaceLockedSync:StoreTradeStatus(sender, verified == "1") end
-    local member = iRC:GetCompatibilityMember(sender)
-    if member and member.guildFound then member.guildFound.tradeHandshakeAt = time() end
-    if iRC.Enforcement and iRC.Enforcement.CheckTradeRestriction then iRC.Enforcement:CheckTradeRestriction() end
 end
 
 local frame = CreateFrame("Frame")
@@ -264,23 +74,13 @@ frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
-        if ... ~= iRC.Name then return end
-        for prefix in pairs(STATS_PREFIXES) do registerPrefix(prefix) end
-        registerPrefix(SELF_FOUND_PREFIX)
-        registerPrefix(GUILD_FOUND_PREFIX)
+        if ... == iRC.Name then registerPrefix(PREFIX) end
     elseif event == "PLAYER_LOGIN" then
-        if C_Timer and C_Timer.After then C_Timer.After(4, function() Compatibility:BroadcastAll() end) end
+        if C_Timer and C_Timer.After then C_Timer.After(6, function() Compatibility:BroadcastAll() end) end
         if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(60, function() Compatibility:BroadcastAll() end) end
     elseif event == "CHAT_MSG_ADDON" then
         if not iRC:IsGuildConnectionActive() then return end
         local prefix, message, _, sender = ...
-        if STATS_PREFIXES[prefix] then
-            if prefix == "RaceLocked" then handleTradeVerification(message, sender) end
-            handleStats(message, sender, STATS_PREFIXES[prefix])
-        elseif prefix == SELF_FOUND_PREFIX then
-            handleSelfFound(message, sender)
-        elseif prefix == GUILD_FOUND_PREFIX then
-            handleGuildFoundRoster(message, sender)
-        end
+        if prefix == PREFIX then handleSelfFound(message, sender) end
     end
 end)
