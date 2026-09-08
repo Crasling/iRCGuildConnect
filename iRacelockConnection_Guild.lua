@@ -222,11 +222,26 @@ function iRC:CheckPresenceMismatches()
     local loginReadyAt = (self.ConnectionSessionStartedAt or sessionStartedAt) + LOGIN_GRACE
     connection.newMemberChecks = connection.newMemberChecks or {}
     connection.newMemberWelcomeNotices = connection.newMemberWelcomeNotices or {}
+    connection.raceMismatchNotices = connection.raceMismatchNotices or {}
     for _, member in ipairs(self:GetGuildRosterRows()) do
         local key = self:NormalizeName(member.name)
         local id = memberKey(member.name, member.guid)
         currentMembers[key] = true
         local verification = member.verification or { state = "missing" }
+        if member.raceMismatch and member.raceCheck then
+            local signature = table.concat({ tostring(member.guid or ""), member.raceCheck.actual, member.raceCheck.expected }, ":")
+            if connection.raceMismatchNotices[key] ~= signature and SendChatMessage then
+                local actualRace = self:Text("GUILD_RACE_" .. member.raceCheck.actual)
+                local expectedRace = self:Text("GUILD_RACE_" .. member.raceCheck.expected)
+                local sent = pcall(SendChatMessage, self:Text("RACE_MISMATCH_OFFICER_NOTICE", member.name, actualRace, expectedRace), "OFFICER")
+                if sent then
+                    connection.raceMismatchNotices[key] = signature
+                    self:DebugMsg(self:Text("RACE_MISMATCH_DETECTED", member.name, actualRace, expectedRace), 2)
+                end
+            end
+        else
+            connection.raceMismatchNotices[key] = nil
+        end
         if not member.online then
             reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
         elseif verification.state == "verified" or verification.state == "compatible" then
@@ -285,6 +300,7 @@ function iRC:CheckPresenceMismatches()
     end
     for key in pairs(pendingPresenceChecks) do if not currentMembers[key] then pendingPresenceChecks[key] = nil end end
     for key in pairs(reportedPresenceMismatches) do if not currentMembers[key] then reportedPresenceMismatches[key] = nil end end
+    for key in pairs(connection.raceMismatchNotices) do if not currentMembers[key] then connection.raceMismatchNotices[key] = nil end end
     if #probeBatch > 0 then
         -- One guild-wide batch covers all pending members. A poll merely
         -- received from another client is not evidence that we tried a probe.
@@ -347,6 +363,19 @@ local function getRaceFromGuid(guid)
     return raceFile or localizedRace
 end
 
+function iRC:GetGuildMemberRaceCheck(race, connection)
+    connection = connection or self:GetConnection()
+    local expected = connection and connection.active == true
+        and self:NormalizeGuildRace(connection.rules and connection.rules.guildRace) or ""
+    local actual = self:NormalizeGuildRace(race)
+    return {
+        expected = expected,
+        actual = actual,
+        known = expected ~= "" and actual ~= "",
+        mismatch = expected ~= "" and actual ~= "" and actual ~= expected,
+    }
+end
+
 function iRC:GetGuildRosterRows()
     local rows, count = {}, GetNumGuildMembers and GetNumGuildMembers(true) or 0
     local selfName = self:GetPlayerName()
@@ -398,6 +427,7 @@ function iRC:GetGuildRosterRows()
                 guid = profile.guid
             end
             local verification = self:GetMemberVerification(name, online and true or false, profile, context)
+            local raceCheck = self:GetGuildMemberRaceCheck(race, connection)
             local attentionSince = self:GetMemberAttentionSince(name, verification, connection or false)
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
@@ -414,13 +444,16 @@ function iRC:GetGuildRosterRows()
                 addonVersion = profile and profile.addonVersion or nil,
                 source = (profile and "iRC") or (compatibilityMember and compatibilityMember.presence and compatibilityMember.presence.source) or nil,
                 verification = verification,
+                raceCheck = raceCheck,
+                raceMismatch = raceCheck.mismatch,
                 attentionSince = attentionSince,
             }
         end
     end
     if #rows == 0 and self:IsInGuildConnection() then
         local profile = self:GetLocalProfile()
-        rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, selfFound = profile.selfFound, addonVersion = profile.addonVersion, verification = self:GetMemberVerification(profile.name, true, profile) }
+        local raceCheck = self:GetGuildMemberRaceCheck(profile.race)
+        rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, selfFound = profile.selfFound, addonVersion = profile.addonVersion, verification = self:GetMemberVerification(profile.name, true, profile), raceCheck = raceCheck, raceMismatch = raceCheck.mismatch }
     end
     table.sort(rows, function(a, b) return string.lower(a.name) < string.lower(b.name) end)
     return rows

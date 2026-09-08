@@ -2,6 +2,14 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.13 - Guild Cache Sharing & Race Verification
+--------------------------------------------------------------------------------
+ [CHANGED] Refresh / Share now uses the working guild-cache request instead of sending a global request that Classic clients cannot answer automatically
+ [FIX] Race Talk no longer taints protected slash commands such as /gquit
+ [NEW] Guild members can exchange validated recent Guild Statistics snapshots so online members help fill missing guild data without publishing cached reports globally
+ [NEW] Guild Verification flags members whose known character race does not match the guild's configured race
+
+
 v0.2.12 - Guild Found Management & Statistics Fixes
 --------------------------------------------------------------------------------
  [FIX] Receiving another guild's statistics no longer starts or resets the local Refresh / Share cooldown

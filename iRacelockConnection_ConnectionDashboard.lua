@@ -661,6 +661,10 @@ function Dashboard:Refresh()
     elseif frame.tab == "Verification" then
         local verified, compatible, attention, offline = 0, 0, 0, 0
         local members = iRC:GetGuildRosterRows()
+        local function effectiveVerificationState(member)
+            if member.raceMismatch then return "attention" end
+            return member.verification and member.verification.state or "missing"
+        end
         local rules = iRC:GetConnectionRules() or {}
         local usesSelfFound = rules.selfFoundOnly == true
         local usesGuildFound = usesSelfFound and rules.level60GuildFound == true
@@ -668,7 +672,7 @@ function Dashboard:Refresh()
         local progressHeader = usesGuildFound and iRC:Text("VERIFICATION_PROGRESS_SF_GF_COLUMN")
             or (usesSelfFound and iRC:Text("VERIFICATION_PROGRESS_COLUMN") or iRC:Text("VERIFICATION_ONLY_COLUMN"))
         for _, member in ipairs(members) do
-            local state = member.verification and member.verification.state
+            local state = effectiveVerificationState(member)
             if state == "verified" then verified = verified + 1
             elseif state == "compatible" then compatible = compatible + 1
             elseif state == "offline" or state == "inactive" then offline = offline + 1
@@ -689,12 +693,12 @@ function Dashboard:Refresh()
             { "Member", "Race / Class", "Level", "Live status", progressHeader, iRC:Text("VERIFICATION_STATUS_COLUMN") },
             { "name", "race", "level", "status", "progress", "clean" }, "name")
         members = filterAndSort(frame, members, function(member)
-            local state = member.verification and member.verification.state or "missing"
+            local state = effectiveVerificationState(member)
             return filter == "all" or state == filter or (filter == "attention" and state ~= "verified" and state ~= "compatible" and state ~= "offline" and state ~= "inactive")
         end, function(member, key)
             if key == "name" then return member.name or "" end
             if key == "race" then return (member.race or "") .. (member.class or "") end
-            if key == "status" then return member.verification and member.verification.state or "missing" end
+            if key == "status" then return effectiveVerificationState(member) end
             local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
             if key == "progress" then
                 if usesSelfFound and (member.level or 0) < 60 then return member.selfFound and 1 or 0 end
@@ -716,6 +720,13 @@ function Dashboard:Refresh()
                 or (member.compatibility and (sourceLabel(member.source) .. " · " .. verification.label))
                 or verification.label
             local attentionTimer = formatAttentionTimer(member.attentionSince)
+            local raceWarning
+            if member.raceMismatch and member.raceCheck then
+                local actualRace = iRC:Text("GUILD_RACE_" .. member.raceCheck.actual)
+                local expectedRace = iRC:Text("GUILD_RACE_" .. member.raceCheck.expected)
+                raceWarning = iRC:Text("VERIFICATION_WRONG_RACE", actualRace, expectedRace)
+                addon = addon .. "\n" .. raceWarning
+            end
             local addonText = addon
             if attentionTimer then addon = addon .. "\n" .. attentionTimer end
             local liveState = verification.state
@@ -750,8 +761,9 @@ function Dashboard:Refresh()
             end
             local statusTooltip = selfFound
             if iRC.RaceLockedSync then statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus) end
+            if raceWarning then statusTooltip = statusTooltip .. "\n\n" .. raceWarning end
             if iRC:IsGuildAdmin() then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
-            local color = verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED))
+            local color = member.raceMismatch and RED or (verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED)))
             local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
                 if mouseButton == "RightButton" then
                     openMemberManagementMenu(frame, selectedMember)
@@ -762,6 +774,7 @@ function Dashboard:Refresh()
             end, statusTooltip)
             data.attentionSince, data.addonText = member.attentionSince, addonText
             data.columnColors = {
+                [4] = member.raceMismatch and RED or nil,
                 [5] = progressColor,
                 [6] = not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
                     or (belowMaxLevel and GREEN

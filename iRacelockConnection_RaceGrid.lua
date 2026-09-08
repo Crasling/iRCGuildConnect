@@ -12,6 +12,10 @@ local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
 local REPORT_MAX_AGE = 5 * 86400
+local CACHE_REQUEST_WINDOW = 5
+local CACHE_TRANSFER_TIMEOUT = 15
+local CACHE_CHUNK_SIZE = 100
+local MAX_CACHE_PACKAGES = 32
 local SEP = "\t"
 local ALLIANCE_RACES = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HORDE_RACES = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
@@ -30,12 +34,18 @@ local function registerPrefix(prefix)
     if RegisterAddonMessagePrefix then return RegisterAddonMessagePrefix(prefix) end
 end
 
+local function bytesToHex(value)
+    return tostring(value or ""):gsub(".", function(character)
+        return string.format("%02x", string.byte(character))
+    end)
+end
+
 local function send(prefix, message, distribution, target)
     if distribution == "CHANNEL" then
         local id = GetChannelName and GetChannelName(target)
         if type(id) ~= "number" or id <= 0 or #message > 255 then return false end
         if not SendChatMessage then return false end
-        local hex = message:gsub(".", function(character) return string.format("%02x", string.byte(character)) end)
+        local hex = bytesToHex(message)
         local single = prefix .. ":" .. hex
         if #single <= 255 then
             local called = pcall(SendChatMessage, single, "CHANNEL", nil, id)
@@ -55,8 +65,9 @@ local function send(prefix, message, distribution, target)
         end
         return true
     end
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(prefix, message, distribution, target) end
-    if SendAddonMessage then return SendAddonMessage(prefix, message, distribution, target) end
+    local api = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
+    if not api or #message > 255 then return false end
+    return pcall(api, prefix, message, distribution, target)
 end
 
 local function split(message)
@@ -77,6 +88,15 @@ end
 
 local function normalizeGuildName(name)
     return string.lower((tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")))
+end
+
+local function payloadChecksum(value)
+    local first, second = 1, 0
+    for index = 1, #value do
+        first = (first + value:byte(index)) % 65521
+        second = (second + first) % 65521
+    end
+    return string.format("%04x%04x", second, first)
 end
 
 local function getServerStore()
@@ -232,7 +252,9 @@ function RaceGrid:StoreGuildReport(report, silent)
     local reports = getServerStore().guildReports
     local key = normalizeGuildName(report.guildName)
     local old = reports[key]
-    if old and (tonumber(old.timestamp) or 0) > (tonumber(report.timestamp) or 0) then return false end
+    local oldTimestamp, newTimestamp = old and (tonumber(old.timestamp) or 0) or 0, tonumber(report.timestamp) or 0
+    if old and (oldTimestamp > newTimestamp
+        or (oldTimestamp == newTimestamp and (tonumber(old.cacheHop) or 0) < (tonumber(report.cacheHop) or 0))) then return false end
     report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
     report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     report.lastSeen = time()
@@ -315,15 +337,7 @@ function RaceGrid:IsExternalBroadcaster()
     return true
 end
 
-function RaceGrid:BroadcastReport(fromClick)
-    if not self:IsEnabled() then return false end
-    self:EnsureChannel()
-    if not getChannelId() then
-        iRC:DebugMsg(iRC:Text("RACEGRID_OWN_CHANNEL_UNAVAILABLE"), 2)
-        return false
-    end
-    local report = self:GetLocalReport()
-    if not report.name or report.name == "" or not report.guid or report.guid == "" or not report.race then return false end
+local function serializeGuildReport(report)
     local fields = {
         "GUILD_REPORT", WIRE_VERSION, report.name, report.guid, report.guildName, report.race,
         tostring(report.membersLevel60 or 0), tostring(report.activePlayers or 0), tostring(report.members or 0),
@@ -344,8 +358,20 @@ function RaceGrid:BroadcastReport(fromClick)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 60)
-    fields[#fields + 1] = iRC.Version
-    local payload = table.concat(fields, SEP)
+    fields[#fields + 1] = report.addonVersion or iRC.Version
+    return table.concat(fields, SEP)
+end
+
+function RaceGrid:BroadcastReport(fromClick)
+    if not self:IsEnabled() then return false end
+    self:EnsureChannel()
+    if not getChannelId() then
+        iRC:DebugMsg(iRC:Text("RACEGRID_OWN_CHANNEL_UNAVAILABLE"), 2)
+        return false
+    end
+    local report = self:GetLocalReport()
+    if not report.name or report.name == "" or not report.guid or report.guid == "" or not report.race then return false end
+    local payload = serializeGuildReport(report)
     if #payload > 255 then return false end
     self:StoreGuildReport(report)
     -- Public custom-channel sends require a hardware event on Classic. Startup
@@ -356,15 +382,6 @@ function RaceGrid:BroadcastReport(fromClick)
         return false
     end
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
-    return true
-end
-
-function RaceGrid:RequestReports(fromClick)
-    if fromClick ~= true or not self:IsEnabled() then return false end
-    self:EnsureChannel()
-    if not getChannelId() then return false end
-    if not send(PREFIX, table.concat({ "REQUEST", WIRE_VERSION, iRC.Version }, SEP), "CHANNEL", CHANNEL_NAME) then return false end
-    iRC:DebugMsg(iRC:Text("RACEGRID_REQUEST_SENT"), 3)
     return true
 end
 
@@ -385,7 +402,7 @@ function RaceGrid:PublishFromClick()
     end
     lastRefreshActivityAt = GetTime()
     self:BroadcastReport(true)
-    self:RequestReports(true)
+    self:RequestGuildCache()
     return true
 end
 
@@ -449,15 +466,183 @@ local function parseGuildReport(parts)
     }
 end
 
-local function handleMessage(prefix, message, sender)
+local cacheRequests, observedCacheOffers, offeredCachePayloads, incomingCacheTransfers = {}, {}, {}, {}
+
+local function cleanCacheState()
+    local now = GetTime()
+    for requestId, request in pairs(cacheRequests) do
+        if type(request) ~= "table" or now - (request.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then cacheRequests[requestId] = nil end
+    end
+    for requestId, observed in pairs(observedCacheOffers) do
+        if type(observed) ~= "table" or now - (observed.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then observedCacheOffers[requestId] = nil end
+    end
+    for requestId, offered in pairs(offeredCachePayloads) do
+        if type(offered) ~= "table" or now - (offered.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then offeredCachePayloads[requestId] = nil end
+    end
+    local count, oldestKey, oldestAt = 0, nil, nil
+    for key, transfer in pairs(incomingCacheTransfers) do
+        if type(transfer) ~= "table" or now - (transfer.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then
+            incomingCacheTransfers[key] = nil
+        else
+            count = count + 1
+            if not oldestAt or transfer.startedAt < oldestAt then oldestKey, oldestAt = key, transfer.startedAt end
+        end
+    end
+    if count >= MAX_CACHE_PACKAGES and oldestKey then incomingCacheTransfers[oldestKey] = nil end
+end
+
+local function offerDelay(requestId, guildName)
+    local seed = fullNameKey(iRC:GetPlayerName()) .. tostring(requestId) .. normalizeGuildName(guildName)
+    local total = 0
+    for index = 1, #seed do total = (total + seed:byte(index) * index) % 240 end
+    return 0.35 + total / 100
+end
+
+local function sendCacheOffers(requestId, requester)
+    local store, now = getServerStore(), time()
+    observedCacheOffers[requestId] = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
+    for _, report in pairs(store.guildReports) do
+        local timestamp = type(report) == "table" and tonumber(report.timestamp) or 0
+        if timestamp > 0 and now - timestamp <= REPORT_MAX_AGE and (tonumber(report.cacheHop) or 0) == 0 then
+            local payload = serializeGuildReport(report)
+            local checksum, guildName = payloadChecksum(payload), report.guildName
+            local function offer()
+                if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(requester) then return end
+                local observed = observedCacheOffers[requestId]
+                local best = observed and observed.guilds[normalizeGuildName(guildName)]
+                if best and (best.timestamp > timestamp
+                    or (best.timestamp == timestamp and fullNameKey(best.sender) < fullNameKey(iRC:GetPlayerName()))) then return end
+                if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, timestamp, checksum }, SEP), "GUILD") then
+                    local offered = offeredCachePayloads[requestId] or { startedAt = GetTime(), guilds = {} }
+                    offeredCachePayloads[requestId] = offered
+                    offered.guilds[normalizeGuildName(guildName)] = { payload = payload, timestamp = timestamp, checksum = checksum }
+                    iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
+                end
+            end
+            if C_Timer and C_Timer.After then C_Timer.After(offerDelay(requestId, guildName), offer) else offer() end
+        end
+    end
+end
+
+local function requestBestCacheOffers(requestId)
+    local request = cacheRequests[requestId]
+    if not request then return end
+    for guildKey, offer in pairs(request.offers) do
+        local localReport = getServerStore().guildReports[guildKey]
+        local localTimestamp = localReport and (tonumber(localReport.timestamp) or 0) or 0
+        local shouldRequest = offer.timestamp > localTimestamp
+            or (offer.timestamp == localTimestamp and localReport and (tonumber(localReport.cacheHop) or 0) > 0)
+        if shouldRequest then
+            request.selected[guildKey] = offer
+            send(PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName, offer.timestamp, offer.checksum }, SEP), "WHISPER", offer.sender)
+            iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REQUEST_SENT", offer.guildName, offer.sender), 3)
+        end
+    end
+end
+
+function RaceGrid:RequestGuildCache()
+    if not self:IsEnabled() or not iRC:IsGuildConnectionActive() then return false end
+    cleanCacheState()
+    local requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
+    cacheRequests[requestId] = { startedAt = GetTime(), offers = {}, selected = {} }
+    if not send(PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId }, SEP), "GUILD") then
+        cacheRequests[requestId] = nil
+        return false
+    end
+    iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_DISCOVERY_SENT"), 3)
+    if C_Timer and C_Timer.After then C_Timer.After(CACHE_REQUEST_WINDOW, function() requestBestCacheOffers(requestId) end) end
+    return true
+end
+
+local function handleCacheMessage(parts, sender, distribution)
+    local kind, requestId = parts[1], parts[3]
+    if parts[2] ~= WIRE_VERSION or type(requestId) ~= "string" or not requestId:match("^[0-9a-f]+$")
+        or #requestId > 24 or not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(sender) then return true end
+    cleanCacheState()
+    if kind == "CACHE_REQUEST" and distribution == "GUILD" then
+        sendCacheOffers(requestId, sender)
+        iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_DISCOVERY_RECEIVED", sender), 3)
+        return true
+    elseif kind == "CACHE_OFFER" and distribution == "GUILD" then
+        if not cacheRequests[requestId] and not observedCacheOffers[requestId] then return true end
+        local requester, guildName = parts[4], tostring(parts[5] or "")
+        local timestamp, checksum = validNumber(parts[6], 0, time() + 300), tostring(parts[7] or ""):lower()
+        if guildName == "" or #guildName > 80 or not timestamp or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") then return true end
+        local guildKey = normalizeGuildName(guildName)
+        local observed = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
+        observedCacheOffers[requestId] = observed
+        local current = observed.guilds[guildKey]
+        if not current or timestamp > current.timestamp or (timestamp == current.timestamp and fullNameKey(sender) < fullNameKey(current.sender)) then
+            observed.guilds[guildKey] = { timestamp = timestamp, sender = sender }
+        end
+        if iRC:NormalizeName(requester) == iRC:NormalizeName(iRC:GetPlayerName()) then
+            local request = cacheRequests[requestId]
+            if request then
+                local offer = request.offers[guildKey]
+                if not offer or timestamp > offer.timestamp or (timestamp == offer.timestamp and fullNameKey(sender) < fullNameKey(offer.sender)) then
+                    request.offers[guildKey] = { guildName = guildName, timestamp = timestamp, checksum = checksum, sender = sender }
+                end
+            end
+        end
+        return true
+    elseif kind == "CACHE_GET" and distribution == "WHISPER" then
+        local guildName, timestamp, checksum = tostring(parts[4] or ""), tonumber(parts[5]), tostring(parts[6] or ""):lower()
+        local offered = offeredCachePayloads[requestId]
+        local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]
+        if not snapshot or snapshot.timestamp ~= timestamp or snapshot.checksum ~= checksum then return true end
+        local payload = snapshot.payload
+        local hex = bytesToHex(payload)
+        local total = math.ceil(#hex / CACHE_CHUNK_SIZE)
+        if total < 1 or total > 8 then return true end
+        for part = 1, total do
+            local chunk = hex:sub((part - 1) * CACHE_CHUNK_SIZE + 1, part * CACHE_CHUNK_SIZE)
+            send(PREFIX, table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName, part, total, checksum, chunk }, SEP), "WHISPER", sender)
+            iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_PACKAGE_SENT", part, total, guildName, sender), 3)
+        end
+        return true
+    elseif kind == "CACHE_DATA" and distribution == "WHISPER" then
+        local guildName = tostring(parts[4] or "")
+        local part, total = tonumber(parts[5]), tonumber(parts[6])
+        local checksum, chunk = tostring(parts[7] or ""):lower(), tostring(parts[8] or "")
+        local request = cacheRequests[requestId]
+        local selected = request and request.selected[normalizeGuildName(guildName)]
+        if not request or not selected or iRC:NormalizeName(selected.sender) ~= iRC:NormalizeName(sender)
+            or normalizeGuildName(selected.guildName) ~= normalizeGuildName(guildName)
+            or selected.checksum ~= checksum
+            or not part or not total or total < 1 or total > 8 or part < 1 or part > total
+            or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") or not chunk:match("^[0-9a-fA-F]+$") then return true end
+        local key = fullNameKey(sender) .. ":" .. requestId .. ":" .. checksum
+        local transfer = incomingCacheTransfers[key]
+        if not transfer or transfer.total ~= total then
+            transfer = { startedAt = GetTime(), total = total, parts = {}, guildName = guildName, checksum = checksum }
+            incomingCacheTransfers[key] = transfer
+        end
+        transfer.parts[part] = chunk
+        iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_PACKAGE_RECEIVED", part, total, guildName, sender), 3)
+        for index = 1, total do if not transfer.parts[index] then return true end end
+        incomingCacheTransfers[key] = nil
+        local payload = hexToBytes(table.concat(transfer.parts))
+        if not payload or payloadChecksum(payload) ~= checksum then return true end
+        local report = parseGuildReport(split(payload))
+        if not report or normalizeGuildName(report.guildName) ~= normalizeGuildName(guildName)
+            or tonumber(report.timestamp) ~= selected.timestamp
+            or time() - (tonumber(report.timestamp) or 0) > REPORT_MAX_AGE then return true end
+        report.cacheHop, report.relayedBy = 1, sender
+        if RaceGrid:StoreGuildReport(report) then
+            iRC:CheckForNewVersion(report.addonVersion)
+            iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REPORT_RECEIVED", report.guildName, sender), 3)
+        end
+        request.selected[normalizeGuildName(guildName)] = nil
+        return true
+    end
+    return false
+end
+
+local function handleMessage(prefix, message, sender, distribution)
     if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts = split(message)
-    if parts[1] == "REQUEST" and (parts[2] == WIRE_VERSION or parts[2] == "1") then
-        iRC:CheckForNewVersion(parts[3])
-        iRC:DebugMsg(iRC:Text("RACEGRID_REQUEST_RECEIVED", sender, math.ceil(RaceGrid:GetRefreshCooldownRemaining())), 3)
-        return
-    end
+    if parts[1] and parts[1]:match("^CACHE_") and handleCacheMessage(parts, sender, distribution) then return end
     local report = parseGuildReport(parts)
     -- WoW may qualify the channel sender with its realm while the profile in
     -- the payload uses the character's short name. Compare them using iRC's
@@ -479,7 +664,7 @@ function iRC:GetGlobalRaceOverview()
             stored[key] = nil
             serverStore.guildActivity[key] = nil
         elseif normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then
-            report.cached = now - timestamp > STALE_AFTER
+            report.cached = (tonumber(report.cacheHop) or 0) > 0 or now - timestamp > STALE_AFTER
             result[#result + 1] = report
         end
     end
@@ -538,15 +723,15 @@ frame:SetScript("OnEvent", function(_, event, ...)
             RaceGrid:BroadcastReport()
         end) end
     elseif event == "CHAT_MSG_ADDON" then
-        local prefix, message, _, sender = ...
-        handleMessage(prefix, message, sender)
+        local prefix, message, distribution, sender = ...
+        handleMessage(prefix, message, sender, distribution)
     elseif event == "CHAT_MSG_CHANNEL" then
         local message, sender = ...
         local channelName = select(9, ...)
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
             local decoded = decodeChannelWire(message, sender)
-            if decoded then handleMessage(PREFIX, decoded, sender) end
+            if decoded then handleMessage(PREFIX, decoded, sender, "CHANNEL") end
         end
     end
 end)

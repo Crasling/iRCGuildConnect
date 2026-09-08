@@ -208,18 +208,19 @@ function Roleplay:TransformTaurenTalk(text)
 end
 
 local roleplayWrappers = setmetatable({}, { __mode = "k" })
-local transformedEditBoxes = setmetatable({}, { __mode = "k" })
 
 local function transformBeforeSend(editBox)
     if not editBox or not editBox.GetText or not editBox.SetText then return end
-    if transformedEditBoxes[editBox] then return end
     if Roleplay:IsTrollTalkEnabled() then
         editBox:SetText(Roleplay:TransformTrollTalk(editBox:GetText()))
-        transformedEditBoxes[editBox] = true
     elseif Roleplay:IsTaurenTalkEnabled() then
         editBox:SetText(Roleplay:TransformTaurenTalk(editBox:GetText()))
-        transformedEditBoxes[editBox] = true
     end
+end
+
+local function callOriginalSend(originalSend, editBox, addHistory)
+    if securecallfunction then return securecallfunction(originalSend, editBox, addHistory) end
+    return originalSend(editBox, addHistory)
 end
 
 local function installChatSendHook()
@@ -227,37 +228,22 @@ local function installChatSendHook()
     if type(currentSend) ~= "function" or roleplayWrappers[currentSend] then return end
     local originalSend = currentSend
     local wrapper = function(editBox, addHistory)
+        local text = editBox and editBox.GetText and editBox:GetText() or ""
+        -- Slash commands can execute protected Blizzard actions such as
+        -- /gquit. Never alter their text and cross back into Blizzard through
+        -- a secure call so the Race Talk wrapper does not taint that action.
+        if type(text) == "string" and text:match("^%s*/") then
+            return callOriginalSend(originalSend, editBox, addHistory)
+        end
         transformBeforeSend(editBox)
-        local result = originalSend(editBox, addHistory)
-        transformedEditBoxes[editBox] = nil
-        return result
+        return callOriginalSend(originalSend, editBox, addHistory)
     end
     roleplayWrappers[wrapper] = true
     ChatEdit_SendText = wrapper
 end
 
-local function installChatEditBoxHooks()
-    if not NUM_CHAT_WINDOWS then return end
-    for index = 1, NUM_CHAT_WINDOWS do
-        local editBox = _G["ChatFrame" .. index .. "EditBox"]
-        local currentHandler = editBox and editBox.GetScript and editBox:GetScript("OnEnterPressed")
-        if type(currentHandler) == "function" and not roleplayWrappers[currentHandler] then
-            local originalHandler = currentHandler
-            local wrapper = function(self, ...)
-                transformBeforeSend(self)
-                local results = { originalHandler(self, ...) }
-                transformedEditBoxes[self] = nil
-                return unpack(results)
-            end
-            roleplayWrappers[wrapper] = true
-            editBox:SetScript("OnEnterPressed", wrapper)
-        end
-    end
-end
-
 local function installChatHooks()
     installChatSendHook()
-    installChatEditBoxHooks()
 end
 
 local frame = CreateFrame("Frame")
