@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.13"
+iRC.Version = "0.2.14"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -312,6 +312,10 @@ function iRC:GetConnection()
         iRCDB.connections[key] = connection
     end
     if connection.active == nil then connection.active = false end
+    connection.guildNotifications = connection.guildNotifications or { welcomeNewMembers = false }
+    if connection.guildNotifications.welcomeNewMembers == nil then
+        connection.guildNotifications.welcomeNewMembers = false
+    end
     connection.members = connection.members or {}
     connection.rules = connection.rules or {}
     for key, value in pairs(self.DefaultConnectionRules) do
@@ -530,6 +534,12 @@ end
 function iRC:GetConnectionRules()
     local connection = self:GetConnection()
     return connection and connection.rules or self.DefaultConnectionRules
+end
+
+function iRC:IsNewMemberWelcomeEnabled()
+    local connection = self:GetConnection()
+    return connection and connection.guildNotifications
+        and connection.guildNotifications.welcomeNewMembers == true or false
 end
 
 function iRC:MarkGuildFoundRequired(connection)

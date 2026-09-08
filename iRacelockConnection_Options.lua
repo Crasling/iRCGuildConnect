@@ -16,6 +16,10 @@ local function CanUseGuildFoundTools()
     return iRC:IsGuildAdmin() and iRC:IsGuildFoundRequired()
 end
 
+local function CanUseManagementTools()
+    return iRC:IsGuildAdmin()
+end
+
 local function CreateSectionHeader(parent, text, yOffset)
     local header = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     header:SetHeight(24)
@@ -298,7 +302,8 @@ local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
 local guildFoundContainer, guildFoundContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer }
+local guildNotificationsContainer, guildNotificationsContent = CreateTabContent()
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer }
 local sidebarButtons = {}
 local selectedTab = 1
 
@@ -324,7 +329,8 @@ local sidebarItems = {
 local standardSidebarItems = {
     { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
-    { type = "header", label = L.MANAGEMENT_HEADER, guildFoundOnly = true },
+    { type = "header", label = L.MANAGEMENT_HEADER, managementOnly = true },
+    { type = "tab", label = L.GUILD_NOTIFICATIONS_TAB, index = 11, managementOnly = true },
     { type = "tab", label = L.GUILDFOUND_TOOLS_TAB, index = 9, guildFoundOnly = true },
     { type = "header", label = "Other Addons" },
     { type = "tab", label = "iWillRemember", index = 5 },
@@ -338,14 +344,14 @@ if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 10 }
 end
 local sidebarY = -6
-local guildFoundSidebarHeader
+local managementSidebarHeader
 for _, item in ipairs(sidebarItems) do
     if item.type == "header" then
         local headerText = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         headerText:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 12, sidebarY - 2)
         headerText:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
         headerText:SetText(item.label)
-        if item.guildFoundOnly then guildFoundSidebarHeader = headerText end
+        if item.managementOnly then managementSidebarHeader = headerText end
         sidebarY = sidebarY - 20
     else
         local button = CreateFrame("Button", nil, sidebar)
@@ -362,6 +368,7 @@ for _, item in ipairs(sidebarItems) do
         highlight:SetColorTexture(1, 1, 1, 0.08)
         button:SetScript("OnClick", function() ShowTab(item.index) end)
         button.guildFoundOnly = item.guildFoundOnly
+        button.managementOnly = item.managementOnly
         sidebarButtons[item.index] = button
         sidebarY = sidebarY - 28
     end
@@ -633,6 +640,18 @@ do
     guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
 end
 
+local newMemberWelcomeCheck
+do
+    local y = -12
+    _, y = CreateSectionHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_TITLE, y)
+    _, y = CreateInfoText(guildNotificationsContent, L.GUILD_NOTIFICATIONS_DESC, y, "GameFontDisableSmall")
+    newMemberWelcomeCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
+        L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, y - 4,
+        function() return iRC:IsNewMemberWelcomeEnabled() end,
+        function(value) iRC:SetNewMemberWelcomeEnabled(value) end)
+    guildNotificationsContent:SetHeight(math.max(math.abs(y) + 20, 300))
+end
+
 local testGuildMasterCheck, suppressWarningsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
 if iRC:IsTestAdmin() then
     y = -12
@@ -659,9 +678,11 @@ end
 
 local function Refresh()
     local guildFoundAvailable = CanUseGuildFoundTools()
-    if guildFoundSidebarHeader then guildFoundSidebarHeader:SetShown(guildFoundAvailable) end
+    local managementAvailable = CanUseManagementTools()
+    if managementSidebarHeader then managementSidebarHeader:SetShown(managementAvailable) end
+    if sidebarButtons[11] then sidebarButtons[11]:SetShown(managementAvailable) end
     if sidebarButtons[9] then sidebarButtons[9]:SetShown(guildFoundAvailable) end
-    if selectedTab == 9 and not guildFoundAvailable then ShowTab(1) end
+    if (selectedTab == 9 and not guildFoundAvailable) or (selectedTab == 11 and not managementAvailable) then ShowTab(1) end
     if guildFoundAuditText then
         local records = iRC.GetGuildFoundAuditRecords and iRC:GetGuildFoundAuditRecords() or {}
         local lines = {}
@@ -691,6 +712,8 @@ local function Refresh()
         end
     end
     minimapCheck:Refresh()
+    newMemberWelcomeCheck:Refresh()
+    newMemberWelcomeCheck:SetEnabled(managementAvailable and iRC:IsGuildConnectionActive())
     slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
     local connection = iRC:GetConnection()
     if connection then

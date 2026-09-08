@@ -17,7 +17,9 @@ local groupSafety = { sameRace = false, guildOnly = false }
 local pendingUnsafeGroupReason
 local pendingGroupViolation
 local pendingGroupViolationKey
+local pendingGroupLeaveConfirmation
 local observedGroupRestrictions
+local initialGroupProtectionPending = true
 local restrictedTradeCancelled = false
 local lastMailRestrictionReason
 local originalSendMail, originalTakeInboxItem, originalTakeInboxMoney, originalAutoLootMailItem
@@ -305,6 +307,7 @@ end
 local function clearUnsafeGroupWarning()
     pendingUnsafeGroupReason = nil
     pendingGroupViolationKey = nil
+    pendingGroupLeaveConfirmation = nil
     groupWarningFrame:Hide()
 end
 
@@ -370,6 +373,34 @@ local function leaveCurrentGroup(reason)
 end
 
 local function handleInvalidGroup(reason, players)
+    local confirmationPlayers = {}
+    for _, name in ipairs(players or {}) do
+        if name and name ~= "" then confirmationPlayers[#confirmationPlayers + 1] = name end
+    end
+    table.sort(confirmationPlayers)
+    local confirmationKey = reason .. "|" .. table.concat(confirmationPlayers, ",")
+    local now = time()
+
+    -- Never leave on the first roster reading. Group data can be incomplete
+    -- immediately after login, reload, zoning, invites, or roster updates.
+    -- The same violation must still exist after the confirmation window.
+    if not pendingGroupLeaveConfirmation or pendingGroupLeaveConfirmation.key ~= confirmationKey then
+        pendingGroupLeaveConfirmation = { key = confirmationKey, readyAt = now + 5 }
+        groupWarningFrame.text:SetText(iRC:Text("GROUP_CONFIRMING_WARNING"))
+        groupWarningFrame:Show()
+        iRC:Print(iRC.Colors.Red .. iRC:Text("GROUP_CONFIRMING_NOTICE") .. iRC.Colors.Reset)
+        if C_Timer and C_Timer.After then
+            C_Timer.After(5, function()
+                if pendingGroupLeaveConfirmation and pendingGroupLeaveConfirmation.key == confirmationKey then
+                    Enforcement:CheckGroup()
+                end
+            end)
+        end
+        return
+    end
+    if now < pendingGroupLeaveConfirmation.readyAt then return end
+
+    -- Record and report only after the second reading confirmed the violation.
     recordGroupViolation(reason, players)
     if leaveCurrentGroup(reason) then return end
     if pendingUnsafeGroupReason ~= reason then
@@ -501,6 +532,7 @@ frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
 frame:SetScript("OnEvent", function(_, event, unit)
     if event == "PLAYER_LOGIN" then
+        initialGroupProtectionPending = true
         protectExistingGroup(true)
         Enforcement:InstallTradeAPIGuard()
         Enforcement:InstallMailAPIGuards()
@@ -512,6 +544,14 @@ frame:SetScript("OnEvent", function(_, event, unit)
         end
         reportPendingGroupViolation()
     elseif event == "PLAYER_ENTERING_WORLD" then
+        -- A full login can expose the saved group one event later than
+        -- PLAYER_LOGIN. Protect it once here as well. Do not repeat this on
+        -- later zone/instance transitions, which could otherwise grandfather
+        -- a newly formed invalid group.
+        if initialGroupProtectionPending then
+            initialGroupProtectionPending = false
+            protectExistingGroup(true)
+        end
         iRC.SelfFoundAuraReady = false
         Enforcement:Refresh()
         if C_Timer and C_Timer.After then

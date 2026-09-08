@@ -189,6 +189,15 @@ local function announcePresenceMismatch(member, verification, escalated)
         SendChatMessage(whisperMessage, "WHISPER", nil, member.name)
         if escalated then
             SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", member.name), "GUILD")
+            local occurredAt = time()
+            iRC:StoreOfficerIncident({
+                id = "presence:" .. iRC:NormalizeName(member.name) .. ":" .. occurredAt,
+                reporter = member.name,
+                occurredAt = occurredAt,
+                instanceName = iRC:Text("PRESENCE_INCIDENT_LOCATION"),
+                players = reason,
+                reason = iRC:Text("PRESENCE_INCIDENT_REASON", member.name, reason),
+            })
         end
     end
     return true
@@ -283,7 +292,8 @@ function iRC:CheckPresenceMismatches()
                                 reportedPresenceMismatches[key] = { reportedAt = now, escalated = false }
                                 self:DebugMsg(self:Text("PRESENCE_MISMATCH", member.name, verification.label or ""), 2)
                                 if connection.newMemberChecks[id] and not connection.newMemberWelcomeNotices[id] and SendChatMessage
-                                    and self:IsPresenceNotificationLeader() and not self:SuppressesPresenceWarnings() then
+                                    and self:IsPresenceNotificationLeader() and not self:SuppressesPresenceWarnings()
+                                    and self:IsNewMemberWelcomeEnabled() then
                                     connection.newMemberWelcomeNotices[id] = now
                                     SendChatMessage(self:Text("NEW_MEMBER_WELCOME", member.name), "GUILD")
                                 end

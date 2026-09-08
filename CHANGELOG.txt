@@ -2,6 +2,14 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.14 - Safer Group Enforcement
+--------------------------------------------------------------------------------
+ [FIX] Existing groups are safely preserved when group rules begin applying through level-up, reload, or login
+ [FIX] Automatic group leaving now requires a second confirmed group check after a safety delay
+ [NEW] Five-minute addon warnings are saved in the officer incident history
+ [NEW] Rank 0 and rank 1 can optionally enable shared new-member welcome messages, disabled by default
+
+
 v0.2.13 - Guild Cache Sharing & Race Verification
 --------------------------------------------------------------------------------
  [CHANGED] Refresh / Share now uses the working guild-cache request instead of sending a global request that Classic clients cannot answer automatically

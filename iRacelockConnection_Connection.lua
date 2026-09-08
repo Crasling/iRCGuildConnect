@@ -205,6 +205,46 @@ local function rulesBackupChecksum(value)
     return string.format("%04x%04x", second, first)
 end
 
+local function guildSettingsChecksum(enabled, timestamp, source)
+    return rulesBackupChecksum(table.concat({ enabled and "1" or "0", tostring(timestamp or 0), tostring(source or "") }, SEP))
+end
+
+function iRC:SendGuildManagementSettings(targetName)
+    if not self:IsGuildConnectionActive() or not self:IsGuildAdmin() then return false end
+    local connection = self:GetConnection()
+    local settings = connection and connection.guildNotifications
+    if not settings then return false end
+    local timestamp = math.floor(tonumber(settings.timestamp) or 0)
+    local source = tostring(settings.source or ""):gsub("[%c]", ""):sub(1, 80)
+    -- No officer may invent a timestamp for the default. Only an explicit
+    -- rank 0/1 change creates the first package; afterwards either rank may
+    -- relay the exact newest value it has received.
+    if timestamp <= 0 or source == "" then
+        return false
+    end
+    local enabled = settings.welcomeNewMembers ~= false
+    local distribution = targetName and "WHISPER" or "GUILD"
+    send(self.Prefix, table.concat({
+        "GUILD_SETTINGS", WIRE_VERSION, enabled and "1" or "0", tostring(timestamp), source,
+        guildSettingsChecksum(enabled, timestamp, source),
+    }, SEP), distribution, targetName)
+    self:DebugMsg(self:Text("GUILD_SETTINGS_SENT"), 3)
+    return true
+end
+
+function iRC:SetNewMemberWelcomeEnabled(enabled)
+    if not self:IsGuildConnectionActive() or not self:IsGuildAdmin() then return false end
+    local connection = self:GetConnection()
+    local settings = connection.guildNotifications
+    local now = GetServerTime and GetServerTime() or time()
+    settings.welcomeNewMembers = enabled and true or false
+    settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
+    settings.source = self:GetPlayerName()
+    self:SendGuildManagementSettings()
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
 function iRC:IsRulesetBroadcaster()
     local name, rank = getRulesAuthority()
     return name ~= nil and self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName()), name, rank
@@ -439,6 +479,7 @@ local function handleMessage(prefix, message, distribution, sender)
         iRC:SendGuildActivation(sender)
         if iRC:IsGuildConnectionActive() then
             iRC:SendConnectionRules(sender)
+            iRC:SendGuildManagementSettings(sender)
             send(iRC.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION, "REQUEST" }, SEP), "WHISPER", sender)
         end
         return
@@ -460,6 +501,7 @@ local function handleMessage(prefix, message, distribution, sender)
         iRC:DebugMsg(iRC:Text("PRESENCE_POLL_RECEIVED", sender), 3)
         iRC:SendHello(sender)
         iRC:SendConnectionRules(sender)
+        iRC:SendGuildManagementSettings(sender)
     elseif kind == "GROUP_VIOLATION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local violationId, occurredAt = parts[3], tonumber(parts[4])
         local instanceName, players = cleanWireText(parts[5], 60), cleanWireText(parts[6], 100)
@@ -507,6 +549,27 @@ local function handleMessage(prefix, message, distribution, sender)
     elseif kind == "INSPECT_DATA" and parts[2] == WIRE_VERSION then
         local profile = profileFromWire(parts, 4)
         if profile and senderIsKnown(sender) and iRC:NormalizeName(profile.name) == iRC:NormalizeName(sender) then iRC:StoreMemberProfile(profile) end
+    elseif kind == "GUILD_SETTINGS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local senderRank = getRulesRank(sender, iRC:GetConnection())
+        local enabled = parts[3] == "1"
+        local timestamp = tonumber(parts[4])
+        local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
+        local checksum = tostring(parts[6] or ""):lower()
+        local now = GetServerTime and GetServerTime() or time()
+        if senderRank and senderRank <= 1 and timestamp and timestamp > 0 and timestamp <= now + 300
+            and source ~= "" and checksum == guildSettingsChecksum(enabled, timestamp, source) then
+            local connection = iRC:GetConnection()
+            local settings = connection.guildNotifications
+            local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
+            local savedSource = tostring(settings.source or "")
+            if timestamp > savedTimestamp or (timestamp == savedTimestamp and string.lower(source) > string.lower(savedSource)) then
+                settings.welcomeNewMembers = enabled
+                settings.timestamp = math.floor(timestamp)
+                settings.source = source
+                iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)
+                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            end
+        end
     elseif kind == "RULES_ACK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local timestampHex, timestampSource = iRC:EnsureConnectionRulesTimestamp(connection)
@@ -590,6 +653,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             iRC:SendHello()
             if iRC:IsGuildAdmin() then iRC:PollGuildPresence() else iRC:RequestGuildPresence() end
             iRC:SendConnectionRules()
+            iRC:SendGuildManagementSettings()
         end)
         if C_Timer and C_Timer.NewTicker then
             C_Timer.NewTicker(60, function()
@@ -597,6 +661,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 iRC:RequestGuildActivation()
                 iRC:SendHello()
                 iRC:SendConnectionRules()
+                iRC:SendGuildManagementSettings()
             end)
             C_Timer.NewTicker(120, function()
                 iRC:PollGuildPresence()
@@ -613,6 +678,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             iRC:SendHello()
             if iRC:IsGuildAdmin() then iRC:PollGuildPresence() else iRC:RequestGuildPresence() end
             iRC:SendConnectionRules()
+            iRC:SendGuildManagementSettings()
         end)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
