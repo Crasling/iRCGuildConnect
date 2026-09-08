@@ -435,7 +435,8 @@ broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
 y = connectionActionsY - 36
 
 local guildRulesStatus
-local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave
+local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local guildContactRows = {}
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
 _, y = CreateInfoText(connectionContent, L.GUILD_RULES_INTRO, y, "GameFontDisableSmall")
@@ -522,16 +523,122 @@ local guildContactsLabel = connectionContent:CreateFontString(nil, "OVERLAY", "G
 guildContactsLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 20, y)
 guildContactsLabel:SetText(L.GUILD_CONTACTS_LABEL)
 guildContactsEdit = CreateFrame("EditBox", nil, connectionContent, "InputBoxTemplate")
-guildContactsEdit:SetSize(330, 24)
+guildContactsEdit:SetSize(285, 24)
 guildContactsEdit:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 25, y - 22)
 guildContactsEdit:SetAutoFocus(false)
 guildContactsEdit:SetMaxLetters(60)
-guildContactsEdit:SetScript("OnEnterPressed", function(self) iRC:SetGuildContacts(self:GetText()); self:ClearFocus() end)
-guildContactsEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+guildContactSuggestionFrame = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
+guildContactSuggestionFrame:SetSize(285, 128)
+guildContactSuggestionFrame:SetPoint("TOPLEFT", guildContactsEdit, "BOTTOMLEFT", 0, -2)
+guildContactSuggestionFrame:SetFrameStrata("DIALOG")
+guildContactSuggestionFrame:SetFrameLevel(connectionContent:GetFrameLevel() + 20)
+guildContactSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+guildContactSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
+guildContactSuggestionFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.85)
+guildContactSuggestionFrame:Hide()
+guildContactSuggestionButtons = {}
+for index = 1, 5 do
+    local button = CreateFrame("Button", nil, guildContactSuggestionFrame)
+    button:SetSize(267, 23)
+    button:SetPoint("TOPLEFT", guildContactSuggestionFrame, "TOPLEFT", 7, -6 - (index - 1) * 23)
+    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
+    button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+    button.highlight:SetAllPoints()
+    button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
+    button:SetScript("OnClick", function(self)
+        guildContactsEdit:SetText(iRC:FormatPlayerName(self.fullName or ""))
+        guildContactsEdit:SetCursorPosition(#guildContactsEdit:GetText())
+        guildContactSuggestionFrame:Hide()
+        guildContactsEdit:SetFocus()
+    end)
+    guildContactSuggestionButtons[index] = button
+end
+local function updateGuildContactSuggestions(text)
+    text = tostring(text or ""):gsub("^%s+", ""):lower()
+    local matches, current = {}, tostring(iRC:GetConnectionRules().guildContacts or "")
+    if text ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
+        for rosterIndex = 1, GetNumGuildMembers(true) do
+            local rosterName = GetGuildRosterInfo(rosterIndex)
+            local displayName = rosterName and iRC:FormatPlayerName(rosterName)
+            if displayName and not current:find(rosterName, 1, true) and displayName:lower():find(text, 1, true) then
+                matches[#matches + 1] = { fullName = rosterName, displayName = displayName }
+            end
+        end
+        table.sort(matches, function(a, b)
+            if not a then return b ~= nil end
+            if not b then return false end
+            local aName = tostring(a.displayName or ""):lower()
+            local bName = tostring(b.displayName or ""):lower()
+            local aStarts = aName:find(text, 1, true) == 1
+            local bStarts = bName:find(text, 1, true) == 1
+            if aStarts ~= bStarts then return aStarts end
+            return aName < bName
+        end)
+    end
+    for index, button in ipairs(guildContactSuggestionButtons) do
+        local match = matches[index]
+        button:SetShown(match ~= nil)
+        if match then button.fullName = match.fullName; button.text:SetText(match.displayName) end
+    end
+    guildContactSuggestionFrame:SetShown(matches[1] ~= nil)
+end
+local function addGuildContact()
+    local newName = guildContactsEdit:GetText():gsub("^%s+", ""):gsub("%s+$", "")
+    if newName == "" then return end
+    local current = tostring(iRC:GetConnectionRules().guildContacts or "")
+    for name in current:gmatch("[^,]+") do
+        if iRC:NormalizeName(name:gsub("^%s+", ""):gsub("%s+$", "")) == iRC:NormalizeName(newName) then return end
+    end
+    if iRC:SetGuildContacts(current ~= "" and (current .. ", " .. newName) or newName) then
+        guildContactsEdit:SetText("")
+        guildContactsEdit:ClearFocus()
+        guildContactSuggestionFrame:Hide()
+    end
+end
+guildContactsEdit:SetScript("OnEnterPressed", addGuildContact)
+guildContactsEdit:SetScript("OnTextChanged", function(self) updateGuildContactSuggestions(self:GetText()) end)
+guildContactsEdit:SetScript("OnTabPressed", function(self)
+    local first = guildContactSuggestionButtons[1]
+    if first and first:IsShown() and first.fullName then
+        self:SetText(iRC:FormatPlayerName(first.fullName)); self:SetCursorPosition(#self:GetText()); guildContactSuggestionFrame:Hide()
+    end
+end)
+guildContactsEdit:SetScript("OnEscapePressed", function(self) guildContactSuggestionFrame:Hide(); self:ClearFocus() end)
 SetSimpleTooltip(guildContactsEdit, L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC)
-guildContactsSave, y = CreateSettingsButton(connectionContent, L.GUILD_CONTACTS_SAVE, 150, y - 54, function()
-    iRC:SetGuildContacts(guildContactsEdit:GetText())
-end, L.GUILD_CONTACTS_DESC)
+guildContactsSave = CreateFrame("Button", nil, connectionContent, "UIPanelButtonTemplate")
+guildContactsSave:SetSize(90, 24)
+guildContactsSave:SetPoint("LEFT", guildContactsEdit, "RIGHT", 10, 0)
+guildContactsSave:SetText(L.GUILD_CONTACTS_ADD)
+guildContactsSave:SetScript("OnClick", addGuildContact)
+SetSimpleTooltip(guildContactsSave, L.GUILD_CONTACTS_ADD, L.GUILD_CONTACTS_DESC)
+local contactsListFrame = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
+contactsListFrame:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 20, y - 55)
+contactsListFrame:SetSize(470, 130)
+contactsListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+contactsListFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
+contactsListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+local contactHeaderName = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+contactHeaderName:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 12, -9); contactHeaderName:SetText(L.GUILD_BANK_COLUMN_NAME)
+local contactHeaderNote = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+contactHeaderNote:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 145, -9); contactHeaderNote:SetText(L.GUILD_BANK_COLUMN_NOTE)
+local contactHeaderAdded = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+contactHeaderAdded:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 270, -9); contactHeaderAdded:SetWidth(85); contactHeaderAdded:SetJustifyH("CENTER"); contactHeaderAdded:SetText(L.GUILD_BANK_COLUMN_ADDED_BY)
+local contactHeaderActions = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+contactHeaderActions:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 370, -9); contactHeaderActions:SetText(L.GUILD_BANK_COLUMN_ACTIONS)
+local contactsScroll = CreateFrame("ScrollFrame", nil, contactsListFrame, "UIPanelScrollFrameTemplate")
+contactsScroll:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 8, -27)
+contactsScroll:SetPoint("BOTTOMRIGHT", contactsListFrame, "BOTTOMRIGHT", -28, 8)
+guildContactsListContent = CreateFrame("Frame", nil, contactsScroll)
+guildContactsListContent:SetWidth(425)
+guildContactsListContent:SetHeight(1)
+contactsScroll:SetScrollChild(guildContactsListContent)
+guildContactsListEmpty = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+guildContactsListEmpty:SetPoint("CENTER", contactsListFrame, "CENTER", 0, 0)
+guildContactsListEmpty:SetText(L.GUILD_CONTACTS_EMPTY)
+y = y - 195
 connectionContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -627,20 +734,163 @@ for _, addon in ipairs(companionAddons) do
     end
 end
 
-local guildFoundAuditText
+local guildFoundAuditText, guildBankEdit, guildBankSave, guildBankListContent, guildBankListEmpty, guildBankConflictText
+local guildBankRows = {}
+local guildBankSuggestionFrame, guildBankSuggestionButtons
+local guildBankConflictMerge, guildBankConflictAccept, guildBankConflictKeep
 do
     local y = -12
     _, y = CreateSectionHeader(guildFoundContent, L.GUILDFOUND_TOOLS_TITLE, y)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_TOOLS_DESC, y, "GameFontDisableSmall")
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_SETTINGS_HEADER, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_ENFORCEMENT_LOCKED, y, "GameFontHighlight")
+    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y - 4)
+    _, y = CreateInfoText(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
+    guildBankEdit = CreateFrame("EditBox", nil, guildFoundContent, "InputBoxTemplate")
+    guildBankEdit:SetSize(285, 24)
+    guildBankEdit:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 25, y - 22)
+    guildBankEdit:SetAutoFocus(false)
+    guildBankEdit:SetMaxLetters(60)
+    guildBankSuggestionFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
+    guildBankSuggestionFrame:SetSize(285, 128)
+    guildBankSuggestionFrame:SetPoint("TOPLEFT", guildBankEdit, "BOTTOMLEFT", 0, -2)
+    guildBankSuggestionFrame:SetFrameStrata("DIALOG")
+    guildBankSuggestionFrame:SetFrameLevel(guildFoundContent:GetFrameLevel() + 20)
+    guildBankSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    guildBankSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
+    guildBankSuggestionFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.85)
+    guildBankSuggestionFrame:Hide()
+    guildBankSuggestionButtons = {}
+    for index = 1, 5 do
+        local button = CreateFrame("Button", nil, guildBankSuggestionFrame)
+        button:SetSize(267, 23)
+        button:SetPoint("TOPLEFT", guildBankSuggestionFrame, "TOPLEFT", 7, -6 - (index - 1) * 23)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
+        button:SetScript("OnClick", function(self)
+            guildBankEdit:SetText(iRC:FormatPlayerName(self.fullName or ""))
+            guildBankEdit:SetCursorPosition(#guildBankEdit:GetText())
+            guildBankSuggestionFrame:Hide()
+            guildBankEdit:SetFocus()
+        end)
+        guildBankSuggestionButtons[index] = button
+    end
+    local function updateGuildBankSuggestions(text)
+        text = tostring(text or ""):gsub("^%s+", ""):lower()
+        local matches = {}
+        if text ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
+            for rosterIndex = 1, GetNumGuildMembers(true) do
+                local rosterName = GetGuildRosterInfo(rosterIndex)
+                local displayName = rosterName and iRC:FormatPlayerName(rosterName)
+                if displayName and not iRC:IsGuildBankException(rosterName)
+                    and displayName:lower():find(text, 1, true) then
+                    matches[#matches + 1] = { fullName = rosterName, displayName = displayName }
+                end
+            end
+            table.sort(matches, function(a, b)
+                if not a then return b ~= nil end
+                if not b then return false end
+                local aName = tostring(a.displayName or ""):lower()
+                local bName = tostring(b.displayName or ""):lower()
+                local aStarts = aName:find(text, 1, true) == 1
+                local bStarts = bName:find(text, 1, true) == 1
+                if aStarts ~= bStarts then return aStarts end
+                return aName < bName
+            end)
+        end
+        for index, button in ipairs(guildBankSuggestionButtons) do
+            local match = matches[index]
+            button:SetShown(match ~= nil)
+            if match then button.fullName = match.fullName; button.text:SetText(match.displayName) end
+        end
+        guildBankSuggestionFrame:SetShown(matches[1] ~= nil)
+    end
+    local function addGuildBank()
+        local newName = guildBankEdit:GetText():gsub("^%s+", ""):gsub("%s+$", "")
+        if newName == "" then return end
+        local current = iRC:GetGuildBankExceptionText()
+        if iRC:SetGuildBankExceptions(current ~= "" and (current .. ", " .. newName) or newName) then
+            guildBankEdit:SetText("")
+            guildBankEdit:ClearFocus()
+            guildBankSuggestionFrame:Hide()
+        end
+    end
+    guildBankEdit:SetScript("OnTextChanged", function(self) updateGuildBankSuggestions(self:GetText()) end)
+    guildBankEdit:SetScript("OnTabPressed", function(self)
+        local first = guildBankSuggestionButtons[1]
+        if first and first:IsShown() and first.fullName then
+            self:SetText(iRC:FormatPlayerName(first.fullName))
+            self:SetCursorPosition(#self:GetText())
+            guildBankSuggestionFrame:Hide()
+        end
+    end)
+    guildBankEdit:SetScript("OnEnterPressed", addGuildBank)
+    guildBankEdit:SetScript("OnEscapePressed", function(self) guildBankSuggestionFrame:Hide(); self:ClearFocus() end)
+    SetSimpleTooltip(guildBankEdit, L.GUILD_BANK_EXCEPTIONS_TITLE, L.GUILD_BANK_EXCEPTIONS_DESC)
+    guildBankSave = CreateFrame("Button", nil, guildFoundContent, "UIPanelButtonTemplate")
+    guildBankSave:SetSize(90, 24)
+    guildBankSave:SetPoint("LEFT", guildBankEdit, "RIGHT", 10, 0)
+    guildBankSave:SetText(L.GUILD_BANK_ADD)
+    guildBankSave:SetScript("OnClick", addGuildBank)
+    SetSimpleTooltip(guildBankSave, L.GUILD_BANK_ADD, L.GUILD_BANK_SAVE_DESC)
+
+    local listFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
+    listFrame:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 55)
+    listFrame:SetSize(470, 150)
+    listFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    listFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
+    listFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+    local headerName = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerName:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 12, -9)
+    headerName:SetText(L.GUILD_BANK_COLUMN_NAME)
+    local headerNote = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerNote:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 145, -9)
+    headerNote:SetText(L.GUILD_BANK_COLUMN_NOTE)
+    local headerAddedBy = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerAddedBy:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 270, -9)
+    headerAddedBy:SetWidth(85)
+    headerAddedBy:SetJustifyH("CENTER")
+    headerAddedBy:SetText(L.GUILD_BANK_COLUMN_ADDED_BY)
+    local headerActions = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerActions:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 370, -9)
+    headerActions:SetText(L.GUILD_BANK_COLUMN_ACTIONS)
+    local listScroll = CreateFrame("ScrollFrame", nil, listFrame, "UIPanelScrollFrameTemplate")
+    listScroll:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 8, -27)
+    listScroll:SetPoint("BOTTOMRIGHT", listFrame, "BOTTOMRIGHT", -28, 8)
+    guildBankListContent = CreateFrame("Frame", nil, listScroll)
+    guildBankListContent:SetWidth(425)
+    guildBankListContent:SetHeight(1)
+    listScroll:SetScrollChild(guildBankListContent)
+    guildBankListEmpty = listFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    guildBankListEmpty:SetPoint("CENTER", listFrame, "CENTER", 0, 0)
+    guildBankListEmpty:SetText(L.GUILD_BANK_EMPTY)
+    y = y - 215
+    guildBankConflictText, y = CreateInfoText(guildFoundContent, "", y - 2, "GameFontNormal")
+    guildBankConflictMerge, y = CreateSettingsButton(guildFoundContent, L.MANAGEMENT_CONFLICT_MERGE, 120, y, function()
+        iRC:ResolveManagementConflict("BANKS", "merge")
+    end)
+    guildBankConflictAccept = CreateSettingsButton(guildFoundContent, L.MANAGEMENT_CONFLICT_ACCEPT, 120, y + 30, function()
+        iRC:ResolveManagementConflict("BANKS", "incoming")
+    end)
+    guildBankConflictAccept:ClearAllPoints()
+    guildBankConflictAccept:SetPoint("LEFT", guildBankConflictMerge, "RIGHT", 8, 0)
+    guildBankConflictKeep = CreateSettingsButton(guildFoundContent, L.MANAGEMENT_CONFLICT_KEEP, 120, y + 30, function()
+        iRC:ResolveManagementConflict("BANKS", "current")
+    end)
+    guildBankConflictKeep:ClearAllPoints()
+    guildBankConflictKeep:SetPoint("LEFT", guildBankConflictAccept, "RIGHT", 8, 0)
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_AUDIT_HEADER, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_DESC, y, "GameFontDisableSmall")
     guildFoundAuditText, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_EMPTY, y, "GameFontHighlightSmall")
     guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
 end
 
-local newMemberWelcomeCheck
+local newMemberWelcomeCheck, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
 do
     local y = -12
     _, y = CreateSectionHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_TITLE, y)
@@ -649,6 +899,15 @@ do
         L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, y - 4,
         function() return iRC:IsNewMemberWelcomeEnabled() end,
         function(value) iRC:SetNewMemberWelcomeEnabled(value) end)
+    welcomeConflictText, y = CreateInfoText(guildNotificationsContent, "", y - 4, "GameFontNormal")
+    welcomeConflictAccept, y = CreateSettingsButton(guildNotificationsContent, L.MANAGEMENT_CONFLICT_ACCEPT, 130, y, function()
+        iRC:ResolveManagementConflict("WELCOME", true)
+    end)
+    welcomeConflictKeep = CreateSettingsButton(guildNotificationsContent, L.MANAGEMENT_CONFLICT_KEEP, 130, y + 30, function()
+        iRC:ResolveManagementConflict("WELCOME", false)
+    end)
+    welcomeConflictKeep:ClearAllPoints()
+    welcomeConflictKeep:SetPoint("LEFT", welcomeConflictAccept, "RIGHT", 8, 0)
     guildNotificationsContent:SetHeight(math.max(math.abs(y) + 20, 300))
 end
 
@@ -676,6 +935,123 @@ if iRC:IsTestAdmin() then
     adminContent:SetHeight(math.abs(y) + 20)
 end
 
+local function RefreshGuildBankTools(guildFoundAvailable)
+    local canEditGuildBanks = guildFoundAvailable and iRC:IsGuildAdmin() and iRC:IsGuildConnectionActive()
+    guildBankEdit:SetEnabled(canEditGuildBanks and true or false)
+    guildBankSave:SetEnabled(canEditGuildBanks and true or false)
+    local names = {}
+    for name in iRC:GetGuildBankExceptionText():gmatch("[^,]+") do
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then names[#names + 1] = name end
+    end
+    for index, name in ipairs(names) do
+        local rowName = name
+        local row = guildBankRows[index]
+        if not row then
+            row = CreateFrame("Frame", nil, guildBankListContent, "BackdropTemplate")
+            row:SetSize(420, 27)
+            row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
+            row:SetBackdropColor(0.10, 0.08, 0.05, index % 2 == 0 and 0.55 or 0.35)
+            row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row.name:SetPoint("LEFT", row, "LEFT", 8, 0)
+            row.name:SetWidth(130)
+            row.name:SetJustifyH("LEFT")
+            row.noteHit = CreateFrame("Button", nil, row)
+            row.noteHit:SetSize(150, 27)
+            row.noteHit:SetPoint("LEFT", row, "LEFT", 135, 0)
+            row.noteText = row.noteHit:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.noteText:SetAllPoints()
+            row.noteText:SetJustifyH("LEFT")
+            row.author = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.author:SetPoint("LEFT", row, "LEFT", 270, 0)
+            row.author:SetWidth(85)
+            row.author:SetJustifyH("CENTER")
+            row.note = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+            row.note:SetSize(145, 22)
+            row.note:SetPoint("LEFT", row, "LEFT", 138, 0)
+            row.note:SetAutoFocus(false)
+            row.note:SetMaxLetters(80)
+            row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            row.remove:SetSize(60, 22)
+            row.remove:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            row.remove:SetText(L.GUILD_BANK_REMOVE)
+            row.highlight = row:CreateTexture(nil, "BACKGROUND")
+            row.highlight:SetAllPoints()
+            row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.10)
+            row.highlight:Hide()
+            guildBankRows[index] = row
+        end
+        row:SetPoint("TOPLEFT", guildBankListContent, "TOPLEFT", 0, -(index - 1) * 29)
+        row.name:SetText(iRC:FormatPlayerName(rowName))
+        local detail = iRC:GetGuildBankExceptionDetails(rowName) or {}
+        local note = detail.note or ""
+        row.noteText:SetText(note ~= "" and (#note > 18 and (note:sub(1, 15) .. "...") or note) or iRC:Text("GUILD_BANK_NO_NOTE"))
+        row.author:SetText(iRC:FormatPlayerName(detail.addedBy or "Unknown"):match("^[^-]+") or "Unknown")
+        if row.note:HasFocus() then
+            row.note:Show(); row.noteHit:Hide()
+        else
+            row.note:SetText(note); row.note:Hide(); row.noteHit:Show()
+        end
+        row.note:SetEnabled(canEditGuildBanks and true or false)
+        row.noteHit:SetEnabled(canEditGuildBanks and true or false)
+        row.noteHit:SetScript("OnClick", function()
+            row.noteOriginal = (iRC:GetGuildBankExceptionDetails(rowName) or {}).note or ""
+            row.note:SetText(row.noteOriginal)
+            row.noteHit:Hide(); row.note:Show(); row.note:SetFocus()
+        end)
+        row.note:SetScript("OnEnterPressed", function(self)
+            if iRC:SetGuildBankNote(rowName, self:GetText()) then
+                row.noteSaved = true
+                self:ClearFocus()
+            end
+        end)
+        row.note:SetScript("OnEscapePressed", function(self)
+            row.noteCancelled = true
+            self:SetText(row.noteOriginal or note)
+            self:ClearFocus()
+        end)
+        row.note:SetScript("OnEditFocusLost", function(self)
+            if row.noteCancelled then
+                row.noteCancelled = nil
+            elseif not row.noteSaved then
+                iRC:SetGuildBankNote(rowName, self:GetText())
+            end
+            row.noteSaved = nil
+            self:Hide()
+            row.noteHit:Show()
+        end)
+        row.remove:SetEnabled(canEditGuildBanks and true or false)
+        row.remove:SetScript("OnClick", function()
+            local kept = {}
+            for _, currentName in ipairs(names) do if currentName ~= rowName then kept[#kept + 1] = currentName end end
+            iRC:SetGuildBankExceptions(table.concat(kept, ","))
+        end)
+        row:SetScript("OnEnter", function(self)
+            self.highlight:Show()
+            local metadata = iRC:GetGuildBankExceptionDetails(rowName) or {}
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(iRC:FormatPlayerName(rowName), 1, 0.82, 0)
+            GameTooltip:AddLine(iRC:Text("GUILD_BANK_ADDED_BY", iRC:FormatPlayerName(metadata.addedBy or "Unknown")), 1, 1, 1)
+            GameTooltip:AddLine(iRC:Text("GUILD_BANK_ADDED_AT", metadata.addedAt and date("%Y-%m-%d %H:%M", metadata.addedAt) or "Unknown"), 1, 1, 1)
+            GameTooltip:AddLine(iRC:Text("GUILD_BANK_NOTE_TOOLTIP", metadata.note and metadata.note ~= "" and metadata.note or iRC:Text("GUILD_BANK_NO_NOTE")), 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function(self) self.highlight:Hide(); GameTooltip:Hide() end)
+        row:Show()
+    end
+    for index = #names + 1, #guildBankRows do guildBankRows[index]:Hide() end
+    guildBankListEmpty:SetShown(#names == 0)
+    guildBankListContent:SetHeight(math.max(1, #names * 29))
+    local bankConflict = iRC:GetPendingManagementConflict("BANKS")
+    guildBankConflictText:SetText(bankConflict and iRC:Text("GUILD_BANK_CONFLICT_INLINE", bankConflict.source,
+        bankConflict.currentValue ~= "" and bankConflict.currentValue or "-",
+        bankConflict.incomingValue ~= "" and bankConflict.incomingValue or "-",
+        bankConflict.mergedValue ~= "" and bankConflict.mergedValue or "-") or "")
+    guildBankConflictMerge:SetShown(bankConflict ~= nil)
+    guildBankConflictAccept:SetShown(bankConflict ~= nil)
+    guildBankConflictKeep:SetShown(bankConflict ~= nil)
+end
+
 local function Refresh()
     local guildFoundAvailable = CanUseGuildFoundTools()
     local managementAvailable = CanUseManagementTools()
@@ -693,6 +1069,7 @@ local function Refresh()
                 iRC:Text("GUILDFOUND_AUDIT_ACTION_" .. tostring(record.action)), record.target or "-")
         end
         guildFoundAuditText:SetText(#lines > 0 and table.concat(lines, "\n") or L.GUILDFOUND_AUDIT_EMPTY)
+        RefreshGuildBankTools(guildFoundAvailable)
     end
     if debugModeCheck then debugModeCheck:Refresh() end
     if testGuildMasterCheck then
@@ -714,6 +1091,10 @@ local function Refresh()
     minimapCheck:Refresh()
     newMemberWelcomeCheck:Refresh()
     newMemberWelcomeCheck:SetEnabled(managementAvailable and iRC:IsGuildConnectionActive())
+    local welcomeConflict = iRC:GetPendingManagementConflict("WELCOME")
+    welcomeConflictText:SetText(welcomeConflict and iRC:Text("MANAGEMENT_CONFLICT_INLINE", welcomeConflict.source) or "")
+    welcomeConflictAccept:SetShown(welcomeConflict ~= nil)
+    welcomeConflictKeep:SetShown(welcomeConflict ~= nil)
     slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
     local connection = iRC:GetConnection()
     if connection then
@@ -745,9 +1126,102 @@ local function Refresh()
     refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local guildActive = connection and iRC:IsGuildConnectionActive()
-    if not guildContactsEdit:HasFocus() then guildContactsEdit:SetText(iRC:GetConnectionRules().guildContacts or "") end
     guildContactsEdit:SetEnabled(isGuildMaster and guildActive and true or false)
     guildContactsSave:SetEnabled(isGuildMaster and guildActive and true or false)
+    local contactNames = {}
+    for name in tostring(iRC:GetConnectionRules().guildContacts or ""):gmatch("[^,]+") do
+        name = name:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then contactNames[#contactNames + 1] = name end
+    end
+    for index, name in ipairs(contactNames) do
+        local rowName = name
+        local row = guildContactRows[index]
+        if not row then
+            row = CreateFrame("Frame", nil, guildContactsListContent, "BackdropTemplate")
+            row:SetSize(420, 27)
+            row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
+            row:SetBackdropColor(0.10, 0.08, 0.05, index % 2 == 0 and 0.55 or 0.35)
+            row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row.name:SetPoint("LEFT", row, "LEFT", 8, 0)
+            row.name:SetWidth(130)
+            row.name:SetJustifyH("LEFT")
+            row.noteHit = CreateFrame("Button", nil, row)
+            row.noteHit:SetSize(125, 27)
+            row.noteHit:SetPoint("LEFT", row, "LEFT", 135, 0)
+            row.noteText = row.noteHit:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.noteText:SetAllPoints(); row.noteText:SetJustifyH("LEFT")
+            row.note = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+            row.note:SetSize(120, 22); row.note:SetPoint("LEFT", row, "LEFT", 138, 0)
+            row.note:SetAutoFocus(false); row.note:SetMaxLetters(80)
+            row.author = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.author:SetPoint("LEFT", row, "LEFT", 270, 0); row.author:SetWidth(85); row.author:SetJustifyH("CENTER")
+            row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            row.remove:SetSize(60, 22)
+            row.remove:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            row.remove:SetText(L.GUILD_CONTACTS_REMOVE)
+            row.highlight = row:CreateTexture(nil, "BACKGROUND")
+            row.highlight:SetAllPoints()
+            row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.10)
+            row.highlight:Hide()
+            guildContactRows[index] = row
+        end
+        row:SetPoint("TOPLEFT", guildContactsListContent, "TOPLEFT", 0, -(index - 1) * 29)
+        row.name:SetText(iRC:FormatPlayerName(rowName))
+        local detail = iRC:GetGuildContactDetails(rowName) or {}
+        local note = detail.note or ""
+        row.noteText:SetText(note ~= "" and (#note > 18 and note:sub(1, 15) .. "..." or note) or iRC:Text("GUILD_BANK_NO_NOTE"))
+        row.author:SetText(iRC:FormatPlayerName(detail.addedBy or "Unknown"):match("^[^-]+") or "Unknown")
+        local function showContactTooltip(owner)
+            row.highlight:Show()
+            local metadata = iRC:GetGuildContactDetails(rowName) or {}
+            GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+            GameTooltip:SetText(iRC:FormatPlayerName(rowName), 1, 0.82, 0)
+            GameTooltip:AddLine(iRC:Text("GUILD_BANK_ADDED_BY", iRC:FormatPlayerName(metadata.addedBy or "Unknown")), 1, 1, 1)
+            GameTooltip:AddLine(iRC:Text("GUILD_BANK_ADDED_AT", metadata.addedAt and date("%Y-%m-%d %H:%M", metadata.addedAt) or "Unknown"), 1, 1, 1)
+            GameTooltip:AddLine(iRC:Text("GUILD_BANK_NOTE_TOOLTIP", metadata.note and metadata.note ~= "" and metadata.note or iRC:Text("GUILD_BANK_NO_NOTE")), 1, 1, 1, true)
+            GameTooltip:Show()
+        end
+        local function hideContactTooltip()
+            row.highlight:Hide()
+            GameTooltip:Hide()
+        end
+        row:SetScript("OnEnter", showContactTooltip)
+        row:SetScript("OnLeave", hideContactTooltip)
+        row.noteHit:SetScript("OnEnter", showContactTooltip)
+        row.noteHit:SetScript("OnLeave", hideContactTooltip)
+        row.note:SetScript("OnEnter", showContactTooltip)
+        row.note:SetScript("OnLeave", hideContactTooltip)
+        row.note:SetText(note); row.note:Hide(); row.noteHit:Show()
+        row.noteHit:SetEnabled(isGuildMaster and guildActive and true or false)
+        row.noteHit:SetScript("OnClick", function()
+            row.noteOriginal = (iRC:GetGuildContactDetails(rowName) or {}).note or ""
+            row.note:SetText(row.noteOriginal); row.noteHit:Hide(); row.note:Show(); row.note:SetFocus()
+        end)
+        row.note:SetScript("OnEnterPressed", function(self)
+            if iRC:SetGuildContactNote(rowName, self:GetText()) then row.noteSaved = true end
+            self:ClearFocus()
+        end)
+        row.note:SetScript("OnEscapePressed", function(self)
+            row.noteCancelled = true; self:SetText(row.noteOriginal or note); self:ClearFocus()
+        end)
+        row.note:SetScript("OnEditFocusLost", function(self)
+            if row.noteCancelled then row.noteCancelled = nil
+            elseif not row.noteSaved then iRC:SetGuildContactNote(rowName, self:GetText()) end
+            row.noteSaved = nil; self:Hide(); row.noteHit:Show()
+        end)
+        row.remove:SetEnabled(isGuildMaster and guildActive and true or false)
+        row.remove:SetScript("OnClick", function()
+            local kept = {}
+            for _, currentName in ipairs(contactNames) do
+                if currentName ~= rowName then kept[#kept + 1] = currentName end
+            end
+            iRC:SetGuildContacts(table.concat(kept, ", "))
+        end)
+        row:Show()
+    end
+    for index = #contactNames + 1, #guildContactRows do guildContactRows[index]:Hide() end
+    guildContactsListEmpty:SetShown(#contactNames == 0)
+    guildContactsListContent:SetHeight(math.max(1, #contactNames * 29))
     broadcastButton:SetEnabled(guildActive and true or false)
     guildActivationCheck:SetEnabled(isGuildMaster and true or false)
     if isGuildMaster and guildActive then

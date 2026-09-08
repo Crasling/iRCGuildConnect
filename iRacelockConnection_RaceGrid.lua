@@ -298,7 +298,7 @@ function RaceGrid:BuildOwnGuildReports()
             sameRaceMinimumLevel = tonumber(rules.sameRaceMinimumLevel) or 1,
             guildGroupsMinimumLevel = tonumber(rules.guildGroupsMinimumLevel) or 1,
         },
-        guildContacts = tostring(rules.guildContacts or ""):sub(1, 60),
+        guildContacts = tostring(rules.guildContacts or ""):sub(1, 140),
     }
     local counted = {}
     for _, member in ipairs(iRC:GetGuildRosterRows()) do
@@ -357,7 +357,7 @@ local function serializeGuildReport(report)
     fields[#fields + 1] = tostring(ruleMask)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
-    fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 60)
+    fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 140)
     fields[#fields + 1] = report.addonVersion or iRC.Version
     return table.concat(fields, SEP)
 end
@@ -453,7 +453,7 @@ local function parseGuildReport(parts)
         }
     end
     local guildContacts = tostring(parts[25] or "")
-    if #guildContacts > 60 or guildContacts:find("[%c]") then return nil end
+    if #guildContacts > 140 or guildContacts:find("[%c]") then return nil end
     local addonVersion = parts[26]
     return {
         name = name, guid = guid, guildName = guildName, race = race,

@@ -47,8 +47,9 @@ local function isRuleEnabled(key)
     return iRC:IsGuildConnectionActive() and iRC:GetConnectionRules()[key] == true
 end
 
-local function isLevel60GuildFoundActive()
-    return iRC:IsGuildFoundRequired() and (UnitLevel("player") or 0) >= 60 and not iRC:GetSelfFoundState()
+local function isGuildFoundEconomyActive()
+    local eligible = (UnitLevel("player") or 0) >= 60 or iRC:IsGuildBankException(iRC:GetPlayerName())
+    return iRC:IsGuildFoundRequired() and eligible and not iRC:GetSelfFoundState()
 end
 
 local function getNativeLanguage()
@@ -93,7 +94,8 @@ function Enforcement:UpdateSelfFoundWarning()
     local rules = iRC:GetConnectionRules()
     local level60OrAbove = (UnitLevel("player") or 0) >= 60
     local exemptAtLevel60 = level60OrAbove and (rules.level60GuildFound or rules.allowLevel60WithoutSelfFound)
-    local violation = isRuleEnabled("selfFoundOnly") and not exemptAtLevel60 and not iRC:GetSelfFoundState()
+    local guildBankException = iRC:IsGuildBankException(iRC:GetPlayerName())
+    local violation = isRuleEnabled("selfFoundOnly") and not exemptAtLevel60 and not guildBankException and not iRC:GetSelfFoundState()
     warningFrame:SetShown(violation)
     if violation then
         warningFrame.text:SetText(iRC:Text("SELF_FOUND_REQUIRED_WARNING"))
@@ -128,7 +130,7 @@ local function getSendMailButton()
 end
 
 function Enforcement:CheckTradeRestriction()
-    if not isLevel60GuildFoundActive() or restrictedTradeCancelled then return end
+    if not isGuildFoundEconomyActive() or restrictedTradeCancelled then return end
     local partnerName = getTradePartnerName()
     if not partnerName then return end
     local allowed, reason = iRC:GetGuildFoundTradeStatus(partnerName)
@@ -144,7 +146,7 @@ function Enforcement:InstallTradeAPIGuard()
     if originalAcceptTrade or type(_G.AcceptTrade) ~= "function" then return end
     originalAcceptTrade = _G.AcceptTrade
     _G.AcceptTrade = function(...)
-        if isLevel60GuildFoundActive() then
+        if isGuildFoundEconomyActive() then
             local partnerName = getTradePartnerName()
             local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
             if not allowed then
@@ -160,7 +162,7 @@ end
 function Enforcement:UpdateMailRestriction()
     local button = getSendMailButton()
     if not button or not button.SetEnabled then return end
-    if not isLevel60GuildFoundActive() then
+    if not isGuildFoundEconomyActive() then
         if button.iRCMailRestricted then button:SetEnabled(true) end
         button.iRCMailRestricted = nil
         lastMailRestrictionReason = nil
@@ -202,7 +204,7 @@ function Enforcement:InstallMailRecipientGuard()
 end
 
 local function getInboxRestriction(index)
-    if not isLevel60GuildFoundActive() or not GetInboxHeaderInfo then return false end
+    if not isGuildFoundEconomyActive() or not GetInboxHeaderInfo then return false end
     local packageIcon, _, sender, _, money, codAmount, _, hasItem, _, _, _, canReply, isGameMaster = GetInboxHeaderInfo(index)
     if not sender or sender == "" then return false end
 
@@ -238,7 +240,7 @@ function Enforcement:InstallMailAPIGuards()
     if not originalSendMail and type(_G.SendMail) == "function" then
         originalSendMail = _G.SendMail
         _G.SendMail = function(recipient, ...)
-            if isLevel60GuildFoundActive() then
+            if isGuildFoundEconomyActive() then
                 local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient)
                 if not allowed then
                     iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
@@ -276,11 +278,11 @@ function Enforcement:InstallMailAPIGuards()
 end
 
 function Enforcement:CloseRestrictedAuctionHouse()
-    if not isLevel60GuildFoundActive() then return end
+    if not isGuildFoundEconomyActive() then return end
     iRC:RecordGuildFoundAudit("AUCTION_HOUSE_BLOCKED", "")
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_AUCTION_HOUSE_CLOSED"))
     local closeAuctionHouse = function()
-        if not isLevel60GuildFoundActive() then return end
+        if not isGuildFoundEconomyActive() then return end
         if CloseAuctionHouse then
             CloseAuctionHouse()
         elseif AuctionHouseFrame and AuctionHouseFrame:IsShown() then

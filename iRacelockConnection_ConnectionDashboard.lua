@@ -135,7 +135,7 @@ function Dashboard:Create()
     sideTitle:SetTextColor(unpack(ORANGE))
     frame.tabs, frame.tabOrder = {}, {}
     local labels = {
-        { name = "Overview" }, { name = "Verification" },
+        { name = "Verification" },
         { name = "Incidents", label = iRC:Text("INCIDENT_TAB"), adminOnly = true },
     }
     for index, item in ipairs(labels) do
@@ -150,6 +150,7 @@ function Dashboard:Create()
         tab.tabName = label
         tab.adminOnly = item.adminOnly
         tab:SetScript("OnClick", function(button)
+            if frame.memberMenu then frame.memberMenu:Hide() end
             if frame.tab ~= button.tabName then frame.sortKey = nil end
             frame.tab = button.tabName
             Dashboard:Refresh()
@@ -258,6 +259,16 @@ function Dashboard:Create()
     frame.memberMenu:SetClampedToScreen(true)
     setBackdrop(frame.memberMenu, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
     frame.memberMenu:Hide()
+    frame:HookScript("OnHide", function()
+        frame.memberMenu:Hide()
+    end)
+    local outsideClickWatcher = CreateFrame("Frame")
+    outsideClickWatcher:RegisterEvent("GLOBAL_MOUSE_DOWN")
+    outsideClickWatcher:SetScript("OnEvent", function()
+        if frame.memberMenu:IsShown() and not MouseIsOver(frame.memberMenu) then
+            frame.memberMenu:Hide()
+        end
+    end)
     local menuTitle = frame.memberMenu:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     menuTitle:SetPoint("TOPLEFT", 16, -12)
     menuTitle:SetPoint("TOPRIGHT", -34, -12)
@@ -415,7 +426,7 @@ function Dashboard:Create()
         frame.memberMenu.actionButtons[#frame.memberMenu.actionButtons + 1] = button
     end
     scroll:HookScript("OnVerticalScroll", function() Dashboard:RenderVisibleRows() end)
-    frame.tab = "Overview"
+    frame.tab = "Verification"
     return frame
 end
 
@@ -611,6 +622,7 @@ function Dashboard:Refresh()
     local frame = self:Create()
     frame.rowData = {}
     local connection = iRC:GetConnection()
+    if frame.tab ~= "Verification" and frame.memberMenu then frame.memberMenu:Hide() end
     if frame.tab == "Champions" or frame.tab == "Leaderboard" then frame.tab = "Verification" end
     if frame.tabs.Incidents then frame.tabs.Incidents:SetShown(iRC:IsGuildAdmin()) end
     if frame.tab == "Incidents" and not iRC:IsGuildAdmin() then frame.tab = "Verification" end
@@ -661,14 +673,19 @@ function Dashboard:Refresh()
     elseif frame.tab == "Verification" then
         local verified, compatible, attention, offline = 0, 0, 0, 0
         local members = iRC:GetGuildRosterRows()
-        local function effectiveVerificationState(member)
-            if member.raceMismatch then return "attention" end
-            return member.verification and member.verification.state or "missing"
-        end
         local rules = iRC:GetConnectionRules() or {}
         local usesSelfFound = rules.selfFoundOnly == true
         local usesGuildFound = usesSelfFound and rules.level60GuildFound == true
             and rules.allowLevel60WithoutSelfFound ~= true
+        local function effectiveVerificationState(member)
+            if member.raceMismatch then return "attention" end
+            local state = member.verification and member.verification.state or "missing"
+            local hasLiveAddon = state == "verified" or state == "compatible"
+            if usesSelfFound and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
+                return "attention"
+            end
+            return state
+        end
         local progressHeader = usesGuildFound and iRC:Text("VERIFICATION_PROGRESS_SF_GF_COLUMN")
             or (usesSelfFound and iRC:Text("VERIFICATION_PROGRESS_COLUMN") or iRC:Text("VERIFICATION_ONLY_COLUMN"))
         for _, member in ipairs(members) do
@@ -737,7 +754,11 @@ function Dashboard:Refresh()
             local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
             local hasSelfFoundSource = hasLiveAddon
             local progressText, progressColor
-            if usesSelfFound and (member.level or 0) < 60 then
+            local guildBankException = iRC:IsGuildFoundRequired() and iRC:IsGuildBankException(member.name)
+            if guildBankException then
+                progressText = iRC:Text("VERIFICATION_GUILD_BANK", iRC:Text(hasLiveAddon and "RL_VERIFIED" or "RL_UNVERIFIED"))
+                progressColor = hasLiveAddon and GREEN or RED
+            elseif usesSelfFound and (member.level or 0) < 60 then
                 progressText = hasSelfFoundSource and iRC:Text("VERIFICATION_SELF_FOUND", iRC:Text(member.selfFound and "SELF_FOUND_ACTIVE" or "SELF_FOUND_INACTIVE"))
                     or iRC:Text("VERIFICATION_SELF_FOUND_UNKNOWN")
                 progressColor = hasSelfFoundSource and (member.selfFound and GREEN or RED) or GRAY
@@ -752,8 +773,11 @@ function Dashboard:Refresh()
             local belowMaxLevel = (member.level or 0) < 60
             local lowerLevelStatusOK = liveState == "verified" or liveState == "compatible"
             local lowerLevelOffline = liveState == "offline" or liveState == "inactive"
-            local cleanText = belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
+            local selfFoundViolation = usesSelfFound and belowMaxLevel and lowerLevelStatusOK and member.selfFound ~= true
+            local cleanText = selfFoundViolation and iRC:Text("VERIFICATION_SELF_FOUND_INACTIVE_STATUS")
+                or (belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
                 or (lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")) or iRC:Text("RL_STATUS_UNKNOWN")
+                )
             if not lowerLevelStatusOK then
                 cleanText = iRC:Text(lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")
             elseif (member.level or 0) >= 60 and guildFoundStatus and guildFoundStatus.clean ~= nil then
@@ -776,9 +800,10 @@ function Dashboard:Refresh()
             data.columnColors = {
                 [4] = member.raceMismatch and RED or nil,
                 [5] = progressColor,
-                [6] = not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
+                [6] = selfFoundViolation and RED
+                    or (not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
                     or (belowMaxLevel and GREEN
-                    or (guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY)),
+                    or (guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY))),
             }
         end
     elseif frame.tab == "Incidents" then

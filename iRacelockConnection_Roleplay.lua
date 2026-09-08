@@ -207,43 +207,37 @@ function Roleplay:TransformTaurenTalk(text)
     return text
 end
 
-local roleplayWrappers = setmetatable({}, { __mode = "k" })
+local hookedEditBoxes = setmetatable({}, { __mode = "k" })
 
-local function transformBeforeSend(editBox)
+local function transformEditBox(editBox)
     if not editBox or not editBox.GetText or not editBox.SetText then return end
+    local text = editBox:GetText()
+    if type(text) ~= "string" or text == "" or text:match("^%s*/") then return end
     if Roleplay:IsTrollTalkEnabled() then
-        editBox:SetText(Roleplay:TransformTrollTalk(editBox:GetText()))
+        editBox:SetText(Roleplay:TransformTrollTalk(text))
     elseif Roleplay:IsTaurenTalkEnabled() then
-        editBox:SetText(Roleplay:TransformTaurenTalk(editBox:GetText()))
+        editBox:SetText(Roleplay:TransformTaurenTalk(text))
     end
 end
 
-local function callOriginalSend(originalSend, editBox, addHistory)
-    if securecallfunction then return securecallfunction(originalSend, editBox, addHistory) end
-    return originalSend(editBox, addHistory)
-end
-
-local function installChatSendHook()
-    local currentSend = ChatEdit_SendText
-    if type(currentSend) ~= "function" or roleplayWrappers[currentSend] then return end
-    local originalSend = currentSend
-    local wrapper = function(editBox, addHistory)
-        local text = editBox and editBox.GetText and editBox:GetText() or ""
-        -- Slash commands can execute protected Blizzard actions such as
-        -- /gquit. Never alter their text and cross back into Blizzard through
-        -- a secure call so the Race Talk wrapper does not taint that action.
-        if type(text) == "string" and text:match("^%s*/") then
-            return callOriginalSend(originalSend, editBox, addHistory)
+local function installChatEditBoxHooks()
+    if not NUM_CHAT_WINDOWS then return end
+    for index = 1, NUM_CHAT_WINDOWS do
+        local editBox = _G["ChatFrame" .. index .. "EditBox"]
+        if editBox and editBox.HookScript and not hookedEditBoxes[editBox] then
+            hookedEditBoxes[editBox] = true
+            -- Observe the Enter key without replacing Blizzard's protected
+            -- OnEnterPressed handler or any global chat function. Slash
+            -- commands remain entirely on Blizzard's secure execution path.
+            editBox:HookScript("OnKeyDown", function(self, key)
+                if key == "ENTER" or key == "NUMPADENTER" then transformEditBox(self) end
+            end)
         end
-        transformBeforeSend(editBox)
-        return callOriginalSend(originalSend, editBox, addHistory)
     end
-    roleplayWrappers[wrapper] = true
-    ChatEdit_SendText = wrapper
 end
 
 local function installChatHooks()
-    installChatSendHook()
+    installChatEditBoxHooks()
 end
 
 local frame = CreateFrame("Frame")

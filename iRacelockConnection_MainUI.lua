@@ -171,6 +171,11 @@ local function makeRaceCard(parent)
     card.rulesText:SetJustifyH("LEFT")
     card.rulesText:SetJustifyV("TOP")
     card.rulesText:SetWordWrap(true)
+    card.contactsLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    card.contactsLabel:SetPoint("TOPLEFT", 20, -192)
+    card.contactsLabel:SetText(iRC:Text("GUILD_CONTACTS_LABEL") .. ":")
+    card.contactsLabel:SetTextColor(unpack(COLORS.gold))
+    card.contactButtons = {}
     card:EnableMouse(true)
     card:SetScript("OnEnter", function(self)
         if not GameTooltip or not self.report then return end
@@ -518,10 +523,9 @@ local function getActiveRuleLines(group)
 end
 
 local function getGuildProfileLines(group)
-    local contacts = tostring(group.guildContacts or "")
     local lines = {
         iRC:Text("GUILD_STATS_RACELOCKED_EXPLANATION"),
-        contacts ~= "" and iRC:Text("GUILD_STATS_CONTACTS", contacts) or iRC:Text("GUILD_STATS_NO_CONTACTS"),
+        "",
         "",
         iRC:Text("GUILD_STATS_ACTIVE_RULES") .. ":",
     }
@@ -552,7 +556,44 @@ local function setRaceCard(card, group, rank)
     card.rulesSeparator:SetShown(expanded and true or false)
     card.rulesTitle:SetShown(expanded and true or false)
     card.rulesText:SetShown(expanded and true or false)
-    if expanded then card.rulesText:SetText(table.concat(getGuildProfileLines(group), "\n")) end
+    card.contactsLabel:SetShown(expanded and true or false)
+    if expanded then
+        card.rulesText:SetText(table.concat(getGuildProfileLines(group), "\n"))
+        local contacts = {}
+        for name in tostring(group.guildContacts or ""):gmatch("[^,]+") do
+            name = name:gsub("^%s+", ""):gsub("%s+$", "")
+            if name ~= "" then contacts[#contacts + 1] = name end
+        end
+        card.contactsLabel:SetText(#contacts > 0 and (iRC:Text("GUILD_CONTACTS_LABEL") .. ":") or iRC:Text("GUILD_STATS_NO_CONTACTS"))
+        local x = 115
+        for index, name in ipairs(contacts) do
+            local button = card.contactButtons[index]
+            if not button then
+                button = CreateFrame("Button", nil, card)
+                button:SetHeight(18)
+                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                button.text:SetAllPoints(); button.text:SetJustifyH("LEFT")
+                button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+                button.highlight:SetAllPoints(); button.highlight:SetColorTexture(1, 0.55, 0, 0.15)
+                card.contactButtons[index] = button
+            end
+            local contactName = name
+            local displayName = iRC:FormatPlayerName(name)
+            button:ClearAllPoints(); button:SetPoint("TOPLEFT", card, "TOPLEFT", x, -187)
+            button.text:SetText(displayName); button:SetWidth(math.max(55, button.text:GetStringWidth() + 14))
+            button:SetScript("OnClick", function()
+                if ChatFrame_SendTell then ChatFrame_SendTell(contactName) end
+            end)
+            button:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText(iRC:Text("GUILD_CONTACT_WHISPER", displayName)); GameTooltip:Show()
+            end)
+            button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            button:Show(); x = x + button:GetWidth() + 6
+        end
+        for index = #contacts + 1, #card.contactButtons do card.contactButtons[index]:Hide() end
+    else
+        for _, button in ipairs(card.contactButtons) do button:Hide() end
+    end
     updateClassBreakdown(card, group.classes, group.members)
     card:Show()
 end

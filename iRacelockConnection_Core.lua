@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.14"
+iRC.Version = "0.2.15"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -316,6 +316,10 @@ function iRC:GetConnection()
     if connection.guildNotifications.welcomeNewMembers == nil then
         connection.guildNotifications.welcomeNewMembers = false
     end
+    connection.guildBankExceptions = connection.guildBankExceptions or { members = {} }
+    connection.guildBankExceptions.members = connection.guildBankExceptions.members or {}
+    connection.guildBankExceptions.details = connection.guildBankExceptions.details or {}
+    connection.guildContactDetails = connection.guildContactDetails or {}
     connection.members = connection.members or {}
     connection.rules = connection.rules or {}
     for key, value in pairs(self.DefaultConnectionRules) do
@@ -431,7 +435,8 @@ function iRC:GetGuildFoundTradeStatus(name)
         return false, name .. " does not have a current iRC response."
     end
 
-    if self.RaceLockedSync then
+    local targetIsGuildBank = self:IsGuildBankException(name)
+    if self.RaceLockedSync and not self:IsGuildBankException(self:GetPlayerName()) then
         local ownVerified, ownClean = self.RaceLockedSync:GetLocalRawStatus()
         local own = self.RaceLockedSync:GetStatus(self:GetPlayerName())
         if own then
@@ -445,6 +450,8 @@ function iRC:GetGuildFoundTradeStatus(name)
             return false, self:Text("RL_MEMBER_INELIGIBLE", name)
         end
     end
+
+    if targetIsGuildBank then return true end
 
     local evidence = profile.selfFoundEvidence or nil
     local status = evidence and evidence.status or "UNVERIFIED"
@@ -542,6 +549,76 @@ function iRC:IsNewMemberWelcomeEnabled()
         and connection.guildNotifications.welcomeNewMembers == true or false
 end
 
+local function normalizeFullPlayerName(name, defaultRealm)
+    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" then return "" end
+    local character, realm = name:match("^([^-]+)%-(.+)$")
+    character = character or name
+    realm = realm or defaultRealm
+    if not realm or realm == "" then return string.lower(character) end
+    return string.lower(character .. "-" .. tostring(realm):gsub("%s+", ""))
+end
+
+function iRC:ResolveGuildMemberFullName(name)
+    if type(name) ~= "string" or name == "" or not GetNumGuildMembers or not GetGuildRosterInfo then return nil end
+    local hasRealm = name:find("-", 1, true) ~= nil
+    local wantedFull = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
+    local wantedShort, match
+    if not hasRealm then wantedShort = self:NormalizeName(name) end
+    for index = 1, GetNumGuildMembers(true) do
+        local rosterName = GetGuildRosterInfo(index)
+        if rosterName then
+            local rosterFull = normalizeFullPlayerName(rosterName, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
+            local matches = hasRealm and rosterFull == wantedFull or (wantedShort and self:NormalizeName(rosterName) == wantedShort)
+            if matches then
+                if match and match ~= rosterFull then return nil end
+                match = rosterFull
+            end
+        end
+    end
+    return match
+end
+
+function iRC:IsGuildBankException(name)
+    local connection = self:GetConnection()
+    local exceptions = connection and connection.guildBankExceptions
+    local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
+    return key ~= "" and exceptions and exceptions.members and exceptions.members[key] == true or false
+end
+
+function iRC:GetGuildBankExceptionDetails(name)
+    local connection = self:GetConnection()
+    local exceptions = connection and connection.guildBankExceptions
+    local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
+    return exceptions and exceptions.details and exceptions.details[key] or nil
+end
+
+function iRC:FormatPlayerName(name)
+    name = tostring(name or "")
+    local character, realm = name:match("^([^-]+)%-(.+)$")
+    local function capitalize(value)
+        return value ~= "" and (value:sub(1, 1):upper() .. value:sub(2):lower()) or value
+    end
+    if character then
+        local currentRealm = GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName() or ""
+        local normalizedRealm = tostring(realm):gsub("%s+", ""):lower()
+        local normalizedCurrent = tostring(currentRealm):gsub("%s+", ""):lower()
+        if normalizedRealm == normalizedCurrent then return capitalize(character) end
+        return capitalize(character) .. "-" .. capitalize(realm)
+    end
+    return capitalize(name)
+end
+
+function iRC:GetGuildBankExceptionText()
+    local connection = self:GetConnection()
+    local names = {}
+    for name, enabled in pairs(connection and connection.guildBankExceptions and connection.guildBankExceptions.members or {}) do
+        if enabled then names[#names + 1] = name end
+    end
+    table.sort(names)
+    return table.concat(names, ", ")
+end
+
 function iRC:MarkGuildFoundRequired(connection)
     connection = connection or self:GetConnection()
     local guildKey = self:GetGuildKey()
@@ -613,11 +690,49 @@ function iRC:SetGuildContacts(value)
     local connection = self:GetConnection()
     if not connection then return false end
     value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
-    connection.rules.guildContacts = value:sub(1, 60)
+    if #value > 140 then
+        self:Print(self.Colors.Red .. self:Text("GUILD_CONTACTS_TOO_LONG") .. self.Colors.Reset)
+        return false
+    end
+    local previous = {}
+    for name in tostring(connection.rules.guildContacts or ""):gmatch("[^,]+") do
+        local fullName = self:ResolveGuildMemberFullName(name:gsub("^%s+", ""):gsub("%s+$", ""))
+        if fullName then previous[fullName] = true end
+    end
+    local now = GetServerTime and GetServerTime() or time()
+    local normalized, details, count = {}, {}, 0
+    for name in value:gmatch("[^,]+") do
+        local fullName = self:ResolveGuildMemberFullName(name:gsub("^%s+", ""):gsub("%s+$", ""))
+        if not fullName then return false end
+        count = count + 1
+        if count > 5 then
+            self:Print(self.Colors.Red .. self:Text("GUILD_CONTACTS_TOO_LONG") .. self.Colors.Reset)
+            return false
+        end
+        normalized[#normalized + 1] = fullName
+        details[fullName] = connection.guildContactDetails[fullName]
+        if not details[fullName] and not previous[fullName] then
+            details[fullName] = { addedAt = now, addedBy = self:GetPlayerName(), updatedAt = now, note = "" }
+        end
+    end
+    value = table.concat(normalized, ", ")
+    if #value > 140 then
+        self:Print(self.Colors.Red .. self:Text("GUILD_CONTACTS_TOO_LONG") .. self.Colors.Reset)
+        return false
+    end
+    connection.guildContactDetails = details
+    connection.rules.guildContacts = value
     self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendGuildContactMetadata then self:SendGuildContactMetadata() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
+end
+
+function iRC:GetGuildContactDetails(name)
+    local connection = self:GetConnection()
+    local fullName = self:ResolveGuildMemberFullName(name) or name
+    return connection and connection.guildContactDetails and connection.guildContactDetails[fullName] or nil
 end
 
 iRC.Frame:RegisterEvent("ADDON_LOADED")

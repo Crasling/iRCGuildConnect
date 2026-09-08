@@ -2,6 +2,17 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.15 - Guild Management Improvements
+--------------------------------------------------------------------------------
+[NEW] Rank 0 and rank 1 can manage up to 32 shared or personal Guild Bank Exceptions
+[NEW] Guild Bank entries show who added them, when they were added, and a synchronized editable comment
+[NEW] Guild Bank and Invite Contact fields suggest matching guild members while typing and support Tab completion
+[NEW] Guild Homepages support up to five invite contacts with comments; clicking a contact starts a whisper
+[NEW] Conflicting Guild Bank changes from officers can be reviewed, merged, or resolved without interrupting gameplay
+[CHANGED] Guild management lists now use compact, scrollable rows with clearer columns, hover details, and same-realm names hidden
+[CHANGED] Connection Dashboard now opens directly on Verification while its unused Overview tab remains hidden
+[FIX] Verification menus close correctly, inactive Self-Found is no longer shown as OK, and Race Talk keeps slash commands working
+
 v0.2.14 - Safer Group Enforcement
 --------------------------------------------------------------------------------
  [FIX] Existing groups are safely preserved when group rules begin applying through level-up, reload, or login
