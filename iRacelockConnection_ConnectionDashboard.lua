@@ -319,7 +319,7 @@ function Dashboard:Create()
             if iRC:NormalizeName(rosterMember.name) == iRC:NormalizeName(targetName) then member = rosterMember break end
         end
         local level = member and tonumber(member.level) or 0
-        if member and level < 60 then
+        if member and level < 60 and iRC:GetProgressionMode() ~= "SELF_FOUND_OR_GUILD_FOUND" then
             frame.memberReport:SetSize(640, 190)
             reportTitle:SetText(iRC:Text("SF_REPORT_TITLE"))
             local liveState = member.verification and member.verification.state
@@ -504,20 +504,22 @@ local function setFilters(frame, choices)
 end
 
 local function openMemberManagementMenu(frame, member)
-    if not iRC:IsGuildAdmin() or not member or not member.name then return end
+    if not iRC:HasGuildPermission("verification") or not member or not member.name then return end
     local menu = frame.memberMenu
     local scale = UIParent:GetEffectiveScale()
     local cursorX, cursorY = GetCursorPosition()
     menu.targetName = member.name
     menu.title:SetText(displayMemberName(member.name))
+    local guildFoundDecisionAllowed = (tonumber(member.level) or 0) >= 60
+        or iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
     local yOffset, currentGroup = 54, nil
     for _, groupLabel in pairs(menu.groupLabels) do groupLabel:Hide() end
     for _, button in ipairs(menu.actionButtons) do
-        local shown = (not button.gmOnly or iRC:IsGuildMaster())
-            and (not button.maxLevelOnly or (tonumber(member.level) or 0) >= 60 or iRC:IsTestAdminGuildMaster())
+        local shown = (not button.gmOnly or iRC:HasGuildPermission("verification"))
+            and (not button.maxLevelOnly or guildFoundDecisionAllowed or iRC:IsTestAdminGuildMaster())
         button:SetShown(shown)
         if shown then
-            local eligible = not button.maxLevelOnly or (tonumber(member.level) or 0) >= 60
+            local eligible = not button.maxLevelOnly or guildFoundDecisionAllowed
             button:SetEnabled(eligible)
             if currentGroup ~= button.group then
                 currentGroup = button.group
@@ -624,8 +626,8 @@ function Dashboard:Refresh()
     local connection = iRC:GetConnection()
     if frame.tab ~= "Verification" and frame.memberMenu then frame.memberMenu:Hide() end
     if frame.tab == "Champions" or frame.tab == "Leaderboard" then frame.tab = "Verification" end
-    if frame.tabs.Incidents then frame.tabs.Incidents:SetShown(iRC:IsGuildAdmin()) end
-    if frame.tab == "Incidents" and not iRC:IsGuildAdmin() then frame.tab = "Verification" end
+    if frame.tabs.Incidents then frame.tabs.Incidents:SetShown(iRC:HasGuildPermission("incidents")) end
+    if frame.tab == "Incidents" and not iRC:HasGuildPermission("incidents") then frame.tab = "Verification" end
     local visibleTabIndex = 0
     for _, tab in ipairs(frame.tabOrder or {}) do
         if tab:IsShown() then
@@ -674,14 +676,20 @@ function Dashboard:Refresh()
         local verified, compatible, attention, offline = 0, 0, 0, 0
         local members = iRC:GetGuildRosterRows()
         local rules = iRC:GetConnectionRules() or {}
-        local usesSelfFound = rules.selfFoundOnly == true
-        local usesGuildFound = usesSelfFound and rules.level60GuildFound == true
-            and rules.allowLevel60WithoutSelfFound ~= true
+        local progressionMode = iRC:GetProgressionMode(rules)
+        local usesSelfFound = progressionMode == "SELF_FOUND" or progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+        local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+            or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
         local function effectiveVerificationState(member)
             if member.raceMismatch then return "attention" end
             local state = member.verification and member.verification.state or "missing"
             local hasLiveAddon = state == "verified" or state == "compatible"
-            if usesSelfFound and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
+            if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
+                return "attention"
+            end
+            local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+            if progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and state == "compatible" and member.selfFound ~= true
+                and not (guildFoundStatus and guildFoundStatus.verified == true) then
                 return "attention"
             end
             return state
@@ -718,7 +726,12 @@ function Dashboard:Refresh()
             if key == "status" then return effectiveVerificationState(member) end
             local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
             if key == "progress" then
-                if usesSelfFound and (member.level or 0) < 60 then return member.selfFound and 1 or 0 end
+                if progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
+                    if member.selfFound then return 2 end
+                    return ((member.verification and member.verification.state == "verified")
+                        or (guildFoundStatus and guildFoundStatus.verified == true)) and 1 or 0
+                end
+                if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 then return member.selfFound and 1 or 0 end
                 if usesGuildFound and (member.level or 0) >= 60 then
                     return guildFoundStatus and (guildFoundStatus.verified and 1 or 0) or 0
                 end
@@ -758,6 +771,14 @@ function Dashboard:Refresh()
             if guildBankException then
                 progressText = iRC:Text("VERIFICATION_GUILD_BANK", iRC:Text(hasLiveAddon and "RL_VERIFIED" or "RL_UNVERIFIED"))
                 progressColor = hasLiveAddon and GREEN or RED
+            elseif progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
+                if member.selfFound then
+                    progressText, progressColor = iRC:Text("VERIFICATION_SELF_FOUND", iRC:Text("SELF_FOUND_ACTIVE")), GREEN
+                elseif liveState == "verified" or (guildFoundStatus and guildFoundStatus.verified == true) then
+                    progressText, progressColor = iRC:Text("VERIFICATION_GUILD_FOUND", iRC:Text("RL_VERIFIED")), GREEN
+                else
+                    progressText, progressColor = iRC:Text("VERIFICATION_GUILD_FOUND", iRC:Text("RL_UNVERIFIED")), RED
+                end
             elseif usesSelfFound and (member.level or 0) < 60 then
                 progressText = hasSelfFoundSource and iRC:Text("VERIFICATION_SELF_FOUND", iRC:Text(member.selfFound and "SELF_FOUND_ACTIVE" or "SELF_FOUND_INACTIVE"))
                     or iRC:Text("VERIFICATION_SELF_FOUND_UNKNOWN")
@@ -773,20 +794,31 @@ function Dashboard:Refresh()
             local belowMaxLevel = (member.level or 0) < 60
             local lowerLevelStatusOK = liveState == "verified" or liveState == "compatible"
             local lowerLevelOffline = liveState == "offline" or liveState == "inactive"
-            local selfFoundViolation = usesSelfFound and belowMaxLevel and lowerLevelStatusOK and member.selfFound ~= true
+            local selfFoundViolation = (progressionMode == "SELF_FOUND" and belowMaxLevel and lowerLevelStatusOK and member.selfFound ~= true)
+                or (progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and liveState == "compatible" and member.selfFound ~= true
+                    and not (guildFoundStatus and guildFoundStatus.verified == true))
             local cleanText = selfFoundViolation and iRC:Text("VERIFICATION_SELF_FOUND_INACTIVE_STATUS")
                 or (belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
                 or (lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")) or iRC:Text("RL_STATUS_UNKNOWN")
                 )
             if not lowerLevelStatusOK then
                 cleanText = iRC:Text(lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")
-            elseif (member.level or 0) >= 60 and guildFoundStatus and guildFoundStatus.clean ~= nil then
+            elseif ((member.level or 0) >= 60 or progressionMode == "SELF_FOUND_OR_GUILD_FOUND")
+                and guildFoundStatus and guildFoundStatus.clean ~= nil then
                 cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text(guildFoundStatus.clean and "RL_CLEAN" or "RL_FLAGGED"))
+            end
+            -- Presence is authoritative. Without a live supported-addon
+            -- response, progression and audit state are unknown and must not
+            -- be inferred from an older report or a manual GM decision.
+            if not hasLiveAddon then
+                progressText = ""
+                cleanText = ""
+                progressColor = GRAY
             end
             local statusTooltip = selfFound
             if iRC.RaceLockedSync then statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus) end
             if raceWarning then statusTooltip = statusTooltip .. "\n\n" .. raceWarning end
-            if iRC:IsGuildAdmin() then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
+            if iRC:HasGuildPermission("verification") then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
             local color = member.raceMismatch and RED or (verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED)))
             local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
                 if mouseButton == "RightButton" then

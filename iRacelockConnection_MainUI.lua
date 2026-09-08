@@ -511,9 +511,17 @@ local function getActiveRuleLines(group)
     if not group.rulesKnown or type(group.rules) ~= "table" then return { iRC:Text("GUILD_STATS_RULES_UNKNOWN") } end
     local rules, lines = group.rules, {}
     if rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NATIVE_TONGUE") end
-    if rules.selfFoundOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SELF_FOUND") end
-    if rules.level60GuildFound then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_LEVEL60_GUILD_FOUND") end
-    if rules.allowLevel60WithoutSelfFound then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_LEVEL60_SF_EXCEPTION") end
+    local progressionMode = iRC:GetProgressionMode(rules)
+    if progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
+        lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_HYBRID")
+    elseif progressionMode == "SELF_FOUND" then
+        local maxMode = iRC:GetMaxLevelProgressionMode(rules)
+        if maxMode == "GUILD_FOUND" then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SELF_FOUND_TO_GF")
+        elseif maxMode == "UNRESTRICTED" then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SELF_FOUND_TO_FREE")
+        else lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SELF_FOUND_REMAIN") end
+    else
+        lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NO_PROGRESSION")
+    end
     if rules.sameRaceGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SAME_RACE", rules.sameRaceMinimumLevel or 1) end
     if rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_MIXED_RACE_60") end
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_ONLY", rules.guildGroupsMinimumLevel or 1) end
@@ -639,7 +647,9 @@ local function updateRaceOverview(frame)
     updateRacePodium(frame, allGroups)
     local usedCards, yOffset = 0, 95
 
-    for _, faction in ipairs({ "Horde", "Alliance" }) do
+    local playerFaction = UnitFactionGroup and UnitFactionGroup("player") or "Horde"
+    local factionOrder = playerFaction == "Alliance" and { "Alliance", "Horde" } or { "Horde", "Alliance" }
+    for _, faction in ipairs(factionOrder) do
         local section = frame.factionSections[faction]
         if not section then
             section = makeFactionSection(frame.scrollContent, faction)

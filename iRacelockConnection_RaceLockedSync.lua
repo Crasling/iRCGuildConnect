@@ -180,7 +180,7 @@ local function queueRelay(name)
 end
 
 function Sync:SetOverride(name, verified, clean)
-    if not iRC:IsGuildMaster() or not connection() or not iRC:IsGuildMemberName(name) then return false end
+    if not iRC:HasGuildPermission("verification") or not connection() or not iRC:IsGuildMemberName(name) then return false end
     local memberLevel
     if GetNumGuildMembers and GetGuildRosterInfo then
         for index = 1, GetNumGuildMembers(true) do
@@ -191,7 +191,8 @@ function Sync:SetOverride(name, verified, clean)
             end
         end
     end
-    if not memberLevel or memberLevel < 60 then
+    local hybridProgression = iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
+    if not memberLevel or (memberLevel < 60 and not hybridProgression) then
         iRC:Print(iRC:Text("RL_OVERRIDE_LEVEL_60_ONLY"))
         return false
     end
@@ -246,7 +247,9 @@ function Sync:ReceiveRoster(message, sender)
         end
     elseif marker == "G:" or marker == "O:" then
         local direct = marker == "G:"
-        if direct and not iRC:IsGuildMasterName(sender) then return end
+        local senderRank = iRC:GetGuildMemberRankIndex(sender)
+        local allowedRank = connection().rankPermissions.verification or 1
+        if direct and (senderRank == nil or senderRank > allowedRank) then return end
         if #fields % 4 ~= 0 then return end
         for index = 1, #fields, 4 do
             local name, stamp = fields[index], number(fields[index + 3], time() + 300)
@@ -284,7 +287,7 @@ function Sync:Broadcast()
     local name = shortName(iRC:GetPlayerName())
     local verified, clean, tamperAt = self:GetLocalRawStatus()
     storeSelf(name, verified, clean, tamperAt, "iRC")
-    if (UnitLevel("player") or 0) >= 60 then
+    if (UnitLevel("player") or 0) >= 60 or iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND" then
         local entry = entryFor(name)
         local msg = "S:" .. name .. "," .. wireBool(verified) .. "," .. wireBool(clean) .. "," .. tostring(tamperAt)
         if entry.gmTimestamp then msg = msg .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. entry.gmTimestamp end

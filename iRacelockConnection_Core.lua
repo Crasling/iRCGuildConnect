@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.15"
+iRC.Version = "0.2.16"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -13,6 +13,7 @@ iRC.TestAdminNames = {
     "Crasling-Soulseeker",
     "Crasjin-Soulseeker",
     "Crasblight-Soulseeker",
+    "Crasdrum-Soulseeker"
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -54,6 +55,11 @@ iRC.DefaultConnectionRules = {
     guildGroupsOnly = false,
     guildGroupsMinimumLevel = 1,
     guildContacts = "",
+}
+
+iRC.DefaultRankPermissions = {
+    verification = 1, presence = 1, incidents = 1,
+    guildBanks = 1, notifications = 1, homepage = 0,
 }
 
 iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL" }
@@ -206,7 +212,8 @@ function iRC:ConfirmSelfFoundEnded(expectedAt)
     if history.firstSelfFoundAt and not history.firstEndedAt then
         local now, level = time(), UnitLevel("player") or 1
         local rules = self:GetConnectionRules()
-        local allowedAtMaxLevel = level >= 60 and rules and (rules.level60GuildFound or rules.allowLevel60WithoutSelfFound)
+        local allowedAtMaxLevel = rules and self:GetProgressionMode(rules) == "SELF_FOUND_OR_GUILD_FOUND"
+            or (level >= 60 and rules and (rules.level60GuildFound or rules.allowLevel60WithoutSelfFound))
         history.firstEndedAt = now
         history.firstEndedLevel = level
         history.endedWithLevel60Exception = allowedAtMaxLevel and true or false
@@ -320,6 +327,11 @@ function iRC:GetConnection()
     connection.guildBankExceptions.members = connection.guildBankExceptions.members or {}
     connection.guildBankExceptions.details = connection.guildBankExceptions.details or {}
     connection.guildContactDetails = connection.guildContactDetails or {}
+    connection.guildContactsTimestamp = tonumber(connection.guildContactsTimestamp) or 0
+    connection.rankPermissions = connection.rankPermissions or {}
+    for permission, rankIndex in pairs(self.DefaultRankPermissions) do
+        if connection.rankPermissions[permission] == nil then connection.rankPermissions[permission] = rankIndex end
+    end
     connection.members = connection.members or {}
     connection.rules = connection.rules or {}
     for key, value in pairs(self.DefaultConnectionRules) do
@@ -338,6 +350,69 @@ function iRC:IsGuildAdmin()
     if not GetGuildInfo then return false end
     local _, _, rankIndex = GetGuildInfo("player")
     return type(rankIndex) == "number" and rankIndex <= 1
+end
+
+function iRC:GetPlayerGuildRankIndex()
+    if self:IsTestAdminGuildMaster() then return 0 end
+    local _, _, rankIndex = GetGuildInfo and GetGuildInfo("player")
+    return type(rankIndex) == "number" and rankIndex or nil
+end
+
+function iRC:GetGuildMemberRankIndex(name)
+    if not name or not GetNumGuildMembers or not GetGuildRosterInfo then return nil end
+    for index = 1, GetNumGuildMembers(true) do
+        local memberName, _, rankIndex = GetGuildRosterInfo(index)
+        if self:NormalizeName(memberName) == self:NormalizeName(name) then return rankIndex end
+    end
+    return nil
+end
+
+function iRC:HasGuildPermission(permission)
+    if self:IsGuildMaster() then return true end
+    local connection, rankIndex = self:GetConnection(), self:GetPlayerGuildRankIndex()
+    local allowed = connection and connection.rankPermissions and tonumber(connection.rankPermissions[permission])
+    if allowed == nil then allowed = self.DefaultRankPermissions[permission] end
+    return rankIndex ~= nil and allowed ~= nil and rankIndex <= allowed
+end
+
+function iRC:GetGuildRankPermission(permission)
+    local connection = self:GetConnection()
+    local value = connection and connection.rankPermissions and tonumber(connection.rankPermissions[permission])
+    if value == nil then value = self.DefaultRankPermissions[permission] end
+    return math.max(0, math.min(9, math.floor(tonumber(value) or 0)))
+end
+
+function iRC:HasAnyManagementPermission()
+    for permission in pairs(self.DefaultRankPermissions) do
+        if self:HasGuildPermission(permission) then return true end
+    end
+    return false
+end
+
+function iRC:GetGuildRankOptions()
+    local found, options = {}, {}
+    if GetNumGuildMembers and GetGuildRosterInfo then
+        for index = 1, GetNumGuildMembers(true) do
+            local _, rankName, rankIndex = GetGuildRosterInfo(index)
+            if type(rankIndex) == "number" and not found[rankIndex] then
+                found[rankIndex] = rankName or ("Rank " .. rankIndex)
+            end
+        end
+    end
+    for rankIndex, rankName in pairs(found) do options[#options + 1] = { index = rankIndex, name = rankName } end
+    table.sort(options, function(a, b) return a.index < b.index end)
+    return options
+end
+
+function iRC:SetGuildRankPermission(permission, rankIndex)
+    if not self:IsGuildMaster() or self.DefaultRankPermissions[permission] == nil then return false end
+    local connection = self:GetConnection()
+    rankIndex = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
+    connection.rankPermissions[permission] = rankIndex
+    connection.rankPermissionsTimestamp = math.max(time(), (tonumber(connection.rankPermissionsTimestamp) or 0) + 1)
+    if self.SendRankPermissions then self:SendRankPermissions() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
 end
 
 function iRC:IsGuildMaster()
@@ -635,12 +710,65 @@ function iRC:IsGuildFoundRequired()
     local guildKey = self:GetGuildKey()
     if not connection or not guildKey then return false end
     local rules = connection.rules or self.DefaultConnectionRules
-    if rules.selfFoundOnly == true and rules.level60GuildFound == true then
+    if rules.level60GuildFound == true then
         self:MarkGuildFoundRequired(connection)
         return true
     end
     return connection.guildFoundEverActive == true
         or (iRCCharDB and iRCCharDB.guildFoundGuilds and iRCCharDB.guildFoundGuilds[guildKey] == true)
+end
+
+function iRC:GetProgressionMode(rules)
+    rules = rules or self:GetConnectionRules() or self.DefaultConnectionRules
+    if rules.selfFoundOnly then return "SELF_FOUND" end
+    if rules.level60GuildFound then return "SELF_FOUND_OR_GUILD_FOUND" end
+    return "NONE"
+end
+
+function iRC:GetMaxLevelProgressionMode(rules)
+    rules = rules or self:GetConnectionRules() or self.DefaultConnectionRules
+    if rules.level60GuildFound then return "GUILD_FOUND" end
+    if rules.allowLevel60WithoutSelfFound then return "UNRESTRICTED" end
+    return "SELF_FOUND"
+end
+
+function iRC:SetProgressionMode(mode)
+    if not self:IsGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    if mode == "SELF_FOUND" then
+        connection.rules.selfFoundOnly = true
+        connection.rules.level60GuildFound = false
+        connection.rules.allowLevel60WithoutSelfFound = false
+    elseif mode == "SELF_FOUND_OR_GUILD_FOUND" then
+        connection.rules.selfFoundOnly = false
+        connection.rules.level60GuildFound = true
+        connection.rules.allowLevel60WithoutSelfFound = false
+        self:MarkGuildFoundRequired(connection)
+    else
+        connection.rules.selfFoundOnly = false
+        connection.rules.level60GuildFound = false
+        connection.rules.allowLevel60WithoutSelfFound = false
+    end
+    self:StampConnectionRules(connection)
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.Enforcement then self.Enforcement:Refresh() end
+    return true
+end
+
+function iRC:SetMaxLevelProgressionMode(mode)
+    if not self:IsGuildMaster() or self:GetProgressionMode() ~= "SELF_FOUND" then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.rules.level60GuildFound = mode == "GUILD_FOUND"
+    connection.rules.allowLevel60WithoutSelfFound = mode == "UNRESTRICTED"
+    if connection.rules.level60GuildFound then self:MarkGuildFoundRequired(connection) end
+    self:StampConnectionRules(connection)
+    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.Enforcement then self.Enforcement:Refresh() end
+    return true
 end
 
 function iRC:SetConnectionRule(key, value)
@@ -686,7 +814,7 @@ function iRC:SetGuildGroupsMinimumLevel(value)
 end
 
 function iRC:SetGuildContacts(value)
-    if not self:IsGuildMaster() then return false end
+    if not self:HasGuildPermission("homepage") then return false end
     local connection = self:GetConnection()
     if not connection then return false end
     value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
@@ -722,8 +850,14 @@ function iRC:SetGuildContacts(value)
     end
     connection.guildContactDetails = details
     connection.rules.guildContacts = value
-    self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    connection.guildContactsTimestamp = math.max(time(), connection.guildContactsTimestamp + 1)
+    connection.guildContactsSource = self:GetPlayerName()
+    if self:IsGuildMaster() then
+        self:StampConnectionRules(connection)
+        if self.SendConnectionRules then self:SendConnectionRules() end
+    elseif self.SendGuildContacts then
+        self:SendGuildContacts()
+    end
     if self.SendGuildContactMetadata then self:SendGuildContactMetadata() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true

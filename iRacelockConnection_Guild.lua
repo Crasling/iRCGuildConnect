@@ -132,9 +132,10 @@ function iRC:IsPresenceNotificationLeader()
     if not connection or connection.active ~= true then return false end
     -- Notification leadership must follow the real guild roster. Testing
     -- overrides may unlock configuration, but they cannot grant access to
-    -- officer chat or displace an actual rank 0/1 iRC client.
+    -- officer chat or displace an actual authorized iRC officer client.
     local _, _, ownRankIndex = GetGuildInfo and GetGuildInfo("player")
-    if type(ownRankIndex) ~= "number" or ownRankIndex < 0 or ownRankIndex > 1 then return false end
+    local presenceRank = tonumber(connection.rankPermissions and connection.rankPermissions.presence) or 1
+    if type(ownRankIndex) ~= "number" or ownRankIndex < 0 or ownRankIndex > presenceRank then return false end
     local ownName = self:NormalizeName(self:GetPlayerName())
     local candidate = { name = self:GetPlayerName(), rankIndex = ownRankIndex }
     local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
@@ -148,7 +149,7 @@ function iRC:IsPresenceNotificationLeader()
             -- iRC's notification handler. Only direct, current-session iRC
             -- profiles can participate in this election.
             if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= PRESENCE_TIMEOUT then
-                if type(rankIndex) == "number" and rankIndex >= 0 and rankIndex <= 1
+                if type(rankIndex) == "number" and rankIndex >= 0 and rankIndex <= presenceRank
                     and (rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name))) then
                     candidate = { name = name, rankIndex = rankIndex }
                 end
@@ -517,12 +518,12 @@ frame:SetScript("OnEvent", function(_, event)
                 if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
                 -- Detect expired iRC presence even if WoW still lists the
                 -- previous notifier online (for example, addon disabled).
-                if iRC:IsGuildConnectionActive() and iRC:IsGuildAdmin() then queuePresenceReview(1) end
+                if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
             end)
         end
     elseif event == "GUILD_ROSTER_UPDATE" then
         iRC:CheckGuildRosterForNewMembers()
-        if iRC:IsGuildConnectionActive() and iRC:IsGuildAdmin() then queuePresenceReview(1) end
+        if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
         if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
         if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then
             iRC.MainUI:RefreshIfShown()

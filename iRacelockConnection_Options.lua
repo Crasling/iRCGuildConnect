@@ -13,11 +13,11 @@ local function IsAddonLoadedCompat(addonName)
 end
 
 local function CanUseGuildFoundTools()
-    return iRC:IsGuildAdmin() and iRC:IsGuildFoundRequired()
+    return iRC:HasGuildPermission("guildBanks") and iRC:IsGuildFoundRequired()
 end
 
 local function CanUseManagementTools()
-    return iRC:IsGuildAdmin()
+    return iRC:HasAnyManagementPermission()
 end
 
 local function CreateSectionHeader(parent, text, yOffset)
@@ -435,7 +435,7 @@ broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
 y = connectionActionsY - 36
 
 local guildRulesStatus
-local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, selfFoundOnlyCheck, level60GuildFoundCheck, level60SelfFoundExceptionCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, progressionModeDropdown, maxLevelProgressionDropdown, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
 local guildContactRows = {}
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
@@ -454,16 +454,26 @@ nativeTongueCheck, y = CreateSettingsCheckbox(connectionContent, "Native languag
     function() return iRC:GetConnectionRules().nativeTongueOnly end,
     function(value) iRC:SetConnectionRule("nativeTongueOnly", value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Progression", y - 2)
-selfFoundOnlyCheck, y = CreateSettingsCheckbox(connectionContent, "Self-Found only", "Require the game's Self-Found mode while leveling. Self-Found blocks player trading, Auction House use, and most mail.", y,
-    function() return iRC:GetConnectionRules().selfFoundOnly end,
-    function(value) iRC:SetConnectionRule("selfFoundOnly", value) end)
-_, y = CreateSubcategoryHeader(connectionContent, "Level 60 Self-Found Options", y - 2)
-level60GuildFoundCheck, y = CreateSettingsCheckbox(connectionContent, L.LEVEL60_GUILD_FOUND, L.LEVEL60_GUILD_FOUND_DESC, y,
-    function() return iRC:GetConnectionRules().level60GuildFound end,
-    function(value) iRC:SetConnectionRule("level60GuildFound", value) end, 18)
-level60SelfFoundExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 SF Exception", "At level 60, iRC stops enforcing Self-Found and Guild Found economic limits. You may trade, send mail, and use the Auction House normally.", y,
-    function() return iRC:GetConnectionRules().allowLevel60WithoutSelfFound end,
-    function(value) iRC:SetConnectionRule("allowLevel60WithoutSelfFound", value) end, 18)
+progressionModeDropdown, y = CreateSettingsDropdown("iRacelockConnectionProgressionModeDropdown", connectionContent,
+    L.PROGRESSION_MODE, L.PROGRESSION_MODE_DESC, y,
+    function() return iRC:GetProgressionMode() end,
+    function(value) iRC:SetProgressionMode(value) end,
+    function() return { "NONE", "SELF_FOUND", "SELF_FOUND_OR_GUILD_FOUND" } end,
+    function(value)
+        if value == "SELF_FOUND" then return L.PROGRESSION_SELF_FOUND end
+        if value == "SELF_FOUND_OR_GUILD_FOUND" then return L.PROGRESSION_HYBRID end
+        return L.PROGRESSION_NONE
+    end)
+maxLevelProgressionDropdown, y = CreateSettingsDropdown("iRacelockConnectionMaxLevelProgressionDropdown", connectionContent,
+    L.PROGRESSION_MAX_LEVEL, L.PROGRESSION_MAX_LEVEL_DESC, y,
+    function() return iRC:GetMaxLevelProgressionMode() end,
+    function(value) iRC:SetMaxLevelProgressionMode(value) end,
+    function() return { "SELF_FOUND", "GUILD_FOUND", "UNRESTRICTED" } end,
+    function(value)
+        if value == "GUILD_FOUND" then return L.PROGRESSION_MAX_GUILD_FOUND end
+        if value == "UNRESTRICTED" then return L.PROGRESSION_MAX_UNRESTRICTED end
+        return L.PROGRESSION_MAX_SELF_FOUND
+    end)
 _, y = CreateSubcategoryHeader(connectionContent, "Group Rules", y - 2)
 sameRaceGroupsCheck, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
     function() return iRC:GetConnectionRules().sameRaceGroupsOnly end,
@@ -657,6 +667,12 @@ taurenTalkCheck, y = CreateSettingsCheckbox(roleplayContent, L.TAUREN_TALK_ENABL
     function() return iRC.Roleplay:GetPlayerSettings().taurenTalk end,
     function(value) iRC.Roleplay:GetPlayerSettings().taurenTalk = value and true or false end)
 _, y = CreateInfoText(roleplayContent, L.TAUREN_TALK_EXAMPLE, y - 2, "GameFontDisableSmall")
+_, y = CreateSectionHeader(roleplayContent, L.NIGHT_ELF_TALK_TITLE, y - 4)
+local nightElfTalkCheck
+nightElfTalkCheck, y = CreateSettingsCheckbox(roleplayContent, L.NIGHT_ELF_TALK_ENABLE, L.NIGHT_ELF_TALK_DESC, y,
+    function() return iRC.Roleplay:GetPlayerSettings().nightElfTalk end,
+    function(value) iRC.Roleplay:GetPlayerSettings().nightElfTalk = value and true or false end)
+_, y = CreateInfoText(roleplayContent, L.NIGHT_ELF_TALK_EXAMPLE, y - 2, "GameFontDisableSmall")
 roleplayContent:SetHeight(math.abs(y) + 20)
 
 do
@@ -891,14 +907,44 @@ do
 end
 
 local newMemberWelcomeCheck, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
+local rankPermissionDropdowns = {}
 do
     local y = -12
     _, y = CreateSectionHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_TITLE, y)
+    _, y = CreateSubcategoryHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_CATEGORY, y - 2)
     _, y = CreateInfoText(guildNotificationsContent, L.GUILD_NOTIFICATIONS_DESC, y, "GameFontDisableSmall")
     newMemberWelcomeCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
         L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, y - 4,
         function() return iRC:IsNewMemberWelcomeEnabled() end,
         function(value) iRC:SetNewMemberWelcomeEnabled(value) end)
+    _, y = CreateSubcategoryHeader(guildNotificationsContent, L.DELEGATED_PERMISSIONS_CATEGORY, y - 4)
+    _, y = CreateInfoText(guildNotificationsContent, "Only the Guild Master can change these limits. Each selection includes that rank and every rank above it.", y, "GameFontDisableSmall")
+    local permissionLabels = {
+        verification = "Verification decisions", presence = "Presence checks and warnings",
+        incidents = "Incident history", guildBanks = "Guild Bank Exceptions",
+        notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
+    }
+    local function rankValues()
+        local values = {}
+        for _, rank in ipairs(iRC:GetGuildRankOptions()) do values[#values + 1] = rank.index end
+        if #values == 0 then values = { 0, 1 } end
+        return values
+    end
+    local function rankLabel(value)
+        if value == 0 then return "Guild Master" end
+        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
+            if rank.index == value then return rank.name .. " (Rank " .. value .. ")" end
+        end
+        return "Rank " .. tostring(value)
+    end
+    for _, permission in ipairs({ "verification", "presence", "incidents", "guildBanks", "notifications", "homepage" }) do
+        local permissionKey = permission
+        rankPermissionDropdowns[permission], y = CreateSettingsDropdown("iRCRankPermission" .. permission,
+            guildNotificationsContent, permissionLabels[permission], "Lowest guild rank allowed to use this feature. Every higher rank is also included.", y,
+            function() return iRC:GetGuildRankPermission(permissionKey) end,
+            function(value) iRC:SetGuildRankPermission(permissionKey, value) end,
+            rankValues, rankLabel)
+    end
     welcomeConflictText, y = CreateInfoText(guildNotificationsContent, "", y - 4, "GameFontNormal")
     welcomeConflictAccept, y = CreateSettingsButton(guildNotificationsContent, L.MANAGEMENT_CONFLICT_ACCEPT, 130, y, function()
         iRC:ResolveManagementConflict("WELCOME", true)
@@ -936,7 +982,7 @@ if iRC:IsTestAdmin() then
 end
 
 local function RefreshGuildBankTools(guildFoundAvailable)
-    local canEditGuildBanks = guildFoundAvailable and iRC:IsGuildAdmin() and iRC:IsGuildConnectionActive()
+    local canEditGuildBanks = guildFoundAvailable and iRC:HasGuildPermission("guildBanks") and iRC:IsGuildConnectionActive()
     guildBankEdit:SetEnabled(canEditGuildBanks and true or false)
     guildBankSave:SetEnabled(canEditGuildBanks and true or false)
     local names = {}
@@ -1090,7 +1136,11 @@ local function Refresh()
     end
     minimapCheck:Refresh()
     newMemberWelcomeCheck:Refresh()
-    newMemberWelcomeCheck:SetEnabled(managementAvailable and iRC:IsGuildConnectionActive())
+    newMemberWelcomeCheck:SetEnabled(iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive())
+    for _, dropdown in pairs(rankPermissionDropdowns) do
+        dropdown:Refresh()
+        if iRC:IsGuildMaster() then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
+    end
     local welcomeConflict = iRC:GetPendingManagementConflict("WELCOME")
     welcomeConflictText:SetText(welcomeConflict and iRC:Text("MANAGEMENT_CONFLICT_INLINE", welcomeConflict.source) or "")
     welcomeConflictAccept:SetShown(welcomeConflict ~= nil)
@@ -1112,9 +1162,8 @@ local function Refresh()
     guildActivationCheck:Refresh()
     guildRaceDropdown:Refresh()
     nativeTongueCheck:Refresh()
-    selfFoundOnlyCheck:Refresh()
-    level60GuildFoundCheck:Refresh()
-    level60SelfFoundExceptionCheck:Refresh()
+    progressionModeDropdown:Refresh()
+    maxLevelProgressionDropdown:Refresh()
     sameRaceGroupsCheck:Refresh()
     refreshingSameRaceLevel = true
     sameRaceLevelSlider:SetValue(iRC:GetConnectionRules().sameRaceMinimumLevel or 1)
@@ -1126,8 +1175,9 @@ local function Refresh()
     refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local guildActive = connection and iRC:IsGuildConnectionActive()
-    guildContactsEdit:SetEnabled(isGuildMaster and guildActive and true or false)
-    guildContactsSave:SetEnabled(isGuildMaster and guildActive and true or false)
+    local canEditHomepage = guildActive and iRC:HasGuildPermission("homepage")
+    guildContactsEdit:SetEnabled(canEditHomepage and true or false)
+    guildContactsSave:SetEnabled(canEditHomepage and true or false)
     local contactNames = {}
     for name in tostring(iRC:GetConnectionRules().guildContacts or ""):gmatch("[^,]+") do
         name = name:gsub("^%s+", ""):gsub("%s+$", "")
@@ -1192,7 +1242,7 @@ local function Refresh()
         row.note:SetScript("OnEnter", showContactTooltip)
         row.note:SetScript("OnLeave", hideContactTooltip)
         row.note:SetText(note); row.note:Hide(); row.noteHit:Show()
-        row.noteHit:SetEnabled(isGuildMaster and guildActive and true or false)
+        row.noteHit:SetEnabled(canEditHomepage and true or false)
         row.noteHit:SetScript("OnClick", function()
             row.noteOriginal = (iRC:GetGuildContactDetails(rowName) or {}).note or ""
             row.note:SetText(row.noteOriginal); row.noteHit:Hide(); row.note:Show(); row.note:SetFocus()
@@ -1209,7 +1259,7 @@ local function Refresh()
             elseif not row.noteSaved then iRC:SetGuildContactNote(rowName, self:GetText()) end
             row.noteSaved = nil; self:Hide(); row.noteHit:Show()
         end)
-        row.remove:SetEnabled(isGuildMaster and guildActive and true or false)
+        row.remove:SetEnabled(canEditHomepage and true or false)
         row.remove:SetScript("OnClick", function()
             local kept = {}
             for _, currentName in ipairs(contactNames) do
@@ -1230,10 +1280,14 @@ local function Refresh()
         UIDropDownMenu_DisableDropDown(guildRaceDropdown)
     end
     nativeTongueCheck:SetEnabled(isGuildMaster and guildActive and true or false)
-    selfFoundOnlyCheck:SetEnabled(isGuildMaster and guildActive and true or false)
-    local selfFoundOptionsEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().selfFoundOnly
-    level60GuildFoundCheck:SetEnabled(selfFoundOptionsEnabled and true or false)
-    level60SelfFoundExceptionCheck:SetEnabled(selfFoundOptionsEnabled and true or false)
+    if isGuildMaster and guildActive then
+        UIDropDownMenu_EnableDropDown(progressionModeDropdown)
+    else
+        UIDropDownMenu_DisableDropDown(progressionModeDropdown)
+    end
+    local maxLevelModeEnabled = isGuildMaster and guildActive and iRC:GetProgressionMode() == "SELF_FOUND"
+    if maxLevelModeEnabled then UIDropDownMenu_EnableDropDown(maxLevelProgressionDropdown)
+    else UIDropDownMenu_DisableDropDown(maxLevelProgressionDropdown) end
     sameRaceGroupsCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     local sameRaceExceptionEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().sameRaceGroupsOnly
     sameRaceLevelSlider:SetEnabled(sameRaceExceptionEnabled and true or false)
@@ -1248,9 +1302,6 @@ local function Refresh()
     local rules = iRC:GetConnectionRules()
     SetRuleVisualState(guildActivationCheck, guildActive)
     SetRuleVisualState(nativeTongueCheck, rules.nativeTongueOnly)
-    SetRuleVisualState(selfFoundOnlyCheck, rules.selfFoundOnly)
-    SetRuleVisualState(level60GuildFoundCheck, rules.selfFoundOnly and rules.level60GuildFound)
-    SetRuleVisualState(level60SelfFoundExceptionCheck, rules.selfFoundOnly and rules.allowLevel60WithoutSelfFound)
     SetRuleVisualState(sameRaceGroupsCheck, rules.sameRaceGroupsOnly)
     SetRuleVisualState(level60SameRaceExceptionCheck, rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
     SetRuleVisualState(guildGroupsOnlyCheck, rules.guildGroupsOnly)
@@ -1268,13 +1319,18 @@ local function Refresh()
     trollTalkCheck:Refresh()
     local isTroll = iRC.Roleplay and iRC.Roleplay:IsTroll()
     local isTauren = iRC.Roleplay and iRC.Roleplay:IsTauren()
+    local isNightElf = iRC.Roleplay and iRC.Roleplay:IsNightElf()
     trollTalkCheck:SetEnabled(isTroll and true or false)
     taurenTalkCheck:Refresh()
     taurenTalkCheck:SetEnabled(isTauren and true or false)
+    nightElfTalkCheck:Refresh()
+    nightElfTalkCheck:SetEnabled(isNightElf and true or false)
     if isTroll then
         trollTalkStatus:SetText(iRC.Colors.Green .. "Troll character detected." .. iRC.Colors.Reset .. " This setting only affects this character.")
     elseif isTauren then
         trollTalkStatus:SetText(iRC.Colors.Green .. L.TAUREN_TALK_DETECTED .. iRC.Colors.Reset .. " " .. L.RACE_TALK_CHARACTER_ONLY)
+    elseif isNightElf then
+        trollTalkStatus:SetText(iRC.Colors.Green .. L.NIGHT_ELF_TALK_DETECTED .. iRC.Colors.Reset .. " " .. L.RACE_TALK_CHARACTER_ONLY)
     else
         trollTalkStatus:SetText(iRC.Colors.Gray .. L.RACE_TALK_UNAVAILABLE .. iRC.Colors.Reset)
     end

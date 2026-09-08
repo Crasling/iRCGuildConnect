@@ -48,7 +48,9 @@ local function isRuleEnabled(key)
 end
 
 local function isGuildFoundEconomyActive()
-    local eligible = (UnitLevel("player") or 0) >= 60 or iRC:IsGuildBankException(iRC:GetPlayerName())
+    local progressionMode = iRC:GetProgressionMode()
+    local eligible = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+        or (UnitLevel("player") or 0) >= 60 or iRC:IsGuildBankException(iRC:GetPlayerName())
     return iRC:IsGuildFoundRequired() and eligible and not iRC:GetSelfFoundState()
 end
 
@@ -95,7 +97,8 @@ function Enforcement:UpdateSelfFoundWarning()
     local level60OrAbove = (UnitLevel("player") or 0) >= 60
     local exemptAtLevel60 = level60OrAbove and (rules.level60GuildFound or rules.allowLevel60WithoutSelfFound)
     local guildBankException = iRC:IsGuildBankException(iRC:GetPlayerName())
-    local violation = isRuleEnabled("selfFoundOnly") and not exemptAtLevel60 and not guildBankException and not iRC:GetSelfFoundState()
+    local violation = iRC:IsGuildConnectionActive() and iRC:GetProgressionMode(rules) == "SELF_FOUND"
+        and not exemptAtLevel60 and not guildBankException and not iRC:GetSelfFoundState()
     warningFrame:SetShown(violation)
     if violation then
         warningFrame.text:SetText(iRC:Text("SELF_FOUND_REQUIRED_WARNING"))

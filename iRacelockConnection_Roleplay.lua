@@ -10,6 +10,7 @@ function Roleplay:GetPlayerSettings()
     iRCCharDB.roleplay = iRCCharDB.roleplay or {}
     if iRCCharDB.roleplay.trollTalk == nil then iRCCharDB.roleplay.trollTalk = false end
     if iRCCharDB.roleplay.taurenTalk == nil then iRCCharDB.roleplay.taurenTalk = false end
+    if iRCCharDB.roleplay.nightElfTalk == nil then iRCCharDB.roleplay.nightElfTalk = false end
     return iRCCharDB.roleplay
 end
 
@@ -29,6 +30,15 @@ end
 
 function Roleplay:IsTaurenTalkEnabled()
     return self:IsTauren() and self:GetPlayerSettings().taurenTalk and true or false
+end
+
+function Roleplay:IsNightElf()
+    local _, raceFile = UnitRace("player")
+    return string.upper(tostring(raceFile or "")) == "NIGHTELF"
+end
+
+function Roleplay:IsNightElfTalkEnabled()
+    return self:IsNightElf() and self:GetPlayerSettings().nightElfTalk and true or false
 end
 
 local phraseReplacements = {
@@ -159,6 +169,30 @@ local taurenWordReplacements = {
     { "perhaps", "maybe" },
 }
 
+-- Light Kaldorei flavor without rewriting ordinary sentences beyond recognition.
+local nightElfPhraseReplacements = {
+    { "thank you", "Elune light your path" },
+    { "good luck", "may Elune guide you" },
+    { "be careful", "walk beneath Elune's light" },
+    { "follow me", "walk with me" },
+    { "we are ready", "we stand ready" },
+    { "rest in peace", "rest beneath the stars" },
+}
+
+local nightElfWordReplacements = {
+    { "goodbye", "ande'thoras-ethil" },
+    { "hello", "ishnu-alah" },
+    { "moon", "Elune" },
+    { "forest", "sacred grove" },
+    { "forests", "sacred groves" },
+    { "ancestors", "ancient ones" },
+    { "enemy", "foe" },
+    { "enemies", "foes" },
+    { "protect", "defend" },
+    { "home", "ancestral home" },
+    { "magic", "arcane power" },
+}
+
 local function caseInsensitivePattern(phrase)
     local pattern = {}
     for index = 1, #phrase do
@@ -207,6 +241,13 @@ function Roleplay:TransformTaurenTalk(text)
     return text
 end
 
+function Roleplay:TransformNightElfTalk(text)
+    if type(text) ~= "string" or text == "" or text:match("^%s*/") then return text end
+    text = applyReplacements(text, nightElfPhraseReplacements)
+    text = applyReplacements(text, nightElfWordReplacements)
+    return text
+end
+
 local hookedEditBoxes = setmetatable({}, { __mode = "k" })
 
 local function transformEditBox(editBox)
@@ -217,6 +258,8 @@ local function transformEditBox(editBox)
         editBox:SetText(Roleplay:TransformTrollTalk(text))
     elseif Roleplay:IsTaurenTalkEnabled() then
         editBox:SetText(Roleplay:TransformTaurenTalk(text))
+    elseif Roleplay:IsNightElfTalkEnabled() then
+        editBox:SetText(Roleplay:TransformNightElfTalk(text))
     end
 end
 

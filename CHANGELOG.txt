@@ -2,9 +2,21 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.16 - Progression Rules and Delegated Management
+--------------------------------------------------------------------------------
+[CHANGED] Progression Rules now use one clear choice: unrestricted, Self-Found, or Self-Found/Guild-Found
+[NEW] Self-Found guilds can choose whether level-60 members remain Self-Found, switch to Guild-Found, or become unrestricted
+[NEW] Hybrid guilds can verify Guild-Found members at any level while allowing other members to remain Self-Found
+[NEW] The Guild Master can choose which guild ranks may manage verification, presence, incidents, Guild Banks, homepage contacts, and welcome messages
+[CHANGED] Guild activation and ruleset ownership remain protected Guild Master responsibilities
+[CHANGED] Guild Settings now separates Notifications and Delegated Permissions with clear guild-rank controls
+[CHANGED] Guild Statistics displays each guild's progression mode and shows the player's own faction first
+[FIX] Members without a live addon response no longer display guessed progression or verification values
+[NEW] Night Elf characters can enable readable Kaldorei-inspired wording for normal chat
+
 v0.2.15 - Guild Management Improvements
 --------------------------------------------------------------------------------
-[NEW] Rank 0 and rank 1 can manage up to 32 shared or personal Guild Bank Exceptions
+[NEW] The Guild Master and rank 1 officers can manage up to 32 shared or personal Guild Bank Exceptions
 [NEW] Guild Bank entries show who added them, when they were added, and a synchronized editable comment
 [NEW] Guild Bank and Invite Contact fields suggest matching guild members while typing and support Tab completion
 [NEW] Guild Homepages support up to five invite contacts with comments; clicking a contact starts a whisper
@@ -18,7 +30,7 @@ v0.2.14 - Safer Group Enforcement
  [FIX] Existing groups are safely preserved when group rules begin applying through level-up, reload, or login
  [FIX] Automatic group leaving now requires a second confirmed group check after a safety delay
  [NEW] Five-minute addon warnings are saved in the officer incident history
- [NEW] Rank 0 and rank 1 can optionally enable shared new-member welcome messages, disabled by default
+ [NEW] The Guild Master and rank 1 officers can optionally enable shared new-member welcome messages, disabled by default
 
 
 v0.2.13 - Guild Cache Sharing & Race Verification
@@ -43,7 +55,7 @@ v0.2.11 - Guild Found Security & Audit
 --------------------------------------------------------------------------------
  [CHANGED] Guild Statistics refresh now uses a five-minute shared cooldown to prevent repeated channel traffic
  [FIX] Relayed guild rules must match the last ruleset received from guild leadership before another member can share them
- [NEW] Rank 0 and rank 1 members can review level 60 Guild Found economy audit and reported restriction events
+ [NEW] The Guild Master and rank 1 officers can review level 60 Guild Found economy audit and reported restriction events
  [FIX] Level 60 Guild Found protection remains active from the verified guild backup and cannot be disabled by changing only one local ruleset value
  [NEW] Ruleset senders and receivers now confirm that identical timestamps contain identical rule data
 
@@ -72,7 +84,7 @@ v0.2.9 - Performance
  [FIX] Guild Members now creates only the visible list rows, preventing script timeout errors in large guilds
  [CHANGED] Guild Verification columns are aligned more clearly and its filter buttons now use the modern iRC active-state styling
  [NEW] The Needs attention filter now pulses when one or more guild members require review
- [NEW] Test administrators can optionally display the settings pages normally reserved for guild rank 0 and rank 1
+ [NEW] Test administrators can optionally display the settings pages normally reserved for the Guild Master and rank 1 officers
  [CHANGED] Removed Champions and Leaderboard from the Connection window so it stays focused on guild verification
  [NEW] Guild Masters, rank-1 officers and test Guild Masters can right-click Verification members to send addon guidance or request fresh iRC data
  [FIX] Verification member management now uses a native iRC context panel so right-click works reliably on Classic clients
@@ -89,7 +101,7 @@ v0.2.8 - Options Cleanup
  [FIX] Invalid groups are never left automatically during combat, inside an instance, while dead, or on a taxi; iRC warns first and waits for a safe open-world moment
  [NEW] Restricted-group incidents are saved with time, location and involved players, then reliably reported once to the active officer client after combat
  [NEW] Automatic group leaving now displays a clear local iRC message in addition to the party or raid explanation
- [FIX] Test Guild Master mode no longer replaces a real officer as the notification sender; officer alerts are always handled by an actual rank 0 or rank 1 member
+ [FIX] Test Guild Master mode no longer replaces a real officer as the notification sender; officer alerts are always handled by the Guild Master or an actual rank 1 officer
  [FIX] Guild Members now checks the current guild roster when opened, removes departed characters and shows their current roster levels
  [CHANGED] Public race-grid sharing is now always enabled and its optional setting has been removed
  [CHANGED] Achievement notifications are now disabled while achievements are being reworked, and their display setting has been removed
@@ -97,7 +109,7 @@ v0.2.8 - Options Cleanup
  [FIX] Every blocked trade, mail collection, Auction House visit or automatic group action now gives the player a local iRC explanation
  [NEW] Guild rules now synchronize through the highest available iRC guild rank (0, then 1, then 2 and onward), allowing new members to receive the active rules even while higher ranks are offline
  [NEW] Relayed guild rules now retain their GM-created hexadecimal timestamp and source, preventing an older relay from replacing newer rules
- [NEW] Rank 0 and rank 1 officers now have an Incidents view under Verification; rank 1 hands saved reports to the GM when the rank 0 iRC client returns
+ [NEW] The Guild Master and rank 1 officers now have an Incidents view under Verification; rank 1 hands saved reports to the Guild Master when their iRC client returns
  [FIX] Test warning suppression now stops presence checks silently, and officer eligibility text no longer implies that test-GM grants officerchat authority
  [CHANGED] Guild Verification now shows Self-Found activity before level 60, Guild Found verification at level 60, and Clean status in its own column
 
