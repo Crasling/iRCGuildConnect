@@ -1,6 +1,18 @@
 ================================================================================
-iRacelockConnection - Changelog
+iRC - Changelog
 ================================================================================
+
+v0.3.2 - Combat Performance & Roleplay
+--------------------------------------------------------------------------------
+[NEW] Low Traffic Mode pauses and combines background updates during combat, then resumes them gradually after combat ends
+[CHANGED] Reduced idle CPU use by combining full-roster verification checks and limiting Guild Map expiration scans to every 15 seconds
+[NEW] Undead characters can enable readable Forsaken-inspired wording with Undead Speak
+[CHANGED] Verification menus now offer one context-aware rule-violation whisper with guidance matching the member's actual issue
+[CHANGED] Left-clicking a member in Guild Verification now opens that member's verification report
+[CHANGED] New Needs Attention notifications are combined for 15 seconds before alerting verification staff, while the five-minute reminder continues normally
+[CHANGED] Reduced background traffic by limiting presence polls to live profiles and refreshing authority-managed guild data every five minutes
+[FIX] Newly loaded officers wait for the active ruleset authority instead of briefly broadcasting competing guild data
+[CHANGED] The World Map now provides synchronized controls for both sharing your position and showing guild members
 
 v0.3.1 - Guild Found Management
 --------------------------------------------------------------------------------
@@ -230,10 +242,10 @@ v0.2.1 - Connection & Rules Polish
  [CHANGED] Improved Achievement window spacing and dynamic row layout for longer text
  [CHANGED] Simplified the connection leaderboard to Name, Level, Guild, and Source
  [NEW] Added recorded completion dates to achievement inspection
- [NEW] Added live guild presence verification for online members running iRacelockConnection
+ [NEW] Added live guild presence verification for online members running iRC
  [NEW] Added coordinated Guild Master and Officer presence polls with Officer-chat and whisper mismatch alerts
  [CHANGED] Escalated unresolved five-minute addon mismatches to Guild chat
- [NEW] Added one-off welcome guidance when a newly invited member is not running iRacelockConnection
+ [NEW] Added one-off welcome guidance when a newly invited member is not running iRC
  [NEW] Added a guild rulebook to Connection & Rules with Self-Found, race-lock, addon, community, and level-60 guidance
  [NEW] Added a per-character Roleplay tab with optional Troll Talk chat flavour
 
@@ -249,9 +261,9 @@ v0.2.0 - Guild Connection Dashboard
  [NEW] Added an Other Addons tab promoting active companion addons with install-aware settings shortcuts
  [CHANGED] Reworked the About page into the shared icon, author, description, and links layout
  [CHANGED] Applied the iRC logo to the addon metadata, minimap button, and About page
- [CHANGED] Grouped the About tab under the iRacelockConnection sidebar category
+ [CHANGED] Grouped the About tab under the iRC sidebar category
  [CHANGED] Split Other Addons into the shared per-addon installed and promo tab structure
- [CHANGED] Renamed the visible addon identity to iRacelockConnection and made /irc the primary command
+ [CHANGED] Renamed the visible addon identity to iRC and made /irc the primary command
  [CHANGED] Linked the About page and addon metadata to the official GitHub repository
  [FIX] Applied the iRC accent color to sidebar category headings
  [NEW] Added a shared Guild Rules tab with Guild Master-only rule controls and iRC rule synchronization
@@ -264,7 +276,7 @@ v0.2.0 - Guild Connection Dashboard
 v0.1.0 - Initial Development
 --------------------------------------------------------------------------------
 
- [NEW] Created the initial iRacelockConnection foundation
+ [NEW] Created the initial iRC foundation
  [NEW] Added a guild-based connection layer with automatic presence and status sync
  [NEW] Added an achievement page with point totals and inspectable guild-member progress
  [NEW] Added initial connection and character-level journey achievements
@@ -273,6 +285,6 @@ v0.1.0 - Initial Development
  [CHANGED] Reworked the achievement page into a WotLK-inspired category, points, and scroll-list layout
  [CHANGED] Reworked the settings window to use the shared iWR/iNIF/iST tabbed panel style
  [FIX] Reserved a dedicated iRC connection prefix for guild synchronization
- [CHANGED] Applied the iWR text color style to iRacelockConnection chat output, UI text, and minimap tooltip
- [NEW] Added an iWR-style iRacelockConnection loaded message on player login
+ [CHANGED] Applied the iWR text color style to iRC chat output, UI text, and minimap tooltip
+ [NEW] Added an iWR-style iRC loaded message on player login
  [CHANGED] Kept the addon focused on guild connections and achievements

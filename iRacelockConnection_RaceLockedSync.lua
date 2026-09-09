@@ -281,6 +281,7 @@ local function queueRelay(name)
 end
 
 function Sync:RelayOverrides(targetName)
+    if iRC:DeferLowTraffic("traffic:verification-overrides:" .. tostring(targetName or "guild"), function() Sync:RelayOverrides(targetName) end) then return false end
     local db = connection()
     if not db or not iRC:IsRulesetBroadcaster() then return false end
     local payload, sent = "R:", false
@@ -443,6 +444,7 @@ function Sync:RecordDeath(name)
 end
 
 function Sync:Broadcast()
+    if iRC:DeferLowTraffic("traffic:guild-found-profile", function() Sync:Broadcast() end) then return false end
     local db = connection()
     if not db or not moneyReady then return end
     self:RefreshMoneyMonitoring()

@@ -11,6 +11,7 @@ function Roleplay:GetPlayerSettings()
     if iRCCharDB.roleplay.trollTalk == nil then iRCCharDB.roleplay.trollTalk = false end
     if iRCCharDB.roleplay.taurenTalk == nil then iRCCharDB.roleplay.taurenTalk = false end
     if iRCCharDB.roleplay.nightElfTalk == nil then iRCCharDB.roleplay.nightElfTalk = false end
+    if iRCCharDB.roleplay.undeadSpeak == nil then iRCCharDB.roleplay.undeadSpeak = false end
     return iRCCharDB.roleplay
 end
 
@@ -39,6 +40,15 @@ end
 
 function Roleplay:IsNightElfTalkEnabled()
     return self:IsNightElf() and self:GetPlayerSettings().nightElfTalk and true or false
+end
+
+function Roleplay:IsUndead()
+    local _, raceFile = UnitRace("player")
+    return string.upper(tostring(raceFile or "")) == "SCOURGE"
+end
+
+function Roleplay:IsUndeadSpeakEnabled()
+    return self:IsUndead() and self:GetPlayerSettings().undeadSpeak and true or false
 end
 
 local phraseReplacements = {
@@ -193,6 +203,34 @@ local nightElfWordReplacements = {
     { "magic", "arcane power" },
 }
 
+-- Restrained Forsaken flavor: bleak and formal, while remaining easy to read.
+local undeadPhraseReplacements = {
+    { "thank you", "you have my thanks" },
+    { "good luck", "may fortune favor the forsaken" },
+    { "be careful", "tread carefully" },
+    { "follow me", "keep to my shadow" },
+    { "we are ready", "the Forsaken stand ready" },
+    { "i am ready", "I stand ready" },
+    { "rest in peace", "rest in the cold earth" },
+}
+
+local undeadWordReplacements = {
+    { "goodbye", "farewell" },
+    { "hello", "well met" },
+    { "friends", "allies" },
+    { "friend", "ally" },
+    { "home", "the Undercity" },
+    { "enemy", "foe" },
+    { "enemies", "foes" },
+    { "danger", "peril" },
+    { "death", "the grave" },
+    { "dead", "fallen" },
+    { "kill", "dispatch" },
+    { "protect", "guard" },
+    { "wait", "linger" },
+    { "look", "behold" },
+}
+
 local function caseInsensitivePattern(phrase)
     local pattern = {}
     for index = 1, #phrase do
@@ -248,6 +286,13 @@ function Roleplay:TransformNightElfTalk(text)
     return text
 end
 
+function Roleplay:TransformUndeadSpeak(text)
+    if type(text) ~= "string" or text == "" or text:match("^%s*/") then return text end
+    text = applyReplacements(text, undeadPhraseReplacements)
+    text = applyReplacements(text, undeadWordReplacements)
+    return text
+end
+
 local hookedEditBoxes = setmetatable({}, { __mode = "k" })
 
 local function transformEditBox(editBox)
@@ -260,6 +305,8 @@ local function transformEditBox(editBox)
         editBox:SetText(Roleplay:TransformTaurenTalk(text))
     elseif Roleplay:IsNightElfTalkEnabled() then
         editBox:SetText(Roleplay:TransformNightElfTalk(text))
+    elseif Roleplay:IsUndeadSpeakEnabled() then
+        editBox:SetText(Roleplay:TransformUndeadSpeak(text))
     end
 end
 

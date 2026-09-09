@@ -268,7 +268,10 @@ function RaceGrid:StoreGuildReport(report, silent)
     report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     report.lastSeen = time()
     reports[key] = report
-    if not silent and iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    if not silent and iRC.MainUI then
+        local function refreshGuildStats() iRC.MainUI:RefreshIfShown() end
+        if not iRC:DeferLowTraffic("ui:guild-statistics", refreshGuildStats) then refreshGuildStats() end
+    end
     return true
 end
 
@@ -385,6 +388,7 @@ local function serializeGuildReport(report)
 end
 
 function RaceGrid:BroadcastReport(fromClick)
+    if iRC:DeferLowTraffic("traffic:guild-statistics", function() RaceGrid:BroadcastReport(false) end) then return false end
     if not self:IsEnabled() then return false end
     self:EnsureChannel()
     if not getChannelId() then
@@ -430,6 +434,7 @@ function RaceGrid:PublishFromClick()
 end
 
 function RaceGrid:Refresh()
+    if iRC:DeferLowTraffic("traffic:guild-statistics-refresh", function() RaceGrid:Refresh() end) then return end
     iRC:DebugMsg(iRC:Text("RACEGRID_INITIALIZED", iRC:Text(self:IsEnabled() and "RACEGRID_SHARING_ENABLED" or "RACEGRID_SHARING_DISABLED")), 3)
     if not self:IsEnabled() then return end
     self:EnsureChannel()
@@ -531,6 +536,7 @@ local function offerDelay(requestId, guildName)
 end
 
 local function sendCacheOffers(requestId, requester)
+    if iRC:DeferLowTraffic("traffic:cache-offers", function() sendCacheOffers(requestId, requester) end) then return end
     local store, now = getServerStore(), time()
     observedCacheOffers[requestId] = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
     for _, report in pairs(store.guildReports) do
@@ -559,6 +565,7 @@ local function sendCacheOffers(requestId, requester)
 end
 
 local function requestBestCacheOffers(requestId)
+    if iRC:DeferLowTraffic("traffic:cache-selection", function() requestBestCacheOffers(requestId) end) then return end
     local request = cacheRequests[requestId]
     if not request then return end
     local requested = 0
@@ -581,6 +588,7 @@ local function requestBestCacheOffers(requestId)
 end
 
 function RaceGrid:RequestGuildCache()
+    if iRC:DeferLowTraffic("traffic:guild-cache-request", function() RaceGrid:RequestGuildCache() end) then return false end
     if not self:IsEnabled() or not iRC:IsGuildConnectionActive() then return false end
     cleanCacheState()
     local requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
@@ -627,6 +635,9 @@ local function handleCacheMessage(parts, sender, distribution)
         end
         return true
     elseif kind == "CACHE_GET" and distribution == "WHISPER" then
+        if iRC:DeferLowTraffic("traffic:cache-data", function()
+            handleCacheMessage(parts, sender, distribution)
+        end) then return true end
         local guildName, timestamp, checksum = tostring(parts[4] or ""), tonumber(parts[5]), tostring(parts[6] or ""):lower()
         local offered = offeredCachePayloads[requestId]
         local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]

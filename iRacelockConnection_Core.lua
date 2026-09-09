@@ -3,8 +3,8 @@ local iRC = LibStub("AceAddon-3.0"):NewAddon("iRC")
 private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
-iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.3.1"
+iRC.DisplayName = "iRC"
+iRC.Version = "0.3.2"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -38,6 +38,59 @@ iRC.ColorValues = {
 -- gets its own delay so independent startup packets do not form a new burst.
 function iRC:GetStartupTrafficDelay()
     return 3 + math.random() * 5
+end
+
+local lowTrafficPending, lowTrafficPendingCount, lowTrafficGeneration = {}, 0, 0
+local LOW_TRAFFIC_QUEUE_LIMIT = 32
+
+function iRC:IsLowTrafficMode()
+    return self.LowTrafficMode == true or (UnitAffectingCombat and UnitAffectingCombat("player"))
+        or (InCombatLockdown and InCombatLockdown())
+end
+
+function iRC:DeferLowTraffic(key, callback)
+    if not self:IsLowTrafficMode() then return false end
+    if type(key) == "string" and type(callback) == "function" then
+        if not lowTrafficPending[key] then
+            if lowTrafficPendingCount >= LOW_TRAFFIC_QUEUE_LIMIT then return true end
+            lowTrafficPendingCount = lowTrafficPendingCount + 1
+        end
+        lowTrafficPending[key] = callback
+    end
+    return true
+end
+
+function iRC:EnterLowTrafficMode()
+    self.LowTrafficMode = true
+    lowTrafficGeneration = lowTrafficGeneration + 1
+    self:DebugMsg("Low Traffic Mode enabled: combat started.", 3)
+end
+
+function iRC:LeaveLowTrafficMode()
+    if UnitAffectingCombat and UnitAffectingCombat("player") then return end
+    lowTrafficGeneration = lowTrafficGeneration + 1
+    local generation = lowTrafficGeneration
+    local delay = self:GetStartupTrafficDelay()
+    if not C_Timer or not C_Timer.After then self.LowTrafficMode = false; return end
+    C_Timer.After(delay, function()
+        if generation ~= lowTrafficGeneration or (UnitAffectingCombat and UnitAffectingCombat("player"))
+            or (InCombatLockdown and InCombatLockdown()) then return end
+        iRC.LowTrafficMode = false
+        local keys = {}
+        for key in pairs(lowTrafficPending) do keys[#keys + 1] = key end
+        table.sort(keys)
+        local callbacks = lowTrafficPending
+        lowTrafficPending = {}
+        lowTrafficPendingCount = 0
+        for index, key in ipairs(keys) do
+            C_Timer.After((index - 1) * 0.35, function()
+                local callback = callbacks[key]
+                if not callback then return end
+                if iRC:IsLowTrafficMode() then iRC:DeferLowTraffic(key, callback) else callback() end
+            end)
+        end
+        iRC:DebugMsg("Low Traffic Mode ended: " .. tostring(#keys) .. " background update(s) resumed.", 3)
+    end)
 end
 
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
@@ -180,7 +233,16 @@ local function isNewerVersion(candidate, current)
     return false
 end
 
+local function isTestRevision(version)
+    local count = 0
+    for _ in tostring(version or ""):gmatch("%d+") do count = count + 1 end
+    return count > 3
+end
+
 function iRC:CheckForNewVersion(version)
+    -- Test revisions are shared for compatibility diagnostics, but must never
+    -- advertise themselves as public updates or show update notices locally.
+    if isTestRevision(self.Version) or isTestRevision(version) then return false end
     if not isNewerVersion(version, self.Version) then return false end
     if newestVersionSeen and not isNewerVersion(version, newestVersionSeen) then return false end
     local settings = self:GetSettings()
@@ -987,6 +1049,7 @@ end
 iRC.Frame:RegisterEvent("ADDON_LOADED")
 iRC.Frame:RegisterEvent("PLAYER_LOGIN")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_DISABLED")
+iRC.Frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
     if event == "ADDON_LOADED" then
         if loadedName ~= iRC.Name then return end
@@ -999,6 +1062,9 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()
     elseif event == "PLAYER_REGEN_DISABLED" then
+        iRC:EnterLowTrafficMode()
         iRC:CloseAllWindows()
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        iRC:LeaveLowTrafficMode()
     end
 end)

@@ -49,10 +49,12 @@ function Compatibility:BroadcastSelfFound(messageType)
 end
 
 function Compatibility:BroadcastAll()
+    if iRC:DeferLowTraffic("traffic:racelocked-compatibility", function() Compatibility:BroadcastAll() end) then return false end
     return self:BroadcastSelfFound("PING")
 end
 
 function Compatibility:RequestPresenceCheck()
+    if iRC:DeferLowTraffic("traffic:racelocked-presence", function() Compatibility:RequestPresenceCheck() end) then return false end
     if not iRC:IsGuildConnectionActive() then return false end
     if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
     return self:BroadcastSelfFound("PING")

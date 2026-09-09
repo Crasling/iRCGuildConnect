@@ -689,6 +689,12 @@ nightElfTalkCheck, y = CreateSettingsCheckbox(roleplayContent, L.NIGHT_ELF_TALK_
     function() return iRC.Roleplay:GetPlayerSettings().nightElfTalk end,
     function(value) iRC.Roleplay:GetPlayerSettings().nightElfTalk = value and true or false end)
 _, y = CreateInfoText(roleplayContent, L.NIGHT_ELF_TALK_EXAMPLE, y - 2, "GameFontDisableSmall")
+_, y = CreateSectionHeader(roleplayContent, L.UNDEAD_SPEAK_TITLE, y - 4)
+local undeadSpeakCheck
+undeadSpeakCheck, y = CreateSettingsCheckbox(roleplayContent, L.UNDEAD_SPEAK_ENABLE, L.UNDEAD_SPEAK_DESC, y,
+    function() return iRC.Roleplay:GetPlayerSettings().undeadSpeak end,
+    function(value) iRC.Roleplay:GetPlayerSettings().undeadSpeak = value and true or false end)
+_, y = CreateInfoText(roleplayContent, L.UNDEAD_SPEAK_EXAMPLE, y - 2, "GameFontDisableSmall")
 roleplayContent:SetHeight(math.abs(y) + 20)
 
 do
@@ -1462,17 +1468,22 @@ local function Refresh()
     local isTroll = iRC.Roleplay and iRC.Roleplay:IsTroll()
     local isTauren = iRC.Roleplay and iRC.Roleplay:IsTauren()
     local isNightElf = iRC.Roleplay and iRC.Roleplay:IsNightElf()
+    local isUndead = iRC.Roleplay and iRC.Roleplay:IsUndead()
     trollTalkCheck:SetEnabled(isTroll and true or false)
     taurenTalkCheck:Refresh()
     taurenTalkCheck:SetEnabled(isTauren and true or false)
     nightElfTalkCheck:Refresh()
     nightElfTalkCheck:SetEnabled(isNightElf and true or false)
+    undeadSpeakCheck:Refresh()
+    undeadSpeakCheck:SetEnabled(isUndead and true or false)
     if isTroll then
         trollTalkStatus:SetText(iRC.Colors.Green .. "Troll character detected." .. iRC.Colors.Reset .. " This setting only affects this character.")
     elseif isTauren then
         trollTalkStatus:SetText(iRC.Colors.Green .. L.TAUREN_TALK_DETECTED .. iRC.Colors.Reset .. " " .. L.RACE_TALK_CHARACTER_ONLY)
     elseif isNightElf then
         trollTalkStatus:SetText(iRC.Colors.Green .. L.NIGHT_ELF_TALK_DETECTED .. iRC.Colors.Reset .. " " .. L.RACE_TALK_CHARACTER_ONLY)
+    elseif isUndead then
+        trollTalkStatus:SetText(iRC.Colors.Green .. L.UNDEAD_SPEAK_DETECTED .. iRC.Colors.Reset .. " " .. L.RACE_TALK_CHARACTER_ONLY)
     else
         trollTalkStatus:SetText(iRC.Colors.Gray .. L.RACE_TALK_UNAVAILABLE .. iRC.Colors.Reset)
     end
@@ -1498,7 +1509,7 @@ stubTitle:SetPoint("TOPLEFT", 16, -16)
 stubTitle:SetText(iRC.Colors.iRC .. iRC.DisplayName .. iRC.Colors.Reset .. " " .. iRC.Colors.Green .. "v" .. iRC:GetDisplayVersion() .. iRC.Colors.Reset)
 local stubDescription = stubPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 stubDescription:SetPoint("TOPLEFT", stubTitle, "BOTTOMLEFT", 0, -10)
-stubDescription:SetText("Open the full iRacelockConnection settings panel.")
+stubDescription:SetText("Open the full iRC settings panel.")
 local stubButton = CreateFrame("Button", nil, stubPanel, "UIPanelButtonTemplate")
 stubButton:SetSize(180, 28)
 stubButton:SetPoint("TOPLEFT", stubDescription, "BOTTOMLEFT", 0, -15)

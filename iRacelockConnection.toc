@@ -1,10 +1,10 @@
 ## Interface: 11509
-## Title: |cffff9716iRacelockConnection |cFF00FF00v0.3.1|r
-## Version: 0.3.1
-## Notes: |cffff9716Guild-connected race progression|n|cFFFF0000Work in progress.|r
+## Title: |cffff9716iRC: Guild Connect |cFF00FF00v0.3.2|r
+## Version: 0.3.2
+## Notes: |cffff9716Guild connection for shared rules, verification, guild statistics, and community tools.|nConnect guilds, coordinate rules, and discover communities.|r
 ## Author: Crasling
 ## IconTexture: Interface\AddOns\iRacelockConnection\Images\Logo_iRC
-## Category: Roleplay
+## Category: Social
 ## X-Curse-Project-ID: 1682904
 ## DefaultState: Enabled
 ## LoadOnDemand: 0

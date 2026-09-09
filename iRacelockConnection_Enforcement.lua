@@ -682,12 +682,8 @@ frame:SetScript("OnEvent", function(_, event, unit)
     end
 end)
 
-local mailUpdateElapsed = 0
-frame:SetScript("OnUpdate", function(_, elapsed)
-    mailUpdateElapsed = mailUpdateElapsed + elapsed
-    if mailUpdateElapsed < 0.20 then return end
-    mailUpdateElapsed = 0
+if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(0.20, function()
     if (MailFrame and MailFrame:IsShown()) or (MailFrameTab2 and MailFrameTab2:IsShown()) then
         Enforcement:UpdateMailRestriction()
     end
-end)
+end) end

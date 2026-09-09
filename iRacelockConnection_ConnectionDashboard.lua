@@ -33,6 +33,42 @@ local function displayMemberName(name)
     return name
 end
 
+local function ruleViolationWhisper(member)
+    if not member or not member.name then return nil end
+    local verification = member.verification or {}
+    local liveState = verification.state
+    local hasLiveAddon = liveState == "verified" or liveState == "compatible"
+    if not hasLiveAddon and liveState ~= "offline" and liveState ~= "inactive" then
+        return iRC:Text("MEMBER_WHISPER_RULE_VIOLATION", iRC:Text("MEMBER_WHISPER_VIOLATION_ADDON"))
+    end
+
+    local reasons = {}
+    local rules = iRC:GetConnectionRules()
+    local progressionMode = iRC:GetProgressionMode(rules)
+    local level = tonumber(member.level) or 0
+    local guildBank = iRC:IsGuildFoundRequired() and iRC:IsGuildBankException(member.name)
+    local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+    if member.raceMismatch and member.raceCheck then
+        reasons[#reasons + 1] = iRC:Text("MEMBER_WHISPER_VIOLATION_RACE",
+            iRC:Text("GUILD_RACE_" .. member.raceCheck.expected))
+    end
+    if not guildBank and hasLiveAddon then
+        local selfFoundRequired = progressionMode == "SELF_FOUND" and level < 60
+        local needsSelfFoundOrGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+            and member.selfFound ~= true and not (guildFoundStatus and guildFoundStatus.verified == true)
+        if (selfFoundRequired and member.selfFound ~= true) or needsSelfFoundOrGuildFound then
+            reasons[#reasons + 1] = iRC:Text(needsSelfFoundOrGuildFound
+                and "MEMBER_WHISPER_VIOLATION_PROGRESSION" or "MEMBER_WHISPER_VIOLATION_SELF_FOUND")
+        end
+    end
+    if hasLiveAddon and guildFoundStatus and guildFoundStatus.clean == false then
+        reasons[#reasons + 1] = iRC:Text("MEMBER_WHISPER_VIOLATION_GOLD")
+    end
+    if #reasons == 0 then return nil end
+    local message = iRC:Text("MEMBER_WHISPER_RULE_VIOLATION", table.concat(reasons, "; "))
+    return #message <= 255 and message or message:sub(1, 252) .. "..."
+end
+
 local function formatAttentionTimer(startedAt)
     if not startedAt then return nil end
     local elapsed = math.max(0, time() - startedAt)
@@ -151,6 +187,7 @@ function Dashboard:Create()
         tab.adminOnly = item.adminOnly
         tab:SetScript("OnClick", function(button)
             if frame.memberMenu then frame.memberMenu:Hide() end
+            if frame.memberReport then frame.memberReport:Hide() end
             if frame.tab ~= button.tabName then frame.sortKey = nil end
             frame.tab = button.tabName
             Dashboard:Refresh()
@@ -261,12 +298,16 @@ function Dashboard:Create()
     frame.memberMenu:Hide()
     frame:HookScript("OnHide", function()
         frame.memberMenu:Hide()
+        if frame.memberReport then frame.memberReport:Hide() end
     end)
     local outsideClickWatcher = CreateFrame("Frame")
     outsideClickWatcher:RegisterEvent("GLOBAL_MOUSE_DOWN")
     outsideClickWatcher:SetScript("OnEvent", function()
         if frame.memberMenu:IsShown() and not MouseIsOver(frame.memberMenu) then
             frame.memberMenu:Hide()
+        end
+        if frame.memberReport and frame.memberReport:IsShown() and not MouseIsOver(frame.memberReport) then
+            frame.memberReport:Hide()
         end
     end)
     local menuTitle = frame.memberMenu:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -399,14 +440,13 @@ function Dashboard:Create()
         end
         frame.memberReport:Show()
     end
+    frame.showMemberReport = showGuildFoundReport
 
     local menuActions = {
         { group = "MEMBER_MENU_GROUP_DETAILS", label = "MEMBER_MENU_VIEW_REPORT", run = showGuildFoundReport },
-        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_WHISPER_IRC", run = function(targetName)
-            if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_IRC"), "WHISPER", nil, targetName) end
-        end },
-        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_WHISPER_RACELOCKED", run = function(targetName)
-            if SendChatMessage then SendChatMessage(iRC:Text("MEMBER_WHISPER_RACELOCKED"), "WHISPER", nil, targetName) end
+        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_WHISPER_RULE_VIOLATION", violationOnly = true, run = function(targetName, member)
+            local message = ruleViolationWhisper(member)
+            if message and SendChatMessage then SendChatMessage(message, "WHISPER", nil, targetName) end
         end },
         { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_REQUEST_IRC", run = function(targetName)
             if iRC:IsGuildConnectionActive() then
@@ -454,12 +494,13 @@ function Dashboard:Create()
         button.runAction = action.run
         button.gmOnly = action.gmOnly
         button.maxLevelOnly = action.maxLevelOnly
+        button.violationOnly = action.violationOnly
         button.group = action.group
         button.tone = action.tone
         button:SetScript("OnClick", function(self)
             local targetName = frame.memberMenu.targetName
             frame.memberMenu:Hide()
-            if targetName then self.runAction(targetName) end
+            if targetName then self.runAction(targetName, frame.memberMenu.targetMember) end
         end)
         frame.memberMenu.actionButtons[#frame.memberMenu.actionButtons + 1] = button
     end
@@ -547,13 +588,15 @@ local function openMemberManagementMenu(frame, member)
     local scale = UIParent:GetEffectiveScale()
     local cursorX, cursorY = GetCursorPosition()
     menu.targetName = member.name
+    menu.targetMember = member
     menu.title:SetText(displayMemberName(member.name))
     local guildFoundDecisionAllowed = (tonumber(member.level) or 0) >= 60
         or iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
     local yOffset, currentGroup = 54, nil
     for _, groupLabel in pairs(menu.groupLabels) do groupLabel:Hide() end
     for _, button in ipairs(menu.actionButtons) do
-        local shown = (not button.gmOnly or iRC:HasGuildPermission("verification"))
+        local hasViolationMessage = not button.violationOnly or ruleViolationWhisper(member) ~= nil
+        local shown = hasViolationMessage and (not button.gmOnly or iRC:HasGuildPermission("verification"))
             and (not button.maxLevelOnly or guildFoundDecisionAllowed or iRC:IsTestAdminGuildMaster())
         button:SetShown(shown)
         if shown then
@@ -694,6 +737,62 @@ function Dashboard:GetNeedsAttentionCount()
         end
     end
     return attention
+end
+
+local attentionReminderMembers = {}
+local attentionReminderPending = false
+local attentionReminderToken = 0
+local attentionCheckPending = false
+
+function Dashboard:CheckAttentionReminder(periodic)
+    if not iRC:HasGuildPermission("verification") or not iRC:IsGuildConnectionActive() then
+        attentionReminderMembers = {}
+        attentionReminderPending = false
+        attentionReminderToken = attentionReminderToken + 1
+        return 0
+    end
+    local rules = iRC:GetConnectionRules() or {}
+    local progressionMode = iRC:GetProgressionMode(rules)
+    local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+        or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
+    local current, count, added = {}, 0, false
+    for _, member in ipairs(iRC:GetGuildRosterRows()) do
+        local state = getEffectiveVerificationState(member, progressionMode, usesGuildFound)
+        if state ~= "verified" and state ~= "compatible" and state ~= "offline" and state ~= "inactive" then
+            local key = iRC:NormalizeName(member.name)
+            current[key] = true
+            count = count + 1
+            if not attentionReminderMembers[key] then added = true end
+        end
+    end
+    attentionReminderMembers = current
+    if count > 0 and (periodic == true or periodic == "delayed") then
+        if periodic == true and attentionReminderPending then
+            attentionReminderPending = false
+            attentionReminderToken = attentionReminderToken + 1
+        end
+        iRC:Print(iRC.Colors.Yellow .. iRC:Text("VERIFICATION_ATTENTION_REMINDER", count) .. iRC.Colors.Reset)
+    elseif count > 0 and added and not attentionReminderPending then
+        attentionReminderPending = true
+        attentionReminderToken = attentionReminderToken + 1
+        local token = attentionReminderToken
+        C_Timer.After(15, function()
+            if not attentionReminderPending or token ~= attentionReminderToken then return end
+            attentionReminderPending = false
+            Dashboard:CheckAttentionReminder("delayed")
+        end)
+    end
+    return count
+end
+
+function Dashboard:ScheduleAttentionReminderCheck()
+    if attentionCheckPending then return end
+    if not C_Timer or not C_Timer.After then self:CheckAttentionReminder(false); return end
+    attentionCheckPending = true
+    C_Timer.After(1, function()
+        attentionCheckPending = false
+        Dashboard:CheckAttentionReminder(false)
+    end)
 end
 
 function Dashboard:Refresh()
@@ -901,9 +1000,8 @@ function Dashboard:Refresh()
             local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
                 if mouseButton == "RightButton" then
                     openMemberManagementMenu(frame, selectedMember)
-                elseif selectedMember.profile then
-                    iRC.MainUI:Open(selectedMember.name, true)
-                    iRC:RequestInspection(selectedMember.name)
+                elseif frame.showMemberReport then
+                    frame.showMemberReport(selectedMember.name)
                 end
             end, statusTooltip)
             data.attentionSince, data.addonText = member.attentionSince, addonText
@@ -985,6 +1083,7 @@ function Dashboard:Toggle()
 end
 
 function Dashboard:RefreshIfShown()
+    self:ScheduleAttentionReminderCheck()
     if not self.frame or not self.frame:IsShown() or self.pendingRefresh then return end
     if not C_Timer or not C_Timer.After then self:Refresh(); return end
     local ticket = {}
@@ -1002,10 +1101,6 @@ end
 
 if C_Timer and C_Timer.NewTicker then
     C_Timer.NewTicker(300, function()
-        if not iRC:HasGuildPermission("verification") then return end
-        local attention = Dashboard:GetNeedsAttentionCount()
-        if attention > 0 then
-            iRC:Print(iRC.Colors.Yellow .. iRC:Text("VERIFICATION_ATTENTION_REMINDER", attention) .. iRC.Colors.Reset)
-        end
+        Dashboard:CheckAttentionReminder(true)
     end)
 end

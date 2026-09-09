@@ -88,6 +88,7 @@ local function mapPosition(mapId, x, y, displayedMapId)
 end
 
 function GuildMap:UpdatePins()
+    if iRC:DeferLowTraffic("ui:guild-map", function() GuildMap:UpdatePins() end) then return end
     self:Cleanup()
     if not WorldMapFrame or not WorldMapFrame:IsShown() or not self:IsVisible() then
         for name in pairs(self.pins) do clearPin(name) end
@@ -117,7 +118,7 @@ function GuildMap:UpdatePins()
 end
 
 function GuildMap:BroadcastPosition()
-    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false or not C_Map then return false end
+    if iRC:IsLowTrafficMode() or not enabled() or iRC:GetSettings().shareGuildMapPosition == false or not C_Map then return false end
     local _, instanceType = GetInstanceInfo()
     if instanceType and instanceType ~= "none" then return false end
     local mapId = C_Map.GetBestMapForUnit("player")
@@ -170,16 +171,31 @@ local function initializeMap()
         if self:GetChecked() then GuildMap:SchedulePosition(1) end
         if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
     end)
+    local showToggle = CreateFrame("CheckButton", "iRCGuildMapShowToggle", WorldMapFrame, "UICheckButtonTemplate")
+    showToggle:SetSize(22, 22)
+    showToggle:SetPoint("TOPRIGHT", toggle, "BOTTOMRIGHT", 0, -2)
+    showToggle:SetFrameLevel((WorldMapFrame.ScrollContainer:GetFrameLevel() or 0) + 20)
+    showToggle.label = showToggle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    showToggle.label:SetPoint("RIGHT", showToggle, "LEFT", -2, 0)
+    showToggle.label:SetText("iRC: Show Guild Members")
+    showToggle:SetScript("OnClick", function(self)
+        GuildMap:SetShown(self:GetChecked() and true or false)
+        if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+    end)
     local function updateToggle()
         toggle:SetShown(enabled())
         toggle:SetChecked(iRC:GetSettings().shareGuildMapPosition ~= false)
+        showToggle:SetShown(enabled())
+        showToggle:SetChecked(iRC:GetSettings().showGuildMap ~= false)
     end
     GuildMap.UpdateToggle = updateToggle
     if WorldMapFrame.OnMapChanged then hooksecurefunc(WorldMapFrame, "OnMapChanged", function() GuildMap:UpdatePins() end) end
     WorldMapFrame.ScrollContainer:HookScript("OnMouseWheel", function() GuildMap:UpdatePins() end)
     WorldMapFrame:HookScript("OnShow", function()
         updateToggle()
-        if not mapTicker and C_Timer and C_Timer.NewTicker then mapTicker = C_Timer.NewTicker(0.5, function() GuildMap:UpdatePins() end) end
+        -- Incoming positions update pins immediately. This slower ticker is
+        -- only needed to expire stale pins while the map remains open.
+        if not mapTicker and C_Timer and C_Timer.NewTicker then mapTicker = C_Timer.NewTicker(15, function() GuildMap:UpdatePins() end) end
         GuildMap:UpdatePins()
     end)
     WorldMapFrame:HookScript("OnHide", function()

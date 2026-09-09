@@ -13,6 +13,7 @@ local guildUpdatePending = false
 local ignoreGuildUpdatesUntil = 0
 local seenGroupViolations = {}
 local RULE_AUTHORITY_TIMEOUT = 90
+local RULE_AUTHORITY_STARTUP_GRACE = 15
 local incidentUploadAt = {}
 local guildFoundAuditUploadAt = {}
 local guildBankTransfers = {}
@@ -90,6 +91,7 @@ local function profileFromWire(parts, startIndex)
 end
 
 local function scheduleProfileUIRefresh()
+    if iRC:DeferLowTraffic("ui:profiles", scheduleProfileUIRefresh) then return end
     if profileUIRefreshPending then return end
     if not C_Timer or not C_Timer.After then
         if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
@@ -183,6 +185,9 @@ function iRC:StoreMemberProfile(profile)
     local connection = self:GetConnection()
     if not connection then return end
     connection.members[self:NormalizeName(profile.name)] = profile
+    if self.ConnectionDashboard and self.ConnectionDashboard.ScheduleAttentionReminderCheck then
+        self.ConnectionDashboard:ScheduleAttentionReminderCheck()
+    end
     scheduleProfileUIRefresh()
 end
 
@@ -208,6 +213,7 @@ local function scheduleHello(targetName, maximumDelay)
 end
 
 function iRC:SendGuildActivation(targetName)
+    if self:DeferLowTraffic("traffic:activation:" .. tostring(targetName or "guild"), function() iRC:SendGuildActivation(targetName) end) then return false end
     if not self:IsInGuildConnection() then return end
     local isBroadcaster = self:IsRulesetBroadcaster()
     if not self:IsGuildMaster() and not isBroadcaster then return end
@@ -217,6 +223,7 @@ function iRC:SendGuildActivation(targetName)
 end
 
 function iRC:RequestGuildActivation()
+    if self:DeferLowTraffic("traffic:activation-request", function() iRC:RequestGuildActivation() end) then return false end
     if not self:IsInGuildConnection() or self:IsGuildConnectionActive() or self:IsGuildMaster() then return false end
     local guildKey, now = self:GetGuildKey(), GetTime()
     if lastActivationRequestGuild == guildKey and lastActivationRequestAt
@@ -344,6 +351,7 @@ local function rankPermissionsWire(values)
 end
 
 function iRC:SendRankPermissions(targetName)
+    if self:DeferLowTraffic("traffic:rank-permissions:" .. tostring(targetName or "guild"), function() iRC:SendRankPermissions(targetName) end) then return false end
     if not self:IsGuildConnectionActive() or not self:IsGuildMaster() then return false end
     local connection = self:GetConnection()
     local timestamp = math.floor(tonumber(connection.rankPermissionsTimestamp) or 0)
@@ -444,6 +452,9 @@ function iRC:ResolveManagementConflict(kind, action)
 end
 
 local function sendManagementConflict(target, kind, value, timestamp, source, checksum, parentChecksum, resolutions)
+    if iRC:DeferLowTraffic("traffic:management-conflict:" .. tostring(target or "") .. ":" .. tostring(kind or ""), function()
+        sendManagementConflict(target, kind, value, timestamp, source, checksum, parentChecksum, resolutions)
+    end) then return false end
     timestamp = tonumber(timestamp)
     source = tostring(source or "")
     checksum = tostring(checksum or "")
@@ -470,6 +481,7 @@ local function sendManagementConflict(target, kind, value, timestamp, source, ch
 end
 
 function iRC:SendGuildManagementSettings(targetName, force)
+    if self:DeferLowTraffic("traffic:management:" .. tostring(targetName or "guild"), function() iRC:SendGuildManagementSettings(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
     if not force and not self:IsRulesetBroadcaster() then return false end
     local connection = self:GetConnection()
@@ -494,6 +506,7 @@ function iRC:SendGuildManagementSettings(targetName, force)
 end
 
 function iRC:SendGuildBankMetadata(targetName, onlyName)
+    if self:DeferLowTraffic("traffic:bank-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankMetadata(targetName, onlyName) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
     local connection = self:GetConnection()
     local exceptions = connection and connection.guildBankExceptions
@@ -514,6 +527,7 @@ function iRC:SendGuildBankMetadata(targetName, onlyName)
 end
 
 function iRC:SendGuildContactMetadata(targetName, onlyName)
+    if self:DeferLowTraffic("traffic:contact-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildContactMetadata(targetName, onlyName) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
     local connection = self:GetConnection()
     local contacts = tostring(connection.rules.guildContacts or "")
@@ -535,6 +549,7 @@ function iRC:SendGuildContactMetadata(targetName, onlyName)
 end
 
 function iRC:SendGuildContacts(targetName)
+    if self:DeferLowTraffic("traffic:contacts:" .. tostring(targetName or "guild"), function() iRC:SendGuildContacts(targetName) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
     local connection = self:GetConnection()
     local contacts = tostring(connection.rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 140)
@@ -651,6 +666,7 @@ function iRC:SetGuildFoundTradeExceptionItem(category, itemId, enabled)
 end
 
 function iRC:SendGuildFoundTradeExceptions(targetName, force)
+    if self:DeferLowTraffic("traffic:trade-exceptions:" .. tostring(targetName or "guild"), function() iRC:SendGuildFoundTradeExceptions(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
     if not force and not self:IsRulesetBroadcaster() then return false end
     local settings = self:GetGuildFoundTradeExceptionSettings()
@@ -666,6 +682,7 @@ function iRC:SendGuildFoundTradeExceptions(targetName, force)
 end
 
 function iRC:SendGuildBankExceptions(targetName, force)
+    if self:DeferLowTraffic("traffic:banks:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankExceptions(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
     if not force and not self:IsRulesetBroadcaster() then return false end
     local connection = self:GetConnection()
@@ -756,10 +773,19 @@ end
 
 function iRC:IsRulesetBroadcaster()
     local name, rank = getRulesAuthority()
-    return name ~= nil and self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName()), name, rank
+    local isSelf = name ~= nil and self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName())
+    -- A newly loaded officer has not received the other clients' profiles yet.
+    -- Give the actual active authority time to answer before permitting a
+    -- non-Guild-Master fallback broadcaster to elect itself.
+    if isSelf and not self:IsGuildMaster()
+        and time() - (self.ConnectionSessionStartedAt or time()) < RULE_AUTHORITY_STARTUP_GRACE then
+        return false, name, rank
+    end
+    return isSelf, name, rank
 end
 
 function iRC:SendConnectionRules(targetName)
+    if self:DeferLowTraffic("traffic:rules:" .. tostring(targetName or "guild"), function() iRC:SendConnectionRules(targetName) end) then return false end
     if self:SuppressesRuleSending() then return false end
     local isBroadcaster = self:IsRulesetBroadcaster()
     if not self:IsGuildConnectionActive() or not isBroadcaster then return end
@@ -805,6 +831,7 @@ function iRC:SendConnectionRules(targetName)
 end
 
 function iRC:RequestGuildPresence(isOfficerPoll)
+    if self:DeferLowTraffic("traffic:presence-request", function() iRC:RequestGuildPresence(isOfficerPoll) end) then return false end
     if not self:IsGuildConnectionActive() then return false end
     if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
     if isOfficerPoll then lastPresencePollAt = time() end
@@ -1059,10 +1086,6 @@ local function handleMessage(prefix, message, distribution, sender)
         end
         iRC:DebugMsg(iRC:Text("PRESENCE_POLL_RECEIVED", sender), 3)
         scheduleHello(sender, 5)
-        iRC:SendConnectionRules(sender)
-        iRC:SendGuildManagementSettings(sender)
-        iRC:SendGuildBankExceptions(sender)
-        if iRC.RaceLockedSync then iRC.RaceLockedSync:RelayOverrides(sender) end
     elseif kind == "GROUP_VIOLATION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local violationId, occurredAt = parts[3], tonumber(parts[4])
         local instanceName, players = cleanWireText(parts[5], 60), cleanWireText(parts[6], 100)
@@ -1569,6 +1592,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 iRC:SendGuildActivation()
                 iRC:RequestGuildActivation()
                 scheduleHello(nil, 15)
+            end)
+            C_Timer.NewTicker(300, function()
                 iRC:SendConnectionRules()
                 iRC:SendGuildManagementSettings()
                 iRC:SendGuildBankExceptions()
