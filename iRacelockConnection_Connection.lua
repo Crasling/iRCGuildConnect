@@ -12,7 +12,7 @@ local lastActivationRequestAt, lastActivationRequestGuild
 local guildUpdatePending = false
 local ignoreGuildUpdatesUntil = 0
 local seenGroupViolations = {}
-local RULE_AUTHORITY_TIMEOUT = 135
+local RULE_AUTHORITY_TIMEOUT = 90
 local incidentUploadAt = {}
 local guildFoundAuditUploadAt = {}
 local guildBankTransfers = {}

@@ -4,14 +4,14 @@ if not iRC then return end
 
 local AllianceRaces = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HordeRaces = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
-local PRESENCE_TIMEOUT = 135
+local IRC_PRESENCE_TIMEOUT = 90
 -- A compatible RaceLocked response is live presence evidence, not persistent
 -- roster or verification data.
 local COMPATIBILITY_TIMEOUT = 135
 local reportedPresenceMismatches = {}
 local pendingPresenceChecks = {}
 local presenceConnection, reviewTicket, reviewAt, selectedOfficer
-local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 60, 60
+local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 45, 60
 local sessionStartedAt = time()
 
 local function isFreshCompatibility(entry, profile)
@@ -28,7 +28,7 @@ end
 local function isFreshIRCProfile(profile)
     local lastSeen = profile and tonumber(profile.lastSeen)
     local startedAt = iRC.ConnectionSessionStartedAt or sessionStartedAt
-    return lastSeen and lastSeen >= startedAt and lastSeen <= time() and time() - lastSeen <= PRESENCE_TIMEOUT
+    return lastSeen and lastSeen >= startedAt and lastSeen <= time() and time() - lastSeen <= IRC_PRESENCE_TIMEOUT
 end
 
 local function latestCompatibilityEntry(member)
@@ -107,13 +107,13 @@ function iRC:GetMemberVerification(name, online, profile, context)
     local sessionStartedAt = self.ConnectionSessionStartedAt or 0
     if profile and profile.lastSeen and profile.lastSeen >= sessionStartedAt then
         local profileAge = time() - profile.lastSeen
-        if profileAge <= PRESENCE_TIMEOUT then
+        if profileAge <= IRC_PRESENCE_TIMEOUT then
             return { state = "verified", label = "Verified " .. math.max(0, math.floor(profileAge)) .. "s ago" }
         end
     end
     if compatiblePresence and isFreshCompatibility(compatiblePresence, profile) then
         local presenceAge = time() - compatiblePresence.lastSeen
-        if presenceAge <= PRESENCE_TIMEOUT then
+        if presenceAge <= COMPATIBILITY_TIMEOUT then
             return { state = "compatible", label = (compatiblePresence.source or "RaceLocked") .. " presence " .. math.max(0, math.floor(presenceAge)) .. "s ago" }
         end
     end
@@ -152,7 +152,7 @@ function iRC:IsPresenceNotificationLeader()
             -- Compatible presence proves RaceLockedForkEU is running, not
             -- iRC's notification handler. Only direct, current-session iRC
             -- profiles can participate in this election.
-            if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= PRESENCE_TIMEOUT then
+            if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= IRC_PRESENCE_TIMEOUT then
                 if type(rankIndex) == "number" and rankIndex >= 0 and rankIndex <= presenceRank
                     and (rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name))) then
                     candidate = { name = name, rankIndex = rankIndex }

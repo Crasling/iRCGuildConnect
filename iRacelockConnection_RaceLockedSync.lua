@@ -354,12 +354,13 @@ function Sync:SetGoldOverride(name, clean)
     return self:SetOverride(name, entry.gmVerified, clean, true)
 end
 
-function Sync:DescribeStatus(name, compact, status)
+function Sync:DescribeStatus(name, compact, status, goldOnly)
     if status == nil then status = self:GetStatus(name) end
     if not status then return iRC:Text("RL_STATUS_UNKNOWN") end
     local verified = status.verified == nil and "RL_STATUS_UNKNOWN" or (status.verified and "RL_VERIFIED" or "RL_UNVERIFIED")
     local clean = status.clean == nil and "RL_STATUS_UNKNOWN" or (status.clean and "RL_CLEAN" or "RL_FLAGGED")
-    local text = iRC:Text(verified) .. " / " .. iRC:Text(clean)
+    local text = goldOnly and iRC:Text("VERIFICATION_GOLD", iRC:Text(clean))
+        or (iRC:Text(verified) .. " / " .. iRC:Text(clean))
     if not compact then
         local details = {}
         if status.source and status.source ~= "" then details[#details + 1] = iRC:Text("RL_REPORT_SOURCE", status.source) end
