@@ -17,8 +17,7 @@ local function registerPrefix(prefix)
 end
 
 local function send(message)
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(PREFIX, message, "GUILD") end
-    if SendAddonMessage then return SendAddonMessage(PREFIX, message, "GUILD") end
+    return iRC:SendAddonTraffic(PREFIX, message, "GUILD")
 end
 
 function Compatibility:StoreSelfFound(name, selfFound, source)
@@ -76,7 +75,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... == iRC.Name then registerPrefix(PREFIX) end
     elseif event == "PLAYER_LOGIN" then
-        if C_Timer and C_Timer.After then C_Timer.After(6, function() Compatibility:BroadcastAll() end) end
+        if C_Timer and C_Timer.After then C_Timer.After(iRC:GetStartupTrafficDelay(), function() Compatibility:BroadcastAll() end) end
         if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(60, function() Compatibility:BroadcastAll() end) end
     elseif event == "CHAT_MSG_ADDON" then
         if not iRC:IsGuildConnectionActive() then return end

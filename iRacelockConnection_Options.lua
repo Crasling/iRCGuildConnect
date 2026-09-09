@@ -13,7 +13,8 @@ local function IsAddonLoadedCompat(addonName)
 end
 
 local function CanUseGuildFoundTools()
-    return iRC:HasGuildPermission("guildBanks") and iRC:IsGuildFoundRequired()
+    return iRC:IsTestAdminGuildMaster()
+        or (iRC:HasGuildPermission("guildBanks") and iRC:IsGuildFoundRequired())
 end
 
 local function CanUseManagementTools()
@@ -375,7 +376,7 @@ for _, item in ipairs(sidebarItems) do
 end
 
 local y = -12
-local debugModeCheck
+local debugModeCheck, guildMapPersonalCheck
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
 minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
@@ -414,6 +415,13 @@ _, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, fun
     mainFrame:SetPoint("CENTER")
     iRC:Print(L.MAIN_WINDOW_RESET_DONE)
 end, L.IRC_MAIN_WINDOW_RESET_DESC)
+_, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
+guildMapPersonalCheck, y = CreateSettingsCheckbox(generalContent, L.GUILD_MAP_PERSONAL,
+    L.GUILD_MAP_PERSONAL_DESC, y,
+    function() return iRC:GetSettings().showGuildMap ~= false end,
+    function(value)
+        if iRC.GuildMap then iRC.GuildMap:SetShown(value) else iRC:GetSettings().showGuildMap = value and true or false end
+    end)
 generalContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -435,7 +443,7 @@ broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
 y = connectionActionsY - 36
 
 local guildRulesStatus
-local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, progressionModeDropdown, maxLevelProgressionDropdown, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
 local guildContactRows = {}
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
@@ -474,6 +482,14 @@ maxLevelProgressionDropdown, y = CreateSettingsDropdown("iRacelockConnectionMaxL
         if value == "UNRESTRICTED" then return L.PROGRESSION_MAX_UNRESTRICTED end
         return L.PROGRESSION_MAX_SELF_FOUND
     end)
+guildFoundTradeExceptionsCheck, y = CreateSettingsCheckbox(connectionContent,
+    L.GUILD_FOUND_TRADE_EXCEPTIONS_RULE, L.GUILD_FOUND_TRADE_EXCEPTIONS_RULE_DESC, y,
+    function() return iRC:GetConnectionRules().guildFoundTradeExceptions end,
+    function(value) iRC:SetConnectionRule("guildFoundTradeExceptions", value) end)
+guildMapRuleCheck, y = CreateSettingsCheckbox(connectionContent,
+    L.GUILD_MAP_RULE, L.GUILD_MAP_RULE_DESC, y,
+    function() return iRC:GetConnectionRules().guildMapEnabled end,
+    function(value) iRC:SetConnectionRule("guildMapEnabled", value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Group Rules", y - 2)
 sameRaceGroupsCheck, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
     function() return iRC:GetConnectionRules().sameRaceGroupsOnly end,
@@ -754,12 +770,117 @@ local guildFoundAuditText, guildBankEdit, guildBankSave, guildBankListContent, g
 local guildBankRows = {}
 local guildBankSuggestionFrame, guildBankSuggestionButtons
 local guildBankConflictMerge, guildBankConflictAccept, guildBankConflictKeep
+local guildFoundTradeExceptionChecks = {}
+local guildFoundTradeItemControls = {}
+local refreshGuildFoundTradeItemList
 do
     local y = -12
     _, y = CreateSectionHeader(guildFoundContent, L.GUILDFOUND_TOOLS_TITLE, y)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_TOOLS_DESC, y, "GameFontDisableSmall")
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_SETTINGS_HEADER, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_ENFORCEMENT_LOCKED, y, "GameFontHighlight")
+    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_FOUND_TRADE_EXCEPTIONS_HEADER, y - 4)
+    _, y = CreateInfoText(guildFoundContent, L.GUILD_FOUND_TRADE_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
+    for _, entry in ipairs({
+        { "conjured", "GUILD_FOUND_EXCEPTION_CONJURED", "GUILD_FOUND_EXCEPTION_CONJURED_DESC" },
+        { "healthstones", "GUILD_FOUND_EXCEPTION_HEALTHSTONES", "GUILD_FOUND_EXCEPTION_HEALTHSTONES_DESC" },
+        { "questItems", "GUILD_FOUND_EXCEPTION_QUEST_ITEMS", "GUILD_FOUND_EXCEPTION_QUEST_ITEMS_DESC" },
+        { "lockpickOutgoing", "GUILD_FOUND_EXCEPTION_LOCKPICK_OUT", "GUILD_FOUND_EXCEPTION_LOCKPICK_OUT_DESC" },
+        { "lockpickIncoming", "GUILD_FOUND_EXCEPTION_LOCKPICK_IN", "GUILD_FOUND_EXCEPTION_LOCKPICK_IN_DESC" },
+    }) do
+        local key = entry[1]
+        guildFoundTradeExceptionChecks[key], y = CreateSettingsCheckbox(guildFoundContent,
+            L[entry[2]], L[entry[3]], y,
+            function() return iRC:GetGuildFoundTradeExceptionSettings()[key] == true end,
+            function(value) iRC:SetGuildFoundTradeException(key, value) end)
+    end
+    local itemListFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
+    itemListFrame:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 2)
+    itemListFrame:SetSize(470, 190)
+    itemListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    itemListFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
+    itemListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+    local itemScroll = CreateFrame("ScrollFrame", nil, itemListFrame, "UIPanelScrollFrameTemplate")
+    itemScroll:SetPoint("TOPLEFT", 8, -8)
+    itemScroll:SetPoint("BOTTOMRIGHT", -28, 8)
+    local itemContent = CreateFrame("Frame", nil, itemScroll)
+    itemContent:SetWidth(425)
+    itemContent:SetHeight(1)
+    itemScroll:SetScrollChild(itemContent)
+    local expandedCategories = {}
+    local categories = {
+        { key = "conjured", setting = "conjured", label = L.GUILD_FOUND_EXCEPTION_CONJURED },
+        { key = "healthstones", setting = "healthstones", label = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES },
+        { key = "questItems", setting = "questItems", label = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS },
+        { key = "lockboxes", setting = "lockpickOutgoing", secondarySetting = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKBOX_ITEMS },
+    }
+    for _, category in ipairs(categories) do
+        local categoryKey = category.key
+        local header = CreateFrame("Button", nil, itemContent)
+        header:SetSize(410, 24)
+        header.text = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        header.text:SetPoint("LEFT", 4, 0)
+        header.text:SetJustifyH("LEFT")
+        header:SetScript("OnClick", function()
+            expandedCategories[categoryKey] = not expandedCategories[categoryKey]
+            refreshGuildFoundTradeItemList()
+        end)
+        category.header = header
+        category.items = {}
+        for _, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category.key] or {}) do
+            local selectedItemId = itemId
+            local checkbox = CreateFrame("CheckButton", nil, itemContent, CHECKBOX_TEMPLATE)
+            checkbox:SetSize(22, 22)
+            checkbox.Text = checkbox.Text or checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            checkbox.Text:ClearAllPoints()
+            checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
+            checkbox.Text:SetWidth(355)
+            checkbox.Text:SetJustifyH("LEFT")
+            checkbox:SetScript("OnClick", function(self)
+                iRC:SetGuildFoundTradeExceptionItem(categoryKey, selectedItemId, self:GetChecked() and true or false)
+            end)
+            checkbox:SetScript("OnEnter", function(self)
+                if GameTooltip then GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetItemByID(selectedItemId); GameTooltip:Show() end
+            end)
+            checkbox:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+            category.items[#category.items + 1] = { id = itemId, checkbox = checkbox }
+            guildFoundTradeItemControls[#guildFoundTradeItemControls + 1] = checkbox
+        end
+    end
+    refreshGuildFoundTradeItemList = function()
+        local settings = iRC:GetGuildFoundTradeExceptionSettings()
+        local canEdit = iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("guildBanks")
+            and iRC:GetConnectionRules().guildFoundTradeExceptions == true
+        local offset = 0
+        for _, category in ipairs(categories) do
+            local categoryEnabled = settings[category.setting] == true
+                or (category.secondarySetting and settings[category.secondarySetting] == true)
+            category.header:ClearAllPoints()
+            category.header:SetPoint("TOPLEFT", itemContent, "TOPLEFT", 2, -offset)
+            category.header.text:SetText((expandedCategories[category.key] and "- " or "+ ") .. category.label)
+            category.header.text:SetTextColor(categoryEnabled and 1 or 0.65, categoryEnabled and 0.82 or 0.65, categoryEnabled and 0 or 0.65)
+            offset = offset + 24
+            for _, item in ipairs(category.items) do
+                local checkbox = item.checkbox
+                checkbox:SetShown(expandedCategories[category.key] == true)
+                if expandedCategories[category.key] then
+                    checkbox:ClearAllPoints()
+                    checkbox:SetPoint("TOPLEFT", itemContent, "TOPLEFT", 20, -offset)
+                    local selected = settings.items and settings.items[category.key] and settings.items[category.key][item.id]
+                    checkbox:SetChecked(selected == true)
+                    checkbox:SetEnabled(canEdit and categoryEnabled and true or false)
+                    local cachedItemName = GetItemInfo and GetItemInfo(item.id)
+                    local itemName = cachedItemName or iRC.GuildFoundTradeExceptionItemNames[item.id] or "Unknown item"
+                    checkbox.Text:SetText(itemName .. " (" .. item.id .. ")")
+                    offset = offset + 23
+                end
+            end
+        end
+        itemContent:SetHeight(math.max(1, offset))
+    end
+    refreshGuildFoundTradeItemList()
+    y = y - 200
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
     guildBankEdit = CreateFrame("EditBox", nil, guildFoundContent, "InputBoxTemplate")
@@ -957,7 +1078,7 @@ do
     guildNotificationsContent:SetHeight(math.max(math.abs(y) + 20, 300))
 end
 
-local testGuildMasterCheck, suppressWarningsCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
+local testGuildMasterCheck, suppressWarningsCheck, suppressRulesCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
 if iRC:IsTestAdmin() then
     y = -12
     _, y = CreateSectionHeader(adminContent, L.TEST_ADMIN_TITLE, y)
@@ -975,6 +1096,9 @@ if iRC:IsTestAdmin() then
     suppressWarningsCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SUPPRESS_WARNINGS, L.TEST_ADMIN_SUPPRESS_WARNINGS_DESC, y,
         function() return iRC:SuppressesPresenceWarnings() end,
         function(value) iRC:GetSettings().suppressPresenceWarnings = value and true or false end)
+    suppressRulesCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SUPPRESS_RULES, L.TEST_ADMIN_SUPPRESS_RULES_DESC, y,
+        function() return iRC:SuppressesRuleSending() end,
+        function(value) iRC:GetSettings().suppressRuleSending = value and true or false end)
     testActivateGuildButton, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ACTIVATE_GUILD, 190, y - 4, function()
         iRC:ActivateGuildForTesting()
     end, L.TEST_ADMIN_ACTIVATE_GUILD_DESC)
@@ -983,6 +1107,12 @@ end
 
 local function RefreshGuildBankTools(guildFoundAvailable)
     local canEditGuildBanks = guildFoundAvailable and iRC:HasGuildPermission("guildBanks") and iRC:IsGuildConnectionActive()
+    local tradeExceptionsEnabled = canEditGuildBanks and iRC:GetConnectionRules().guildFoundTradeExceptions == true
+    for _, checkbox in pairs(guildFoundTradeExceptionChecks) do
+        checkbox:Refresh()
+        checkbox:SetEnabled(tradeExceptionsEnabled and true or false)
+    end
+    if refreshGuildFoundTradeItemList then refreshGuildFoundTradeItemList() end
     guildBankEdit:SetEnabled(canEditGuildBanks and true or false)
     guildBankSave:SetEnabled(canEditGuildBanks and true or false)
     local names = {}
@@ -1118,9 +1248,14 @@ local function Refresh()
         RefreshGuildBankTools(guildFoundAvailable)
     end
     if debugModeCheck then debugModeCheck:Refresh() end
+    if guildMapPersonalCheck then
+        guildMapPersonalCheck:Refresh()
+        guildMapPersonalCheck:SetEnabled(iRC:IsGuildConnectionActive() and iRC:GetConnectionRules().guildMapEnabled and true or false)
+    end
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
         suppressWarningsCheck:Refresh()
+        suppressRulesCheck:Refresh()
         local testGuildMaster = iRC:IsTestAdminGuildMaster()
         testAdminStatus:SetText((testGuildMaster and iRC.Colors.Green or iRC.Colors.Yellow)
             .. iRC:Text(testGuildMaster and "TEST_ADMIN_STATUS_GUILD_MASTER" or "TEST_ADMIN_STATUS_MEMBER") .. iRC.Colors.Reset)
@@ -1164,6 +1299,8 @@ local function Refresh()
     nativeTongueCheck:Refresh()
     progressionModeDropdown:Refresh()
     maxLevelProgressionDropdown:Refresh()
+    guildFoundTradeExceptionsCheck:Refresh()
+    guildMapRuleCheck:Refresh()
     sameRaceGroupsCheck:Refresh()
     refreshingSameRaceLevel = true
     sameRaceLevelSlider:SetValue(iRC:GetConnectionRules().sameRaceMinimumLevel or 1)
@@ -1288,6 +1425,9 @@ local function Refresh()
     local maxLevelModeEnabled = isGuildMaster and guildActive and iRC:GetProgressionMode() == "SELF_FOUND"
     if maxLevelModeEnabled then UIDropDownMenu_EnableDropDown(maxLevelProgressionDropdown)
     else UIDropDownMenu_DisableDropDown(maxLevelProgressionDropdown) end
+    local tradeExceptionsRuleEnabled = isGuildMaster and guildActive and iRC:IsGuildFoundRequired()
+    guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
+    guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     sameRaceGroupsCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     local sameRaceExceptionEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().sameRaceGroupsOnly
     sameRaceLevelSlider:SetEnabled(sameRaceExceptionEnabled and true or false)
@@ -1302,6 +1442,8 @@ local function Refresh()
     local rules = iRC:GetConnectionRules()
     SetRuleVisualState(guildActivationCheck, guildActive)
     SetRuleVisualState(nativeTongueCheck, rules.nativeTongueOnly)
+    SetRuleVisualState(guildFoundTradeExceptionsCheck, rules.guildFoundTradeExceptions)
+    SetRuleVisualState(guildMapRuleCheck, rules.guildMapEnabled)
     SetRuleVisualState(sameRaceGroupsCheck, rules.sameRaceGroupsOnly)
     SetRuleVisualState(level60SameRaceExceptionCheck, rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
     SetRuleVisualState(guildGroupsOnlyCheck, rules.guildGroupsOnly)

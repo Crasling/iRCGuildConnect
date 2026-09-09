@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.18"
+iRC.Version = "0.3.1"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -34,13 +34,38 @@ iRC.ColorValues = {
     Gray = { 0.50, 0.50, 0.50 },
 }
 
+-- Keep automatic addon traffic away from the busy login frame. Each caller
+-- gets its own delay so independent startup packets do not form a new burst.
+function iRC:GetStartupTrafficDelay()
+    return 3 + math.random() * 5
+end
+
+function iRC:SendAddonTraffic(prefix, message, distribution, target)
+    local now = GetTime and GetTime() or 0
+    local readyAt = tonumber(self.StartupTrafficReadyAt) or 0
+    if readyAt > now and C_Timer and C_Timer.After then
+        C_Timer.After(readyAt - now, function()
+            iRC:SendAddonTraffic(prefix, message, distribution, target)
+        end)
+        return true
+    end
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        return C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
+    end
+    if SendAddonMessage then return SendAddonMessage(prefix, message, distribution, target) end
+    return false
+end
+
 local DEFAULT_SETTINGS = {
     mainWindowScale = 1,
     shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,
     suppressPresenceWarnings = false,
+    suppressRuleSending = false,
     showOfficerSettingsForTesting = false,
+    showGuildMap = true,
+    shareGuildMapPosition = true,
 }
 
 iRC.DefaultConnectionRules = {
@@ -54,12 +79,48 @@ iRC.DefaultConnectionRules = {
     allowLevel60MixedRaceGroups = false,
     guildGroupsOnly = false,
     guildGroupsMinimumLevel = 1,
+    guildFoundTradeExceptions = false,
+    guildMapEnabled = false,
     guildContacts = "",
 }
 
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     guildBanks = 1, notifications = 1, homepage = 0,
+}
+
+iRC.DefaultGuildFoundTradeExceptions = {
+    conjured = false, healthstones = false, questItems = false,
+    customItems = false, lockpickOutgoing = false, lockpickIncoming = false,
+    warlockSummons = false, magePortals = false,
+}
+
+iRC.GuildFoundTradeExceptionItems = {
+    conjured = { 5350, 2288, 2136, 3772, 8077, 8078, 8079, 5349, 1113, 1114, 1487, 8075, 8076, 22895 },
+    healthstones = { 5512, 19004, 19005, 5511, 19006, 19007, 5509, 19008, 19009, 5510, 19010, 19011, 9421, 19012, 19013 },
+    questItems = { 7740, 7741 },
+    lockboxes = { 16882, 16883, 16884, 16885, 4632, 4633, 4634, 4636, 4637, 4638, 5758, 5759, 5760, 6354, 6355, 6712, 12033, 13875, 13918 },
+}
+
+iRC.GuildFoundTradeExceptionItemNames = {
+    [5350] = "Conjured Water", [2288] = "Conjured Fresh Water", [2136] = "Conjured Purified Water",
+    [3772] = "Conjured Spring Water", [8077] = "Conjured Mineral Water", [8078] = "Conjured Sparkling Water",
+    [8079] = "Conjured Crystal Water", [5349] = "Conjured Muffin", [1113] = "Conjured Bread",
+    [1114] = "Conjured Rye", [1487] = "Conjured Pumpernickel", [8075] = "Conjured Sourdough",
+    [8076] = "Conjured Sweet Roll", [22895] = "Conjured Cinnamon Roll",
+    [5512] = "Minor Healthstone", [19004] = "Minor Healthstone", [19005] = "Minor Healthstone",
+    [5511] = "Lesser Healthstone", [19006] = "Lesser Healthstone", [19007] = "Lesser Healthstone",
+    [5509] = "Healthstone", [19008] = "Healthstone", [19009] = "Healthstone", [5510] = "Greater Healthstone",
+    [19010] = "Greater Healthstone", [19011] = "Greater Healthstone", [9421] = "Major Healthstone",
+    [19012] = "Major Healthstone", [19013] = "Major Healthstone",
+    [7740] = "Gni'kiv Medallion", [7741] = "The Shaft of Tsol",
+    [16882] = "Battered Junkbox", [16883] = "Worn Junkbox", [16884] = "Sturdy Junkbox",
+    [16885] = "Heavy Junkbox", [4632] = "Ornate Bronze Lockbox", [4633] = "Heavy Bronze Lockbox",
+    [4634] = "Iron Lockbox", [4636] = "Strong Iron Lockbox", [4637] = "Steel Lockbox",
+    [4638] = "Reinforced Steel Lockbox", [5758] = "Mithril Lockbox", [5759] = "Thorium Lockbox",
+    [5760] = "Eternium Lockbox", [6354] = "Small Locked Chest", [6355] = "Sturdy Locked Chest",
+    [6712] = "Clockwork Box", [12033] = "Thaurissan Family Jewels", [13875] = "Ironbound Locked Chest",
+    [13918] = "Reinforced Locked Chest",
 }
 
 iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL" }
@@ -122,7 +183,16 @@ end
 function iRC:CheckForNewVersion(version)
     if not isNewerVersion(version, self.Version) then return false end
     if newestVersionSeen and not isNewerVersion(version, newestVersionSeen) then return false end
+    local settings = self:GetSettings()
+    local lastVersion = tostring(settings.newVersionNoticeVersion or "")
+    local lastAt = math.floor(tonumber(settings.newVersionNoticeAt) or 0)
+    if not isNewerVersion(version, lastVersion) and time() - lastAt < 86400 then
+        newestVersionSeen = version
+        return false
+    end
     newestVersionSeen = version
+    settings.newVersionNoticeVersion = version
+    settings.newVersionNoticeAt = time()
     self:Print(self.Colors.Yellow .. self:Text("NEW_VERSION_AVAILABLE", version) .. self.Colors.Reset)
     return true
 end
@@ -326,6 +396,16 @@ function iRC:GetConnection()
     connection.guildBankExceptions = connection.guildBankExceptions or { members = {} }
     connection.guildBankExceptions.members = connection.guildBankExceptions.members or {}
     connection.guildBankExceptions.details = connection.guildBankExceptions.details or {}
+    connection.guildFoundTradeExceptionSettings = connection.guildFoundTradeExceptionSettings or {}
+    for key, value in pairs(self.DefaultGuildFoundTradeExceptions) do
+        if connection.guildFoundTradeExceptionSettings[key] == nil then
+            connection.guildFoundTradeExceptionSettings[key] = value
+        end
+    end
+    connection.guildFoundTradeExceptionSettings.items = connection.guildFoundTradeExceptionSettings.items or {}
+    for category in pairs(self.GuildFoundTradeExceptionItems) do
+        connection.guildFoundTradeExceptionSettings.items[category] = connection.guildFoundTradeExceptionSettings.items[category] or {}
+    end
     connection.guildContactDetails = connection.guildContactDetails or {}
     connection.guildContactsTimestamp = tonumber(connection.guildContactsTimestamp) or 0
     connection.rankPermissions = connection.rankPermissions or {}
@@ -476,6 +556,10 @@ end
 
 function iRC:SuppressesPresenceWarnings()
     return self:IsTestAdmin() and self:GetSettings().suppressPresenceWarnings == true
+end
+
+function iRC:SuppressesRuleSending()
+    return self:IsTestAdmin() and self:GetSettings().suppressRuleSending == true
 end
 
 function iRC:ActivateGuildForTesting()
@@ -812,6 +896,11 @@ function iRC:SetConnectionRule(key, value)
     if self.SendConnectionRules then self:SendConnectionRules() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
+    if self.GuildMap then
+        if self.GuildMap.UpdateToggle then self.GuildMap.UpdateToggle() end
+        self.GuildMap:UpdatePins()
+        if key == "guildMapEnabled" and value then self.GuildMap:SchedulePosition(3) end
+    end
     return true
 end
 
@@ -906,6 +995,7 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRC:GetSettings()
         iRCCharDB = iRCCharDB or {}
     elseif event == "PLAYER_LOGIN" then
+        iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()
     elseif event == "PLAYER_REGEN_DISABLED" then

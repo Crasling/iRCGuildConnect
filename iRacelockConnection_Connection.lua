@@ -19,6 +19,11 @@ local guildBankTransfers = {}
 local MAX_GUILD_BANKS = 32
 local MAX_GUILD_BANK_WIRE = 1200
 local GUILD_BANK_CHUNK_SIZE = 80
+local profileUIRefreshPending = false
+local pendingHello = {}
+local profileDebugSummary = { count = 0, names = {}, scheduled = false }
+local rulesAckSummaries = {}
+local legacyRulesAckSummaries = {}
 iRC.ConnectionSessionStartedAt = time()
 
 local function registerPrefix(prefix)
@@ -27,8 +32,7 @@ local function registerPrefix(prefix)
 end
 
 local function send(prefix, message, distribution, target)
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then return C_ChatInfo.SendAddonMessage(prefix, message, distribution, target) end
-    if SendAddonMessage then return SendAddonMessage(prefix, message, distribution, target) end
+    return iRC:SendAddonTraffic(prefix, message, distribution, target)
 end
 
 local function schedulePresenceReview()
@@ -85,6 +89,81 @@ local function profileFromWire(parts, startIndex)
     }
 end
 
+local function scheduleProfileUIRefresh()
+    if profileUIRefreshPending then return end
+    if not C_Timer or not C_Timer.After then
+        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+        return
+    end
+    profileUIRefreshPending = true
+    C_Timer.After(0.25, function()
+        profileUIRefreshPending = false
+        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+    end)
+end
+
+local function summarizeProfileDebug(sender)
+    if not iRC:GetSettings().debugMode then return end
+    local key = iRC:NormalizeName(sender)
+    if not profileDebugSummary.names[key] then
+        profileDebugSummary.names[key] = true
+        profileDebugSummary.count = profileDebugSummary.count + 1
+    end
+    if profileDebugSummary.scheduled or not C_Timer or not C_Timer.After then return end
+    profileDebugSummary.scheduled = true
+    C_Timer.After(2, function()
+        local count = profileDebugSummary.count
+        profileDebugSummary = { count = 0, names = {}, scheduled = false }
+        if count > 0 then iRC:DebugMsg(iRC:Text("PROFILES_RECEIVED_SUMMARY", count), 3) end
+    end)
+end
+
+local function summarizeRulesAck(sender, timestampHex)
+    if not iRC:GetSettings().debugMode or not C_Timer or not C_Timer.After then return end
+    local key = tostring(timestampHex or "0"):lower()
+    local summary = rulesAckSummaries[key]
+    if not summary then
+        summary = { count = 0, names = {} }
+        rulesAckSummaries[key] = summary
+        C_Timer.After(2, function()
+            local completed = rulesAckSummaries[key]
+            rulesAckSummaries[key] = nil
+            if completed and completed.count > 0 then
+                iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_VERIFIED_SUMMARY", completed.count, key), 3)
+            end
+        end)
+    end
+    local senderKey = iRC:NormalizeName(sender)
+    if not summary.names[senderKey] then
+        summary.names[senderKey] = true
+        summary.count = summary.count + 1
+    end
+end
+
+local function summarizeLegacyRulesAck(sender, timestampHex)
+    if not iRC:GetSettings().debugMode or not C_Timer or not C_Timer.After then return end
+    local key = tostring(timestampHex or "0"):lower()
+    local summary = legacyRulesAckSummaries[key]
+    if not summary then
+        summary = { count = 0, names = {} }
+        legacyRulesAckSummaries[key] = summary
+        C_Timer.After(2, function()
+            local completed = legacyRulesAckSummaries[key]
+            legacyRulesAckSummaries[key] = nil
+            if completed and completed.count > 0 then
+                iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_LEGACY_SUMMARY", completed.count, key), 3)
+            end
+        end)
+    end
+    local senderKey = iRC:NormalizeName(sender)
+    if not summary.names[senderKey] then
+        summary.names[senderKey] = true
+        summary.count = summary.count + 1
+    end
+end
+
 function iRC:GetLocalProfile()
     local raceName, raceFile = UnitRace("player")
     local _, classFile = UnitClass("player")
@@ -104,8 +183,7 @@ function iRC:StoreMemberProfile(profile)
     local connection = self:GetConnection()
     if not connection then return end
     connection.members[self:NormalizeName(profile.name)] = profile
-    if self.MainUI then self.MainUI:RefreshIfShown() end
-    if self.ConnectionDashboard then self.ConnectionDashboard:RefreshIfShown() end
+    scheduleProfileUIRefresh()
 end
 
 function iRC:SendHello(targetName)
@@ -114,6 +192,19 @@ function iRC:SendHello(targetName)
     self:StoreMemberProfile(profile)
     send(self.Prefix, addProfileParts({ "HELLO", WIRE_VERSION }, profile), targetName and "WHISPER" or "GUILD", targetName)
     self:DebugMsg(self:Text("PROFILE_SENT"), 3)
+end
+
+local function scheduleHello(targetName, maximumDelay)
+    local key = targetName and ("whisper:" .. iRC:NormalizeName(targetName)) or "guild"
+    if pendingHello[key] then return false end
+    if not C_Timer or not C_Timer.After then iRC:SendHello(targetName); return true end
+    pendingHello[key] = true
+    local delay = 0.2 + math.random() * math.max(0, (tonumber(maximumDelay) or 5) - 0.2)
+    C_Timer.After(delay, function()
+        pendingHello[key] = nil
+        iRC:SendHello(targetName)
+    end)
+    return true
 end
 
 function iRC:SendGuildActivation(targetName)
@@ -211,6 +302,37 @@ end
 
 local function guildSettingsChecksum(enabled, timestamp, source)
     return rulesBackupChecksum(table.concat({ enabled and "1" or "0", tostring(timestamp or 0), tostring(source or "") }, SEP))
+end
+
+local TRADE_EXCEPTION_KEYS = {
+    "conjured", "healthstones", "questItems", "customItems",
+    "lockpickOutgoing", "lockpickIncoming", "warlockSummons", "magePortals",
+}
+
+local function tradeExceptionsMask(settings)
+    local mask = 0
+    for index, key in ipairs(TRADE_EXCEPTION_KEYS) do
+        if settings and settings[key] == true then mask = mask + (2 ^ (index - 1)) end
+    end
+    return mask
+end
+
+local TRADE_ITEM_CATEGORIES = { "conjured", "healthstones", "questItems", "lockboxes" }
+
+local function tradeItemMasks(settings)
+    local masks = {}
+    for _, category in ipairs(TRADE_ITEM_CATEGORIES) do
+        local mask, selected = 0, settings and settings.items and settings.items[category] or {}
+        for index, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
+            if selected[itemId] == true then mask = mask + (2 ^ (index - 1)) end
+        end
+        masks[#masks + 1] = tostring(mask)
+    end
+    return table.concat(masks, ",")
+end
+
+local function tradeExceptionsChecksum(mask, itemMasks, timestamp, source)
+    return rulesBackupChecksum(table.concat({ tostring(mask), tostring(itemMasks or "0,0,0,0"), tostring(timestamp or 0), tostring(source or "") }, SEP))
 end
 
 local function rankPermissionsWire(values)
@@ -347,8 +469,9 @@ local function sendManagementConflict(target, kind, value, timestamp, source, ch
     }, SEP), "WHISPER", target)
 end
 
-function iRC:SendGuildManagementSettings(targetName)
+function iRC:SendGuildManagementSettings(targetName, force)
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
+    if not force and not self:IsRulesetBroadcaster() then return false end
     local connection = self:GetConnection()
     local settings = connection and connection.guildNotifications
     if not settings then return false end
@@ -465,13 +588,86 @@ function iRC:SetNewMemberWelcomeEnabled(enabled)
     settings.welcomeNewMembers = enabled and true or false
     settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
     settings.source = self:GetPlayerName()
-    self:SendGuildManagementSettings()
+    self:SendGuildManagementSettings(nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
 
-function iRC:SendGuildBankExceptions(targetName)
+function iRC:GetGuildFoundTradeExceptionSettings()
+    local connection = self:GetConnection()
+    return connection and connection.guildFoundTradeExceptionSettings or self.DefaultGuildFoundTradeExceptions
+end
+
+function iRC:SetGuildFoundTradeException(key, enabled)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks")
+        or not self:GetConnectionRules().guildFoundTradeExceptions
+        or self.DefaultGuildFoundTradeExceptions[key] == nil then return false end
+    local connection = self:GetConnection()
+    local settings = connection.guildFoundTradeExceptionSettings
+    local wasEnabled = settings[key] == true
+    local itemCategory = ({
+        conjured = "conjured",
+        healthstones = "healthstones",
+        questItems = "questItems",
+        lockpickOutgoing = "lockboxes",
+        lockpickIncoming = "lockboxes",
+    })[key]
+    local categoryWasEnabled = wasEnabled
+    if itemCategory == "lockboxes" then
+        categoryWasEnabled = settings.lockpickOutgoing == true or settings.lockpickIncoming == true
+    end
+    settings[key] = enabled and true or false
+    if enabled and not categoryWasEnabled and itemCategory then
+        settings.items = settings.items or {}
+        settings.items[itemCategory] = {}
+        for _, itemId in ipairs(self.GuildFoundTradeExceptionItems[itemCategory] or {}) do
+            settings.items[itemCategory][itemId] = true
+        end
+    end
+    settings.timestamp = math.max(time(), math.floor(tonumber(settings.timestamp) or 0) + 1)
+    settings.source = self:GetPlayerName()
+    self:SendGuildFoundTradeExceptions(nil, true)
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:SetGuildFoundTradeExceptionItem(category, itemId, enabled)
+    local presets = self.GuildFoundTradeExceptionItems[category]
+    itemId = tonumber(itemId)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks")
+        or not self:GetConnectionRules().guildFoundTradeExceptions or not presets or not itemId then return false end
+    local known
+    for _, presetId in ipairs(presets) do if presetId == itemId then known = true break end end
+    if not known then return false end
+    local settings = self:GetGuildFoundTradeExceptionSettings()
+    settings.items = settings.items or {}
+    settings.items[category] = settings.items[category] or {}
+    settings.items[category][itemId] = enabled and true or nil
+    settings.timestamp = math.max(time(), math.floor(tonumber(settings.timestamp) or 0) + 1)
+    settings.source = self:GetPlayerName()
+    self:SendGuildFoundTradeExceptions(nil, true)
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:SendGuildFoundTradeExceptions(targetName, force)
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
+    if not force and not self:IsRulesetBroadcaster() then return false end
+    local settings = self:GetGuildFoundTradeExceptionSettings()
+    local timestamp = math.floor(tonumber(settings.timestamp) or 0)
+    local source = tostring(settings.source or ""):gsub("[%c]", ""):sub(1, 80)
+    if timestamp <= 0 or source == "" then return false end
+    local mask = tradeExceptionsMask(settings)
+    local itemMasks = tradeItemMasks(settings)
+    send(self.Prefix, table.concat({ "GF_TRADE_EXCEPTIONS", WIRE_VERSION, tostring(mask),
+        tostring(timestamp), source, tradeExceptionsChecksum(mask, itemMasks, timestamp, source), itemMasks }, SEP),
+        targetName and "WHISPER" or "GUILD", targetName)
+    return true
+end
+
+function iRC:SendGuildBankExceptions(targetName, force)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
+    if not force and not self:IsRulesetBroadcaster() then return false end
     local connection = self:GetConnection()
     local exceptions = connection and connection.guildBankExceptions
     local timestamp = exceptions and math.floor(tonumber(exceptions.timestamp) or 0) or 0
@@ -550,7 +746,7 @@ function iRC:SetGuildBankExceptions(value, resolutions)
     exceptions.parentChecksum = parentChecksum
     exceptions.resolutions = tostring(resolutions or ""):lower():sub(1, 17)
     exceptions.checksum = guildBanksChecksum(guildBanksWire(members), exceptions.timestamp, exceptions.source)
-    self:SendGuildBankExceptions()
+    self:SendGuildBankExceptions(nil, true)
     self:SendGuildBankMetadata()
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
@@ -564,6 +760,7 @@ function iRC:IsRulesetBroadcaster()
 end
 
 function iRC:SendConnectionRules(targetName)
+    if self:SuppressesRuleSending() then return false end
     local isBroadcaster = self:IsRulesetBroadcaster()
     if not self:IsGuildConnectionActive() or not isBroadcaster then return end
     local rules = self:GetConnectionRules()
@@ -596,6 +793,11 @@ function iRC:SendConnectionRules(targetName)
         timestampHex,
         tostring(timestampSource or ""):gsub("[%c]", " "):sub(1, 80),
         rulesBackupChecksum(backup),
+        rules.guildFoundTradeExceptions and "1" or "0",
+        rulesBackupChecksum(table.concat({ rules.guildFoundTradeExceptions and "1" or "0", timestampHex, tostring(timestampSource or "") }, SEP)),
+        self.Version,
+        rules.guildMapEnabled and "1" or "0",
+        rulesBackupChecksum(table.concat({ rules.guildMapEnabled and "1" or "0", timestampHex, tostring(timestampSource or "") }, SEP)),
     }, SEP), distribution, targetName)
     if self:IsGuildMaster() and self.SendGuildContactMetadata then self:SendGuildContactMetadata(targetName) end
     if self:IsGuildMaster() and self.SendRankPermissions then self:SendRankPermissions(targetName) end
@@ -635,6 +837,7 @@ end
 
 local GUILD_FOUND_AUDIT_ACTIONS = {
     TRADE_BLOCKED = true,
+    TRADE_EXCEPTION_APPROVED = true,
     MAIL_BLOCKED = true,
     INBOX_BLOCKED = true,
     AUCTION_HOUSE_BLOCKED = true,
@@ -822,7 +1025,7 @@ local function handleMessage(prefix, message, distribution, sender)
         -- only the actual Guild Master may turn an established guild off.
         if not active and not iRC:IsGuildMasterName(sender) then return end
         local changed = iRC:SetGuildConnectionActive(active, true)
-        if active and changed then iRC:SendHello() end
+        if active and changed then scheduleHello(nil, 3) end
         iRC:DebugMsg(iRC:Text("GUILD_ACTIVATION_RECEIVED", sender, active and iRC:Text("GUILD_ACTIVE") or iRC:Text("GUILD_INACTIVE")), 3)
         return
     elseif kind == "GUILD_ACTIVATION_REQUEST" and parts[2] == WIRE_VERSION and iRC:IsRulesetBroadcaster()
@@ -844,7 +1047,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local profile = profileFromWire(parts, 3)
         if profile and iRC:NormalizeName(profile.name) == iRC:NormalizeName(sender) then
             iRC:StoreMemberProfile(profile)
-            iRC:DebugMsg(iRC:Text("PROFILE_RECEIVED", sender), 3)
+            summarizeProfileDebug(sender)
             iRC:UploadOfficerIncidentsToGM(sender)
             iRC:UploadGuildFoundAudit(sender)
             if iRC.RaceLockedSync then iRC.RaceLockedSync:RelayOverrides(sender) end
@@ -855,7 +1058,7 @@ local function handleMessage(prefix, message, distribution, sender)
             schedulePresenceReview()
         end
         iRC:DebugMsg(iRC:Text("PRESENCE_POLL_RECEIVED", sender), 3)
-        iRC:SendHello(sender)
+        scheduleHello(sender, 5)
         iRC:SendConnectionRules(sender)
         iRC:SendGuildManagementSettings(sender)
         iRC:SendGuildBankExceptions(sender)
@@ -943,6 +1146,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local timestamp = tonumber(parts[4])
         local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
         local checksum = tostring(parts[6] or ""):lower()
+        local itemMasks = tostring(parts[7] or "0,0,0,0")
         local now = GetServerTime and GetServerTime() or time()
         if senderRank and senderRank <= (connection.rankPermissions.notifications or 1) and timestamp and timestamp > 0 and timestamp <= now + 300
             and source ~= "" and checksum == guildSettingsChecksum(enabled, timestamp, source) then
@@ -1034,6 +1238,48 @@ local function handleMessage(prefix, message, distribution, sender)
             if not current or updatedAt > math.floor(tonumber(current.updatedAt) or 0) then
                 exceptions.details[name] = { addedAt = math.floor(addedAt), addedBy = addedBy,
                     updatedAt = math.floor(updatedAt), note = note }
+                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            end
+        end
+    elseif kind == "GF_TRADE_EXCEPTIONS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local connection = iRC:GetConnection()
+        local senderRank = getRulesRank(sender, connection)
+        local senderIsGuildMaster = getRosterRank(sender) == 0
+        local receiverIsGuildMaster = getRosterRank(iRC:GetPlayerName()) == 0
+        local mask, timestamp = tonumber(parts[3]), tonumber(parts[4])
+        local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
+        local checksum = tostring(parts[6] or ""):lower()
+        local itemMasks = tostring(parts[7] or "")
+        local now = GetServerTime and GetServerTime() or time()
+        if senderRank and senderRank <= (connection.rankPermissions.guildBanks or 1)
+            and mask and mask >= 0 and mask <= 255 and mask == math.floor(mask)
+            and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= ""
+            and itemMasks:match("^%d+,%d+,%d+,%d+$") and #itemMasks <= 45
+            and checksum == tradeExceptionsChecksum(mask, itemMasks, timestamp, source) then
+            local settings = connection.guildFoundTradeExceptionSettings
+            local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
+            if senderIsGuildMaster or timestamp > savedTimestamp then
+                for index, key in ipairs(TRADE_EXCEPTION_KEYS) do
+                    settings[key] = math.floor(mask / (2 ^ (index - 1))) % 2 == 1
+                end
+                settings.items = settings.items or {}
+                local itemMaskValues = {}
+                for value in itemMasks:gmatch("%d+") do itemMaskValues[#itemMaskValues + 1] = tonumber(value) or 0 end
+                for categoryIndex, category in ipairs(TRADE_ITEM_CATEGORIES) do
+                    settings.items[category] = {}
+                    local itemMask = itemMaskValues[categoryIndex] or 0
+                    for itemIndex, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
+                        if math.floor(itemMask / (2 ^ (itemIndex - 1))) % 2 == 1 then
+                            settings.items[category][itemId] = true
+                        end
+                    end
+                end
+                settings.timestamp, settings.source = math.floor(timestamp), source
+                if receiverIsGuildMaster and not senderIsGuildMaster then
+                    settings.timestamp = math.max(now, settings.timestamp + 1)
+                    settings.source = iRC:GetPlayerName()
+                    iRC:SendGuildFoundTradeExceptions(nil, true)
+                end
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             end
         end
@@ -1179,13 +1425,27 @@ local function handleMessage(prefix, message, distribution, sender)
         local connection = iRC:GetConnection()
         local timestampHex, timestampSource = iRC:EnsureConnectionRulesTimestamp(connection)
         local expected = rulesBackupChecksum(rulesBackupFingerprint(iRC:GetConnectionRules(), timestampHex, timestampSource))
+        local expectedExtension = rulesBackupChecksum(table.concat({
+            iRC:GetConnectionRules().guildFoundTradeExceptions and "1" or "0", timestampHex, tostring(timestampSource or ""),
+        }, SEP))
+        local expectedMapExtension = rulesBackupChecksum(table.concat({
+            iRC:GetConnectionRules().guildMapEnabled and "1" or "0", timestampHex, tostring(timestampSource or ""),
+        }, SEP))
         if tostring(parts[3] or ""):lower() == tostring(timestampHex):lower()
             and tostring(parts[4] or ""):lower() == expected then
-            iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_VERIFIED", sender, timestampHex), 3)
+            if tostring(parts[5] or ""):lower() == expectedExtension
+                and tostring(parts[6] or ""):lower() == expectedMapExtension then
+                summarizeRulesAck(sender, timestampHex)
+            elseif tostring(parts[5] or "") == "" or tostring(parts[6] or "") == "" then
+                summarizeLegacyRulesAck(sender, timestampHex)
+            else
+                iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_ACK_MISMATCH", sender), 1)
+            end
         else
             iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_ACK_MISMATCH", sender), 1)
         end
     elseif kind == "RULES" and parts[2] == WIRE_VERSION then
+        iRC:CheckForNewVersion(parts[19])
         local connection = iRC:GetConnection()
         local timestampHex = tostring(parts[14] or "0"):lower()
         local timestampSource = tostring(parts[15] or ""):sub(1, 80)
@@ -1219,6 +1479,8 @@ local function handleMessage(prefix, message, distribution, sender)
             guildGroupsOnly = parts[11] == "1",
             guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[12]) or 1))),
             guildContacts = tostring(parts[13] or ""):sub(1, 140),
+            guildFoundTradeExceptions = parts[17] == "1",
+            guildMapEnabled = parts[20] == "1",
         }
         local incomingContactCount = 0
         for contact in incomingRules.guildContacts:gmatch("[^,]+") do
@@ -1229,6 +1491,16 @@ local function handleMessage(prefix, message, distribution, sender)
             and (incomingRules.selfFoundOnly or not incomingRules.allowLevel60WithoutSelfFound)
         local incomingChecksum = tostring(parts[16] or ""):lower()
         local checksumValid = incomingChecksum == "" or incomingChecksum == rulesBackupChecksum(incomingBackup)
+        local exceptionFlagPresent = parts[17] == "0" or parts[17] == "1"
+        local exceptionChecksum = tostring(parts[18] or ""):lower()
+        local exceptionChecksumValid = not exceptionFlagPresent or exceptionChecksum == rulesBackupChecksum(table.concat({
+            incomingRules.guildFoundTradeExceptions and "1" or "0", timestampHex, timestampSource,
+        }, SEP))
+        local mapFlagPresent = parts[20] == "0" or parts[20] == "1"
+        local mapChecksum = tostring(parts[21] or ""):lower()
+        local mapChecksumValid = not mapFlagPresent or mapChecksum == rulesBackupChecksum(table.concat({
+            incomingRules.guildMapEnabled and "1" or "0", timestampHex, timestampSource,
+        }, SEP))
         local sameStampMatches = incomingTimestamp ~= savedTimestamp or not connection
             or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
             or connection.receivedRulesBackup == incomingBackup
@@ -1238,7 +1510,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 or distribution == "WHISPER"
                 or iRC:NormalizeName(authorityName) == iRC:NormalizeName(sender))))
         local timestampAccepted = senderIsGuildMaster or incomingTimestamp >= savedTimestamp
-        local contentAccepted = senderIsGuildMaster or checksumValid and sameStampMatches
+        local contentAccepted = senderIsGuildMaster or checksumValid and exceptionChecksumValid and mapChecksumValid and sameStampMatches
         local acceptRules = senderIsGuildMaster or senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5
             and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid and timestampAccepted and contentAccepted
         if connection and acceptRules then
@@ -1251,10 +1523,22 @@ local function handleMessage(prefix, message, distribution, sender)
             if incomingRules.level60GuildFound then iRC:MarkGuildFoundRequired(connection) end
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.Enforcement then iRC.Enforcement:Refresh() end
+            if iRC.GuildMap then
+                if iRC.GuildMap.UpdateToggle then iRC.GuildMap.UpdateToggle() end
+                iRC.GuildMap:UpdatePins()
+                if incomingRules.guildMapEnabled then iRC.GuildMap:SchedulePosition(5) end
+            end
             iRC:DebugMsg(iRC:Text("RULES_RECEIVED", sender), 3)
-            send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex, connection.receivedRulesChecksum }, SEP), "WHISPER", sender)
+            local receivedExtensionChecksum = rulesBackupChecksum(table.concat({
+                incomingRules.guildFoundTradeExceptions and "1" or "0", timestampHex, timestampSource,
+            }, SEP))
+            local receivedMapChecksum = rulesBackupChecksum(table.concat({
+                incomingRules.guildMapEnabled and "1" or "0", timestampHex, timestampSource,
+            }, SEP))
+            send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex,
+                connection.receivedRulesChecksum, receivedExtensionChecksum, receivedMapChecksum }, SEP), "WHISPER", sender)
         elseif connection and senderRank ~= nil then
-            if not senderIsGuildMaster and (not checksumValid or not sameStampMatches) then
+            if senderIsAuthority and not senderIsGuildMaster and (not checksumValid or not sameStampMatches) then
                 iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_MISMATCH", sender, timestampHex), 1)
             end
             if not senderIsAuthority then iRC:DebugMsg(iRC:Text("RULES_IGNORED_LOWER_AUTHORITY", sender), 3) end
@@ -1270,23 +1554,25 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         registerPrefix(iRC.Prefix)
         ignoreGuildUpdatesUntil = GetTime() + 8
-        C_Timer.After(2, function()
+        C_Timer.After(iRC:GetStartupTrafficDelay(), function()
             iRC:SendGuildActivation()
             iRC:RequestGuildActivation()
-            iRC:SendHello()
+            scheduleHello(nil, 5)
             if iRC:HasGuildPermission("presence") then iRC:PollGuildPresence() else iRC:RequestGuildPresence() end
             iRC:SendConnectionRules()
             iRC:SendGuildManagementSettings()
             iRC:SendGuildBankExceptions()
+            iRC:SendGuildFoundTradeExceptions()
         end)
         if C_Timer and C_Timer.NewTicker then
             C_Timer.NewTicker(60, function()
                 iRC:SendGuildActivation()
                 iRC:RequestGuildActivation()
-                iRC:SendHello()
+                scheduleHello(nil, 15)
                 iRC:SendConnectionRules()
                 iRC:SendGuildManagementSettings()
                 iRC:SendGuildBankExceptions()
+                iRC:SendGuildFoundTradeExceptions()
             end)
             C_Timer.NewTicker(120, function()
                 iRC:PollGuildPresence()
@@ -1300,11 +1586,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
             guildUpdatePending = false
             iRC:SendGuildActivation()
             iRC:RequestGuildActivation()
-            iRC:SendHello()
+            scheduleHello(nil, 5)
             if iRC:HasGuildPermission("presence") then iRC:PollGuildPresence() else iRC:RequestGuildPresence() end
             iRC:SendConnectionRules()
             iRC:SendGuildManagementSettings()
             iRC:SendGuildBankExceptions()
+            iRC:SendGuildFoundTradeExceptions()
         end)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...

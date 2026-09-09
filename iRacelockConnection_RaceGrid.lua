@@ -74,9 +74,8 @@ local function send(prefix, message, distribution, target)
         end
         return true
     end
-    local api = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
-    if not api or #message > 255 then return false end
-    return pcall(api, prefix, message, distribution, target)
+    if #message > 255 then return false end
+    return iRC:SendAddonTraffic(prefix, message, distribution, target)
 end
 
 local function split(message)
@@ -370,6 +369,7 @@ local function serializeGuildReport(report)
         { "nativeTongueOnly", 1 }, { "selfFoundOnly", 2 }, { "level60GuildFound", 4 },
         { "allowLevel60WithoutSelfFound", 8 }, { "sameRaceGroupsOnly", 16 },
         { "allowLevel60MixedRaceGroups", 32 }, { "guildGroupsOnly", 64 },
+        { "guildFoundTradeExceptions", 128 },
     }) do
         if rules[entry[1]] then ruleMask = ruleMask + entry[2] end
     end
@@ -380,6 +380,7 @@ local function serializeGuildReport(report)
     fields[#fields + 1] = tostring(report.addonVersion or iRC.Version or "")
     fields[#fields + 1] = report.activeLevel60 ~= nil and tostring(report.activeLevel60) or ""
     fields[#fields + 1] = report.activeMembers ~= nil and tostring(report.activeMembers) or ""
+    fields[#fields + 1] = rules.guildMapEnabled and "1" or "0"
     return table.concat(fields, SEP)
 end
 
@@ -460,7 +461,7 @@ local function parseGuildReport(parts)
     if classTotal > members then return nil end
     local rules, rulesKnown
     if parts[22] ~= nil then
-        local mask = validNumber(parts[22], 0, 127)
+        local mask = validNumber(parts[22], 0, 255)
         local sameRaceLevel = validNumber(parts[23], 1, 60)
         local guildGroupsLevel = validNumber(parts[24], 1, 60)
         if not mask or not sameRaceLevel or not guildGroupsLevel then return nil end
@@ -471,6 +472,8 @@ local function parseGuildReport(parts)
             level60GuildFound = enabled(4), allowLevel60WithoutSelfFound = enabled(8),
             sameRaceGroupsOnly = enabled(16), allowLevel60MixedRaceGroups = enabled(32),
             guildGroupsOnly = enabled(64), sameRaceMinimumLevel = sameRaceLevel,
+            guildFoundTradeExceptions = enabled(128),
+            guildMapEnabled = parts[29] == "1",
             guildGroupsMinimumLevel = guildGroupsLevel,
         }
     end
@@ -758,7 +761,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- Let WoW finish restoring the player's normal chat channels before
         -- adding any hidden data channels.
         if C_Timer and C_Timer.After then
-            C_Timer.After(6, function()
+            C_Timer.After(iRC:GetStartupTrafficDelay(), function()
                 externalReady = true
                 RaceGrid:Refresh()
             end)

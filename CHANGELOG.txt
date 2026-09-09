@@ -2,6 +2,14 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.3.1 - Guild Found Management
+--------------------------------------------------------------------------------
+[NEW] Guild Masters can enable configurable exceptions for approved non-guild trades; every exception starts disabled
+[NEW] Authorized ranks can choose entire trade categories or allow individual items, with approved trades recorded for review
+[NEW] Optional Guild Map shows temporary outdoor guild-member positions, with personal controls for viewing the map and sharing your position
+[CHANGED] Large guilds now spread updates over time and combine repeated status messages for smoother performance
+[CHANGED] Automatic addon traffic waits 3-8 seconds after login so the game can finish loading first
+
 v0.2.18 - Faster Verification and Clearer Audits
 --------------------------------------------------------------------------------
 [CHANGED] Missing iRC clients are confirmed and reported in about two minutes while retaining three safety probes

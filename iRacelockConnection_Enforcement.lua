@@ -24,6 +24,10 @@ local restrictedTradeCancelled = false
 local lastMailRestrictionReason
 local originalSendMail, originalTakeInboxItem, originalTakeInboxMoney, originalAutoLootMailItem
 local originalAcceptTrade
+local CONJURED_ITEMS = { [5350]=true,[2288]=true,[2136]=true,[3772]=true,[8077]=true,[8078]=true,[8079]=true,[5349]=true,[1113]=true,[1114]=true,[1487]=true,[8075]=true,[8076]=true,[22895]=true }
+local HEALTHSTONE_ITEMS = { [5512]=true,[19004]=true,[19005]=true,[5511]=true,[19006]=true,[19007]=true,[5509]=true,[19008]=true,[19009]=true,[5510]=true,[19010]=true,[19011]=true,[9421]=true,[19012]=true,[19013]=true }
+local QUEST_ITEMS = { [7740]=true,[7741]=true }
+local LOCKBOX_ITEMS = { [16882]=true,[16883]=true,[16884]=true,[16885]=true,[4632]=true,[4633]=true,[4634]=true,[4636]=true,[4637]=true,[4638]=true,[5758]=true,[5759]=true,[5760]=true,[6354]=true,[6355]=true,[6712]=true,[12033]=true,[13875]=true,[13918]=true }
 
 local warningFrame = CreateFrame("Frame", "iRCSelfFoundWarning", UIParent)
 warningFrame:SetSize(620, 32)
@@ -117,6 +121,63 @@ local function getTradePartnerName()
     return partnerName
 end
 
+local function itemIdFromLink(link)
+    return type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil
+end
+
+local function externalTradeExceptionAllowed(partnerName)
+    local rules = iRC:GetConnectionRules()
+    if not rules.guildFoundTradeExceptions then return false, nil end
+    local settings = iRC:GetGuildFoundTradeExceptionSettings()
+    local selectedItems = settings.items or {}
+    if (GetPlayerTradeMoney and GetPlayerTradeMoney() or 0) > 0
+        or (GetTargetTradeMoney and GetTargetTradeMoney() or 0) > 0 then return false, nil end
+    local playerItems, targetItems, itemCount = {}, {}, 0
+    local serviceSlot = TRADE_ENCHANT_SLOT or MAX_TRADE_ITEMS or 7
+    local transferableSlots = math.max(1, serviceSlot - 1)
+    for slot = 1, transferableSlots do
+        local playerId = itemIdFromLink(GetTradePlayerItemLink and GetTradePlayerItemLink(slot))
+        local targetId = itemIdFromLink(GetTradeTargetItemLink and GetTradeTargetItemLink(slot))
+        if playerId then playerItems[#playerItems + 1], itemCount = playerId, itemCount + 1 end
+        if targetId then targetItems[#targetItems + 1], itemCount = targetId, itemCount + 1 end
+    end
+    local playerServiceId = itemIdFromLink(GetTradePlayerItemLink and GetTradePlayerItemLink(serviceSlot))
+    local targetServiceId = itemIdFromLink(GetTradeTargetItemLink and GetTradeTargetItemLink(serviceSlot))
+    if playerServiceId then itemCount = itemCount + 1 end
+    if targetServiceId then itemCount = itemCount + 1 end
+    if itemCount == 0 then return false, nil end
+    local _, playerClass = UnitClass("player")
+    local usedCategories, usedCategoryLookup = {}, {}
+    local function useCategory(label)
+        if not usedCategoryLookup[label] then
+            usedCategoryLookup[label] = true
+            usedCategories[#usedCategories + 1] = label
+        end
+    end
+    local function allowedTransferItem(itemId)
+        if settings.conjured and CONJURED_ITEMS[itemId] and selectedItems.conjured and selectedItems.conjured[itemId] then
+            useCategory("Conjured Food / Water"); return true
+        end
+        if settings.healthstones and HEALTHSTONE_ITEMS[itemId] and selectedItems.healthstones and selectedItems.healthstones[itemId] then
+            useCategory("Healthstones"); return true
+        end
+        if settings.questItems and QUEST_ITEMS[itemId] and selectedItems.questItems and selectedItems.questItems[itemId] then
+            useCategory("Quest Items"); return true
+        end
+        return false
+    end
+    for _, itemId in ipairs(playerItems) do if not allowedTransferItem(itemId) then return false, nil end end
+    for _, itemId in ipairs(targetItems) do if not allowedTransferItem(itemId) then return false, nil end end
+    local selectedLockboxes = selectedItems.lockboxes or {}
+    if playerServiceId and not (settings.lockpickIncoming and LOCKBOX_ITEMS[playerServiceId]
+        and selectedLockboxes[playerServiceId]) then return false, nil end
+    if playerServiceId then useCategory("Lockpicking (Incoming)") end
+    if targetServiceId and not (settings.lockpickOutgoing and playerClass == "ROGUE"
+        and LOCKBOX_ITEMS[targetServiceId] and selectedLockboxes[targetServiceId]) then return false, nil end
+    if targetServiceId then useCategory("Lockpicking (Outgoing)") end
+    return true, table.concat(usedCategories, ", ")
+end
+
 local function getMailRecipient()
     local field = _G.SendMailNameEditBox
         or (_G.MailFrame and _G.MailFrame.SendMailFrame and _G.MailFrame.SendMailFrame.RecipientEditBox)
@@ -138,6 +199,11 @@ function Enforcement:CheckTradeRestriction()
     if not partnerName then return end
     local allowed, reason = iRC:GetGuildFoundTradeStatus(partnerName)
     if allowed then return end
+    if iRC:GetConnectionRules().guildFoundTradeExceptions and not iRC:IsGuildMemberName(partnerName) then
+        -- Keep the trade window open so approved exception items can be
+        -- inspected. The protected accept path performs the final check.
+        return
+    end
 
     restrictedTradeCancelled = true
     iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
@@ -152,10 +218,21 @@ function Enforcement:InstallTradeAPIGuard()
         if isGuildFoundEconomyActive() then
             local partnerName = getTradePartnerName()
             local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
+            local exceptionNote
+            if not allowed and partnerName and not iRC:IsGuildMemberName(partnerName)
+                then
+                local exceptionAllowed
+                exceptionAllowed, exceptionNote = externalTradeExceptionAllowed(partnerName)
+                if exceptionAllowed then allowed, reason = true, nil end
+            end
             if not allowed then
                 iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
                 Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED", partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
                 return
+            end
+            if exceptionNote then
+                iRC:RecordGuildFoundAudit("TRADE_EXCEPTION_APPROVED",
+                    (partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER")) .. " - " .. exceptionNote)
             end
         end
         return originalAcceptTrade(...)

@@ -556,6 +556,8 @@ local function getActiveRuleLines(group)
     if rules.sameRaceGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SAME_RACE", rules.sameRaceMinimumLevel or 1) end
     if rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_MIXED_RACE_60") end
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_ONLY", rules.guildGroupsMinimumLevel or 1) end
+    if rules.guildFoundTradeExceptions then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_TRADE_EXCEPTIONS") end
+    if rules.guildMapEnabled then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_MAP") end
     if #lines == 0 then lines[1] = iRC:Text("GUILD_STATS_NO_ACTIVE_RULES") end
     for index, line in ipairs(lines) do lines[index] = "- " .. line end
     return lines

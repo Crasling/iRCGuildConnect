@@ -59,9 +59,7 @@ end
 
 local function send(prefix, payload, target)
     if not connection() or #payload > 255 then return false end
-    local api = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
-    if not api then return false end
-    api(prefix, payload, target and "WHISPER" or "GUILD", target)
+    if not iRC:SendAddonTraffic(prefix, payload, target and "WHISPER" or "GUILD", target) then return false end
     iRC:DebugMsg(iRC:Text(prefix == IRC_ROSTER and "IRC_GF_SYNC_SENT" or "RL_SYNC_SENT", prefix), 3)
     return true
 end
@@ -493,7 +491,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- discrepancy on every login for some clients.
         moneyValidationAllowedAt = (GetTime and GetTime() or 0) + 5
         C_Timer.After(5, function() Sync:ValidateMoney() end)
-        C_Timer.After(5, function() Sync:Broadcast() end)
+        C_Timer.After(iRC:GetStartupTrafficDelay(), function() Sync:Broadcast() end)
     elseif event == "PLAYER_MONEY" then
         if moneyReady then Sync:SaveCurrentMoney(event) else Sync:ValidateMoney() end
     elseif event == "PLAYER_LOGOUT" then
