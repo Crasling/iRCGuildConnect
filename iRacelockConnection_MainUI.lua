@@ -122,32 +122,41 @@ local function makeRaceCard(parent)
     card.guild:SetJustifyH("LEFT")
 
     card.averageLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.averageLabel:SetPoint("TOP", card, "TOP", -170, -58)
-    card.averageLabel:SetText(iRC:Text("GUILD_STATS_LEVEL_60"))
+    card.averageLabel:SetPoint("TOP", card, "TOP", -240, -58)
+    card.averageLabel:SetWidth(145)
+    card.averageLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_LEVEL_60"))
     card.membersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.membersLabel:SetPoint("TOP", card, "TOP", 0, -58)
-    card.membersLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_PLAYERS"))
+    card.membersLabel:SetPoint("TOP", card, "TOP", -80, -58)
+    card.membersLabel:SetWidth(145)
+    card.membersLabel:SetText(iRC:Text("GUILD_STATS_ONLINE_PEAK"))
     card.totalLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.totalLabel:SetPoint("TOP", card, "TOP", 170, -58)
-    card.totalLabel:SetText(iRC:Text("GUILD_STATS_TOTAL_PLAYERS"))
+    card.totalLabel:SetPoint("TOP", card, "TOP", 80, -58)
+    card.totalLabel:SetWidth(145)
+    card.totalLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_MEMBERS"))
+    card.totalMembersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    card.totalMembersLabel:SetPoint("TOP", card, "TOP", 240, -58)
+    card.totalMembersLabel:SetWidth(145)
+    card.totalMembersLabel:SetText(iRC:Text("GUILD_STATS_TOTAL_MEMBERS"))
     card.average = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     card.average:SetPoint("TOP", card.averageLabel, "BOTTOM", 0, -3)
     card.members = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     card.members:SetPoint("TOP", card.membersLabel, "BOTTOM", 0, -3)
     card.total = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     card.total:SetPoint("TOP", card.totalLabel, "BOTTOM", 0, -3)
+    card.totalMembers = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    card.totalMembers:SetPoint("TOP", card.totalMembersLabel, "BOTTOM", 0, -3)
 
     card.classesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -85)
+    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -91)
     card.classesTitle:SetText(iRC:Text("GUILD_STATS_CLASS_BREAKDOWN"))
     card.classText = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.classText:SetPoint("TOPLEFT", 15, -98)
-    card.classText:SetPoint("TOPRIGHT", -15, -98)
+    card.classText:SetPoint("TOPLEFT", 15, -103)
+    card.classText:SetPoint("TOPRIGHT", -15, -103)
     card.classText:SetJustifyH("CENTER")
     card.classText:SetWordWrap(false)
     card.classBar = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.classBar:SetPoint("TOPLEFT", 16, -113)
-    card.classBar:SetPoint("TOPRIGHT", -16, -113)
+    card.classBar:SetPoint("TOPLEFT", 16, -117)
+    card.classBar:SetPoint("TOPRIGHT", -16, -117)
     card.classBar:SetHeight(12)
     createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
     card.classSegments = {}
@@ -183,7 +192,8 @@ local function makeRaceCard(parent)
         GameTooltip:SetText(self.report.guildName or "—")
         if self.report.timestamp and self.report.timestamp > 0 then GameTooltip:AddLine(iRC:Text("RL_GRID_UPDATED", date("%Y-%m-%d %H:%M", self.report.timestamp))) end
         if self.report.source then GameTooltip:AddLine(iRC:Text("RL_GRID_SOURCE", self.report.source)) end
-        GameTooltip:AddLine(iRC:Text("GUILD_STATS_POPULATION", self.report.membersLevel60 or 0, self.report.activePlayers or 0, self.report.members or 0), 1, 1, 1, true)
+        GameTooltip:AddLine(iRC:Text("GUILD_STATS_POPULATION", self.report.activeLevel60 or 0,
+            self.report.activePlayers or 0, self.report.activeMembers or 0, self.report.members or 0), 1, 1, 1, true)
         if self.report.cached then GameTooltip:AddLine(iRC:Text("RL_GRID_CACHED"), 1, 0.65, 0) end
         for class, average in pairs(self.report.classAverageLevels or {}) do
             GameTooltip:AddLine(iRC:Text("RL_GRID_CLASS_LEVEL", class, average))
@@ -228,14 +238,12 @@ local function makeRacePodium(parent)
         entry.icon:SetSize(30, 30)
         entry.icon:SetPoint("LEFT", 8, 0)
         entry.rank = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        entry.rank:SetPoint("TOPLEFT", entry.icon, "TOPRIGHT", 7, -7)
+        entry.rank:SetPoint("LEFT", entry.icon, "RIGHT", 7, 0)
         entry.rank:SetTextColor(unpack(PODIUM_COLORS[rank]))
         entry.race = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, 0)
         entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
         entry.race:SetJustifyH("LEFT")
-        entry.detail = entry:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        entry.detail:SetPoint("TOPLEFT", entry.rank, "BOTTOMLEFT", 0, -3)
         podium.entries[rank] = entry
     end
     return podium
@@ -359,6 +367,16 @@ function UI:Create()
     frame.raceRefresh:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     frame.raceRefresh:SetScript("OnUpdate", function(self, elapsed)
         self.cooldownElapsed = (self.cooldownElapsed or 0) + elapsed
+        if frame.cacheUpdating then
+            local updating = iRC.RaceGrid and iRC.RaceGrid:IsCacheUpdating()
+            frame.cacheUpdating:SetShown(updating and true or false)
+            if updating then
+                frame.cacheUpdating.rotation = ((frame.cacheUpdating.rotation or 0) + elapsed * 5) % (math.pi * 2)
+                if frame.cacheUpdating.spinner.SetRotation then
+                    frame.cacheUpdating.spinner:SetRotation(frame.cacheUpdating.rotation)
+                end
+            end
+        end
         if self.cooldownElapsed < 0.25 then return end
         self.cooldownElapsed = 0
         local remaining = iRC.RaceGrid and iRC.RaceGrid:GetRefreshCooldownRemaining() or 0
@@ -366,6 +384,17 @@ function UI:Create()
         self:SetText(remaining > 0 and iRC:Text("RL_GRID_REFRESH_COOLDOWN", math.ceil(remaining)) or iRC:Text("RL_GRID_REFRESH"))
     end)
     frame.raceRefresh:Hide()
+    frame.cacheUpdating = CreateFrame("Frame", nil, main)
+    frame.cacheUpdating:SetSize(130, 20)
+    frame.cacheUpdating:SetPoint("RIGHT", frame.raceRefresh, "LEFT", -10, 0)
+    frame.cacheUpdating.spinner = frame.cacheUpdating:CreateTexture(nil, "ARTWORK")
+    frame.cacheUpdating.spinner:SetSize(16, 16)
+    frame.cacheUpdating.spinner:SetPoint("LEFT", 0, 0)
+    frame.cacheUpdating.spinner:SetTexture("Interface\\COMMON\\Indicator-Yellow")
+    frame.cacheUpdating.text = frame.cacheUpdating:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.cacheUpdating.text:SetPoint("LEFT", frame.cacheUpdating.spinner, "RIGHT", 5, 0)
+    frame.cacheUpdating.text:SetText(iRC:Text("RACEGRID_CACHE_UPDATING"))
+    frame.cacheUpdating:Hide()
     frame.contentSubtitle = main:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.contentSubtitle:SetPoint("TOPLEFT", frame.contentTitle, "BOTTOMLEFT", 0, -5)
     frame.contentSubtitle:SetPoint("RIGHT", main, "RIGHT", -22, 0)
@@ -450,18 +479,20 @@ end
 local CLASS_SHORT_NAMES = {
     WARRIOR = "War", PALADIN = "Pal", HUNTER = "Hun", ROGUE = "Rog", PRIEST = "Pri", SHAMAN = "Sha", MAGE = "Mag", WARLOCK = "Lock", DRUID = "Dru",
 }
+local CLASS_BREAKDOWN_ORDER = {
+    "WARRIOR", "PALADIN", "ROGUE", "HUNTER", "SHAMAN", "MAGE", "DRUID", "WARLOCK", "PRIEST",
+}
 
 local function updateClassBreakdown(card, classes, totalMembers)
     local classGroups = {}
     totalMembers = 0
-    for class, count in pairs(classes or {}) do
-        count = tonumber(count) or 0
+    for _, class in ipairs(CLASS_BREAKDOWN_ORDER) do
+        local count = tonumber((classes or {})[class]) or 0
         if count > 0 then
             classGroups[#classGroups + 1] = { class = class, count = count }
             totalMembers = totalMembers + count
         end
     end
-    table.sort(classGroups, function(a, b) return a.count > b.count end)
     local usedWidth = 0
     local availableWidth = math.max(1, (card:GetWidth() or 651) - 36)
     for index, group in ipairs(classGroups) do
@@ -553,9 +584,10 @@ local function setRaceCard(card, group, rank)
     card.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
     card.rank:SetText("#" .. rank)
     card.guild:SetText(RACE_LABELS[group.race] or group.race)
-    card.average:SetText(formatNumber(group.membersLevel60 or 0))
+    card.average:SetText(group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "—")
     card.members:SetText(formatNumber(group.activePlayers or 0))
-    card.total:SetText(formatNumber(group.members or 0))
+    card.total:SetText(group.activeMembers ~= nil and formatNumber(group.activeMembers) or "—")
+    card.totalMembers:SetText(formatNumber(group.members or 0))
     card.report = group
     card.guildKey = guildCardKey(group)
     local expanded = expandedGuildCards[card.guildKey]
@@ -627,11 +659,9 @@ local function updateRacePodium(frame, rankedGroups)
         if group then
             entry.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
             entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
-            entry.detail:SetText(iRC:Text("GUILD_STATS_POPULATION", group.membersLevel60 or 0, group.activePlayers or 0, group.members or 0))
         else
             entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
             entry.race:SetText(iRC:Text("GUILD_STATS_NO_DATA"))
-            entry.detail:SetText(iRC:Text("GUILD_STATS_ZERO_PLAYERS"))
         end
         entry:Show()
     end
@@ -698,6 +728,7 @@ function UI:Refresh()
     self.pendingRefresh = nil
     local frame = self:Create()
     frame.raceRefresh:SetShown(frame.category == "Race Overview")
+    frame.cacheUpdating:SetShown(frame.category == "Race Overview" and iRC.RaceGrid and iRC.RaceGrid:IsCacheUpdating())
     local profile = getProfile(frame)
     local name = profile and profile.name or frame.subjectName or iRC:GetPlayerName()
     local race, class, level = profile and profile.race or "Unknown", profile and profile.class or "Unknown", profile and profile.level or 1

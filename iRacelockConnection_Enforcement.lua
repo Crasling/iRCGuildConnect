@@ -179,7 +179,7 @@ function Enforcement:UpdateMailRestriction()
         lastMailRestrictionReason = nil
         return
     end
-    local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient)
+    local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
     if allowed then
         if button.iRCMailRestricted then button:SetEnabled(true) end
         button.iRCMailRestricted = nil
@@ -219,7 +219,7 @@ local function getInboxRestriction(index)
         if invoiceType then return true, sender end
     end
 
-    local allowed = iRC:GetGuildFoundTradeStatus(sender)
+    local allowed = iRC:GetGuildFoundTradeStatus(sender, true)
     if allowed then return false end
     local containsValue = (tonumber(money) or 0) > 0 or (tonumber(codAmount) or 0) > 0 or hasItem
     if not containsValue then return false end
@@ -244,7 +244,7 @@ function Enforcement:InstallMailAPIGuards()
         originalSendMail = _G.SendMail
         _G.SendMail = function(recipient, ...)
             if isGuildFoundEconomyActive() then
-                local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient)
+                local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
                 if not allowed then
                     iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
                     Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient or "", reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
@@ -508,6 +508,7 @@ function Enforcement:CheckGroup()
 end
 
 function Enforcement:Refresh()
+    if iRC.RaceLockedSync then iRC.RaceLockedSync:RefreshMoneyMonitoring() end
     installLanguageHooks()
     iRC:RecordSelfFoundState()
     scheduleLanguageApply()

@@ -322,6 +322,12 @@ function iRC:ResolveManagementConflict(kind, action)
 end
 
 local function sendManagementConflict(target, kind, value, timestamp, source, checksum, parentChecksum, resolutions)
+    timestamp = tonumber(timestamp)
+    source = tostring(source or "")
+    checksum = tostring(checksum or "")
+    if not target or target == "" or not timestamp or timestamp <= 0 or source == "" or checksum == "" then
+        return false
+    end
     if kind == "BANKS" and #tostring(value or "") > 120 then
         local total = math.ceil(#value / GUILD_BANK_CHUNK_SIZE)
         local transferId = tostring(checksum or "") .. tostring(timestamp or 0)
@@ -547,6 +553,7 @@ function iRC:SetGuildBankExceptions(value, resolutions)
     self:SendGuildBankExceptions()
     self:SendGuildBankMetadata()
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.Enforcement then self.Enforcement:Refresh() end
     self:Print(self:Text("GUILD_BANK_SAVED", count))
     return true
 end
@@ -738,7 +745,11 @@ function iRC:StoreOfficerIncident(record)
 end
 
 function iRC:UploadOfficerIncidentsToGM(targetName)
-    local _, _, ownRankIndex = GetGuildInfo and GetGuildInfo("player")
+    local ownRankIndex
+    if GetGuildInfo then
+        local _, _, playerRankIndex = GetGuildInfo("player")
+        ownRankIndex = playerRankIndex
+    end
     if ownRankIndex ~= 1 or getRosterRank(targetName) ~= 0 then return false end
     local targetKey, now = self:NormalizeName(targetName), time()
     if incidentUploadAt[targetKey] and now - incidentUploadAt[targetKey] < 300 then return false end
@@ -836,6 +847,7 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:DebugMsg(iRC:Text("PROFILE_RECEIVED", sender), 3)
             iRC:UploadOfficerIncidentsToGM(sender)
             iRC:UploadGuildFoundAudit(sender)
+            if iRC.RaceLockedSync then iRC.RaceLockedSync:RelayOverrides(sender) end
         end
     elseif kind == "PRESENCE_REQUEST" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         if parts[3] == "OFFICER_POLL" then
@@ -847,6 +859,7 @@ local function handleMessage(prefix, message, distribution, sender)
         iRC:SendConnectionRules(sender)
         iRC:SendGuildManagementSettings(sender)
         iRC:SendGuildBankExceptions(sender)
+        if iRC.RaceLockedSync then iRC.RaceLockedSync:RelayOverrides(sender) end
     elseif kind == "GROUP_VIOLATION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local violationId, occurredAt = parts[3], tonumber(parts[4])
         local instanceName, players = cleanWireText(parts[5], 60), cleanWireText(parts[6], 100)
@@ -878,7 +891,11 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:DebugMsg(iRC:Text("GUILDFOUND_AUDIT_RECEIVED", action, sender), 3)
         end
     elseif kind == "INCIDENT_UPLOAD" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
-        local _, _, ownRankIndex = GetGuildInfo and GetGuildInfo("player")
+        local ownRankIndex
+        if GetGuildInfo then
+            local _, _, playerRankIndex = GetGuildInfo("player")
+            ownRankIndex = playerRankIndex
+        end
         local occurredAt = tonumber(parts[5])
         if ownRankIndex == 0 and getRosterRank(sender) == 1 and parts[3] and parts[3] ~= "" and occurredAt
             and occurredAt <= time() + 300 and occurredAt >= time() - 86400 then
@@ -918,7 +935,10 @@ local function handleMessage(prefix, message, distribution, sender)
             end
         end
     elseif kind == "GUILD_SETTINGS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
-        local senderRank = getRulesRank(sender, iRC:GetConnection())
+        local connection = iRC:GetConnection()
+        local senderRank = getRulesRank(sender, connection)
+        local senderIsGuildMaster = getRosterRank(sender) == 0
+        local receiverIsGuildMaster = getRosterRank(iRC:GetPlayerName()) == 0
         local enabled = parts[3] == "1"
         local timestamp = tonumber(parts[4])
         local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
@@ -931,7 +951,19 @@ local function handleMessage(prefix, message, distribution, sender)
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
             local savedSource = tostring(settings.source or "")
             local currentEnabled = settings.welcomeNewMembers == true
-            if timestamp == savedTimestamp and enabled ~= currentEnabled then
+            if senderIsGuildMaster then
+                settings.welcomeNewMembers = enabled
+                settings.timestamp = math.floor(timestamp)
+                settings.source = source
+                if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.WELCOME = nil end
+                iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)
+                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            elseif receiverIsGuildMaster and (timestamp > savedTimestamp or enabled ~= currentEnabled) then
+                -- The Guild Master confirms a delegated change by saving and
+                -- broadcasting a fresh GM-authored package.
+                iRC:SetNewMemberWelcomeEnabled(enabled)
+                if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.WELCOME = nil end
+            elseif timestamp == savedTimestamp and enabled ~= currentEnabled then
                 local currentChecksum = guildSettingsChecksum(currentEnabled, savedTimestamp, savedSource)
                 sendManagementConflict(sender, "WELCOME", currentEnabled and "1" or "0", savedTimestamp, savedSource, currentChecksum)
                 showManagementConflict("WELCOME", source, function()
@@ -1008,6 +1040,8 @@ local function handleMessage(prefix, message, distribution, sender)
     elseif kind == "GUILD_BANKS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
+        local senderIsGuildMaster = getRosterRank(sender) == 0
+        local receiverIsGuildMaster = getRosterRank(iRC:GetPlayerName()) == 0
         local names = tostring(parts[3] or "")
         local timestamp = tonumber(parts[4])
         local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 40)
@@ -1017,7 +1051,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local sourceRank = getRulesRank(source, connection)
         local now = GetServerTime and GetServerTime() or time()
         if senderRank and senderRank <= (connection.rankPermissions.guildBanks or 1) and #names <= MAX_GUILD_BANK_WIRE and timestamp and timestamp > 0 and timestamp <= now + 300
-            and source ~= "" and sourceRank ~= nil and sourceRank <= (connection.rankPermissions.guildBanks or 1)
+            and source ~= "" and (senderIsGuildMaster or (sourceRank ~= nil and sourceRank <= (connection.rankPermissions.guildBanks or 1)))
             and validBranchChecksum(parentChecksum) and validResolutions(resolutions)
             and checksum == guildBanksChecksum(names, timestamp, source) then
             local members, valid, count = {}, true, 0
@@ -1051,14 +1085,26 @@ local function handleMessage(prefix, message, distribution, sender)
                 exceptions.checksum = checksum
                 exceptions.parentChecksum = parentChecksum
                 exceptions.resolutions = resolutions
-                if incomingResolvesCurrent and iRC.PendingManagementConflicts then
+                if (senderIsGuildMaster or incomingResolvesCurrent) and iRC.PendingManagementConflicts then
                     iRC.PendingManagementConflicts.BANKS = nil
                 end
                 iRC:DebugMsg(iRC:Text("GUILD_BANKS_RECEIVED", sender), 3)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+                if iRC.Enforcement then iRC.Enforcement:Refresh() end
             end
             if valid and checksum == currentChecksum then
                 return
+            elseif valid and senderIsGuildMaster then
+                -- The actual roster Guild Master is the final authority for
+                -- Management data. Their package replaces any local officer
+                -- branch without raising a conflict, regardless of ancestry.
+                applyIncoming()
+            elseif valid and receiverIsGuildMaster then
+                -- A valid change from a delegated rank is confirmed by the
+                -- Guild Master and immediately becomes a new GM-authored head.
+                local pair = resolvedPair(currentChecksum, checksum)
+                iRC:SetGuildBankExceptions(names, pair)
+                if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.BANKS = nil end
             elseif valid and timestamp >= savedTimestamp and (incomingResolvesCurrent or incomingIsChild) then
                 applyIncoming()
             elseif valid and incomingIsAncestor then
@@ -1080,13 +1126,17 @@ local function handleMessage(prefix, message, distribution, sender)
             end
         end
     elseif kind == "MGMT_CONFLICT" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
-        local senderRank = getRulesRank(sender, iRC:GetConnection())
+        local connection = iRC:GetConnection()
+        if not connection then return end
+        local senderRank = getRulesRank(sender, connection)
         local settingKind, value = parts[3], tostring(parts[4] or "")
         local timestamp, source = tonumber(parts[5]), tostring(parts[6] or ""):gsub("[%c]", ""):sub(1, 80)
         local checksum = tostring(parts[7] or ""):lower()
         local now = GetServerTime and GetServerTime() or time()
-        if senderRank and senderRank <= (connection.rankPermissions.guildBanks or 1) and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= "" then
-            local connection = iRC:GetConnection()
+        local permission = settingKind == "WELCOME" and "notifications"
+            or settingKind == "BANKS" and "guildBanks" or nil
+        local allowedRank = permission and iRC:GetGuildRankPermission(permission)
+        if allowedRank and senderRank and senderRank <= allowedRank and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= "" then
             if settingKind == "WELCOME" and (value == "0" or value == "1")
                 and checksum == guildSettingsChecksum(value == "1", timestamp, source) then
                 local settings, incoming = connection.guildNotifications, value == "1"
@@ -1144,7 +1194,17 @@ local function handleMessage(prefix, message, distribution, sender)
         local savedHex = tostring(connection and connection.rulesTimestampHex or "0"):lower()
         local savedTimestamp = savedHex:match("^[0-9a-f]+$") and (tonumber(savedHex, 16) or 0) or 0
         local senderRank = getRulesRank(sender, connection)
-        if senderRank == 0 then timestampSource = sender end
+        -- Only the real roster rank 0 gets unconditional rules authority.
+        -- Test/Fake GM clients must never compete with or block the real GM.
+        local senderIsGuildMaster = getRosterRank(sender) == 0
+        if senderIsGuildMaster then
+            timestampSource = sender
+            if not validTimestamp or incomingTimestamp > time() + 300 then
+                incomingTimestamp = time()
+                timestampHex = string.format("%x", incomingTimestamp)
+                validTimestamp = true
+            end
+        end
         local timestampSourceValid = incomingTimestamp == 0
             or (timestampSource ~= "" and iRC:IsGuildMasterName(timestampSource))
         local incomingRules = {
@@ -1173,13 +1233,15 @@ local function handleMessage(prefix, message, distribution, sender)
             or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
             or connection.receivedRulesBackup == incomingBackup
         local authorityName, authorityRank = getRulesAuthority()
-        local senderIsAuthority = senderRank ~= nil and (authorityRank == nil or senderRank < authorityRank
+        local senderIsAuthority = senderIsGuildMaster or senderRank ~= nil and (authorityRank == nil or senderRank < authorityRank
             or (senderRank == authorityRank and (not authorityName
                 or distribution == "WHISPER"
                 or iRC:NormalizeName(authorityName) == iRC:NormalizeName(sender))))
-        local timestampAccepted = senderRank == 0 or incomingTimestamp >= savedTimestamp
-        if connection and senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5 and validTimestamp and incomingTimestamp <= time() + 300
-            and timestampSourceValid and timestampAccepted and checksumValid and sameStampMatches then
+        local timestampAccepted = senderIsGuildMaster or incomingTimestamp >= savedTimestamp
+        local contentAccepted = senderIsGuildMaster or checksumValid and sameStampMatches
+        local acceptRules = senderIsGuildMaster or senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5
+            and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid and timestampAccepted and contentAccepted
+        if connection and acceptRules then
             for key, value in pairs(incomingRules) do connection.rules[key] = value end
             connection.rulesTimestampHex = timestampHex
             connection.rulesTimestampSource = timestampSource
@@ -1192,10 +1254,10 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:DebugMsg(iRC:Text("RULES_RECEIVED", sender), 3)
             send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex, connection.receivedRulesChecksum }, SEP), "WHISPER", sender)
         elseif connection and senderRank ~= nil then
-            if not checksumValid or not sameStampMatches then
+            if not senderIsGuildMaster and (not checksumValid or not sameStampMatches) then
                 iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_MISMATCH", sender, timestampHex), 1)
             end
-            iRC:DebugMsg(iRC:Text("RULES_IGNORED_LOWER_AUTHORITY", sender), 3)
+            if not senderIsAuthority then iRC:DebugMsg(iRC:Text("RULES_IGNORED_LOWER_AUTHORITY", sender), 3) end
         end
     end
 end

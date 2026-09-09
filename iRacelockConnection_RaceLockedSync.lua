@@ -7,6 +7,8 @@ iRC.RaceLockedSync = Sync
 local IRC_ROSTER = "iRCGFRoster"
 local lastBroadcast, pendingRelays = {}, {}
 local moneyReady = false
+local moneyValidationAllowedAt = 0
+local localHistory
 
 local function shortName(name)
     return type(name) == "string" and name:match("^([^-]+)") or nil
@@ -83,11 +85,23 @@ function Sync:GetStatus(name, snapshot)
     if not entry then return nil end
     if iRC:NormalizeName(name) == iRC:NormalizeName(iRC:GetPlayerName()) then
         entry.verified, entry.clean, entry.tamperAt = self:GetLocalRawStatus()
+        local history = localHistory and localHistory()
+        if history then
+            entry.moneyBefore = history.moneyBeforeDiscrepancy
+            entry.moneyAfter = history.moneyAfterDiscrepancy
+        end
     end
     local effectiveVerified = entry.gmVerified
     local effectiveClean = entry.gmClean
     if effectiveVerified == nil then effectiveVerified = entry.verified end
-    if effectiveClean == nil then effectiveClean = entry.clean end
+    -- A decision only clears evidence that existed before it. A later gold
+    -- discrepancy must require a fresh review instead of inheriting an older
+    -- Clean override.
+    local discrepancyAt = tonumber(entry.tamperAt) or 0
+    local decisionAt = tonumber(entry.gmTimestamp) or 0
+    if effectiveClean == nil or discrepancyAt > 0 and decisionAt <= discrepancyAt then
+        effectiveClean = entry.clean
+    end
     return {
         -- Keep the member report as audit metadata, but use an explicit Guild
         -- Master decision as the effective Guild Found result. Addon presence
@@ -96,34 +110,113 @@ function Sync:GetStatus(name, snapshot)
         lastSeen = entry.lastSeen, gmTimestamp = entry.gmTimestamp,
         overrideSource = entry.overrideSource, directOverride = entry.directOverride,
         tamperAt = entry.tamperAt, rawVerified = entry.verified, rawClean = entry.clean,
+        moneyBefore = entry.moneyBefore, moneyAfter = entry.moneyAfter,
         gmVerified = entry.gmVerified, gmClean = entry.gmClean,
+        cleanDecisionSuperseded = entry.gmClean ~= nil and discrepancyAt > 0 and decisionAt <= discrepancyAt,
     }
 end
 
-local function localHistory()
+localHistory = function()
     iRCCharDB = iRCCharDB or {}
     iRCCharDB.guildFoundHistory = iRCCharDB.guildFoundHistory or {}
     return iRCCharDB.guildFoundHistory
+end
+
+-- Keep a second, lightly sealed copy under an intentionally generic key. This
+-- is not cryptographic protection (SavedVariables are player-owned), but it
+-- detects casual edits that only change the plainly readable snapshot.
+local function snapshotSalt()
+    local identity = iRC:NormalizeName(iRC:GetPlayerName()) or ""
+    local value = 7919
+    for index = 1, #identity do
+        value = (value * 33 + identity:byte(index)) % 1048573
+    end
+    return value
+end
+
+local function sealSnapshot(value)
+    value = tonumber(value)
+    if not value or value < 0 or value % 1 ~= 0 then return nil end
+    return string.format("%X", value * 257 + snapshotSalt())
+end
+
+local function unsealSnapshot(value)
+    if type(value) ~= "string" or value == "" or value:find("[^0-9A-Fa-f]") then return nil end
+    local encoded = tonumber(value, 16)
+    if not encoded then return nil end
+    local decoded = (encoded - snapshotSalt()) / 257
+    if decoded < 0 or decoded % 1 ~= 0 then return nil end
+    return decoded
+end
+
+local function writeMoneySnapshot(history, value)
+    history.money = value
+    history.rk = sealSnapshot(value)
 end
 
 function Sync:ObserveSelfFound()
     local history = localHistory()
     if iRC:GetSelfFoundState() then
         if (UnitLevel("player") or 0) >= 60 then history.maxLevelSelfFound = true end
-        history.moneyDiscrepancyAt = nil
     end
+end
+
+function Sync:IsGuildFoundSubject()
+    if not iRC:IsGuildConnectionActive() or not iRC:IsGuildFoundRequired() then return false end
+    return iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
+        or (UnitLevel("player") or 0) >= 60
+        or iRC:IsGuildBankException(iRC:GetPlayerName())
+end
+
+function Sync:IsMoneyMonitoringActive()
+    return iRC:IsGuildConnectionActive()
+end
+
+function Sync:RefreshMoneyMonitoring()
+    if not moneyReady or not GetMoney then return end
+    local history, active = localHistory(), self:IsMoneyMonitoringActive()
+    if history.moneyMonitoringActive ~= active then
+        writeMoneySnapshot(history, GetMoney())
+        history.moneyMonitoringActive = active
+    end
+end
+
+function Sync:SaveCurrentMoney(reason)
+    if not moneyReady or not GetMoney then return false end
+    local history = localHistory()
+    writeMoneySnapshot(history, GetMoney())
+    history.moneyMonitoringActive = self:IsMoneyMonitoringActive()
+    history.moneyLastLoggedAt = time()
+    history.moneyLastLogReason = tostring(reason or "UPDATE")
+    return true
 end
 
 function Sync:ValidateMoney()
     if moneyReady then return end
+    if GetTime and GetTime() < moneyValidationAllowedAt then return end
     local current = GetMoney and GetMoney()
     if not current then return end
     local history = localHistory()
-    if history.money ~= nil and history.money ~= current and not iRC:GetSelfFoundState() then
+    local monitoringActive = self:IsMoneyMonitoringActive()
+    local openSnapshot = tonumber(history.money)
+    local sealedExists = history.rk ~= nil
+    local sealedSnapshot = unsealSnapshot(history.rk)
+    local snapshotMismatch = sealedExists
+        and (sealedSnapshot == nil or openSnapshot == nil or sealedSnapshot ~= openSnapshot)
+    local baseline = sealedSnapshot or openSnapshot
+    if monitoringActive and history.moneyMonitoringActive == true and baseline ~= nil
+        and (snapshotMismatch or baseline ~= current) then
         history.moneyDiscrepancyAt = time()
+        history.moneyBeforeDiscrepancy = baseline
+        history.moneyAfterDiscrepancy = current
         iRC:Print(iRC:Text("RL_MONEY_DISCREPANCY"))
     end
-    history.money = current
+    -- Existing installations have no sealed value yet. The first login after
+    -- upgrading establishes it without treating the migration as tampering.
+    writeMoneySnapshot(history, current)
+    history.moneyMonitoringActive = monitoringActive
+    history.moneyLastLoggedAt = time()
+    history.moneyLastLogReason = "LOGIN_VALIDATION"
     moneyReady = true
     self:ObserveSelfFound()
 end
@@ -136,10 +229,15 @@ function Sync:GetLocalRawStatus()
     return verified, clean, tamperAt
 end
 
-local function storeSelf(name, verified, clean, tamperAt, source)
+local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, moneyAfter)
     local entry = entryFor(name)
     if not entry then return end
     entry.verified, entry.clean, entry.tamperAt = verified, clean, tamperAt
+    if tonumber(tamperAt) and tonumber(tamperAt) > 0 then
+        entry.moneyBefore, entry.moneyAfter = tonumber(moneyBefore), tonumber(moneyAfter)
+    else
+        entry.moneyBefore, entry.moneyAfter = nil, nil
+    end
     entry.source, entry.lastSeen = source, time()
 end
 
@@ -162,6 +260,11 @@ local function overridePayload(marker, entry)
     return marker .. entry.name .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. tostring(entry.gmTimestamp)
 end
 
+local function relayPayload(entry)
+    return "R:" .. entry.name .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean)
+        .. "," .. tostring(entry.gmTimestamp) .. "," .. tostring(entry.overrideSource or "")
+end
+
 local function queueRelay(name)
     local db, entry = connection(), entryFor(name)
     if not db or not entry or not entry.gmTimestamp then return end
@@ -175,11 +278,48 @@ local function queueRelay(name)
         local current = connection()
         if not current or current.key ~= guildKey then return end
         local row = current.guildFoundRoster[key]
-        if row and row.gmTimestamp then send(IRC_ROSTER, overridePayload("O:", row)) end
+        if row and row.gmTimestamp and iRC:IsRulesetBroadcaster() then send(IRC_ROSTER, relayPayload(row)) end
     end)
 end
 
-function Sync:SetOverride(name, verified, clean)
+function Sync:RelayOverrides(targetName)
+    local db = connection()
+    if not db or not iRC:IsRulesetBroadcaster() then return false end
+    local payload, sent = "R:", false
+    local function flush()
+        if #payload <= 2 then return end
+        if send(IRC_ROSTER, payload, targetName) then sent = true end
+        payload = "O:"
+    end
+    local rows = {}
+    for _, entry in pairs(db.guildFoundRoster or {}) do
+        -- Decisions created locally before the relay-source field existed can
+        -- be attributed safely only on their original authorized client.
+        if type(entry) == "table" and entry.directOverride and entry.overrideSource == "iRC"
+            and iRC:HasGuildPermission("verification") then
+            entry.overrideSource = iRC:GetPlayerName()
+        end
+        local sourceRank = type(entry) == "table" and iRC:GetGuildMemberRankIndex(entry.overrideSource)
+        local allowedRank = db.rankPermissions.verification or 1
+        if type(entry) == "table" and entry.name and entry.gmTimestamp and sourceRank and sourceRank <= allowedRank
+            and iRC:IsGuildMemberName(entry.name) then
+            rows[#rows + 1] = entry
+        end
+    end
+    table.sort(rows, function(a, b) return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name) end)
+    for _, entry in ipairs(rows) do
+        local row = entry.name .. "," .. wireBool(entry.gmVerified) .. ","
+            .. wireBool(entry.gmClean) .. "," .. tostring(entry.gmTimestamp) .. "," .. entry.overrideSource
+        if #payload > 2 and #payload + #row + 1 > 255 then flush() end
+        if #payload + #row + (#payload > 2 and 1 or 0) <= 255 then
+            payload = payload .. (#payload > 2 and "," or "") .. row
+        end
+    end
+    flush()
+    return sent
+end
+
+function Sync:SetOverride(name, verified, clean, goldOnly)
     if not iRC:HasGuildPermission("verification") or not connection() or not iRC:IsGuildMemberName(name) then return false end
     local memberLevel
     if GetNumGuildMembers and GetGuildRosterInfo then
@@ -192,18 +332,26 @@ function Sync:SetOverride(name, verified, clean)
         end
     end
     local hybridProgression = iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
-    if not memberLevel or (memberLevel < 60 and not hybridProgression) then
+    if not memberLevel or (not goldOnly and verified ~= nil and memberLevel < 60 and not hybridProgression) then
         iRC:Print(iRC:Text("RL_OVERRIDE_LEVEL_60_ONLY"))
         return false
     end
     if verified ~= nil and type(verified) ~= "boolean" or clean ~= nil and type(clean) ~= "boolean" then return false end
     local entry = entryFor(name)
-    local stamp = math.max(time(), (entry.gmTimestamp or 0) + 1)
-    if not storeOverride(name, verified, clean, stamp, "iRC", true) then return false end
+    local stamp = math.max(time(), (entry.gmTimestamp or 0) + 1, (entry.tamperAt or 0) + 1)
+    if not storeOverride(name, verified, clean, stamp, iRC:GetPlayerName(), true) then return false end
     send(IRC_ROSTER, overridePayload("G:", entry))
     iRC:Print(iRC:Text("RL_OVERRIDE_SAVED", entry.name))
     refresh()
     return true
+end
+
+function Sync:SetGoldOverride(name, clean)
+    if clean ~= nil and type(clean) ~= "boolean" then return false end
+    local entry = entryFor(name)
+    if not entry then return false end
+    -- A gold review must not alter an existing eligibility decision.
+    return self:SetOverride(name, entry.gmVerified, clean, true)
 end
 
 function Sync:DescribeStatus(name, compact, status)
@@ -237,7 +385,9 @@ function Sync:ReceiveRoster(message, sender)
         if (fields[2] ~= "0" and fields[2] ~= "1") or (fields[3] ~= "0" and fields[3] ~= "1") then return end
         local tamperAt = number(fields[4], time() + 300)
         if not tamperAt then return end
-        storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC")
+        local moneyBefore = number(fields[8], 1000000000000000)
+        local moneyAfter = number(fields[9], 1000000000000000)
+        storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC", moneyBefore, moneyAfter)
         local stamp = number(fields[7], time() + 300)
         if validBool(fields[5]) and validBool(fields[6]) and stamp and stamp > 0
             and storeOverride(name, readBool(fields[5]), readBool(fields[6]), stamp, "iRC relay", false) then
@@ -249,13 +399,28 @@ function Sync:ReceiveRoster(message, sender)
         local direct = marker == "G:"
         local senderRank = iRC:GetGuildMemberRankIndex(sender)
         local allowedRank = connection().rankPermissions.verification or 1
-        if direct and (senderRank == nil or senderRank > allowedRank) then return end
+        -- Both new decisions and relays must come from a rank currently
+        -- trusted with verification management. Relays retain the original
+        -- decision timestamp and cannot silently become a newer decision.
+        if senderRank == nil or senderRank > allowedRank then return end
         if #fields % 4 ~= 0 then return end
         for index = 1, #fields, 4 do
             local name, stamp = fields[index], number(fields[index + 3], time() + 300)
             if validBool(fields[index + 1]) and validBool(fields[index + 2]) and stamp
                 and storeOverride(name, readBool(fields[index + 1]), readBool(fields[index + 2]), stamp,
-                    direct and "iRC GM" or "iRC relay", direct) then
+                    direct and sender or "iRC relay", direct) then
+                pendingRelays[iRC:NormalizeName(name)] = nil
+            end
+        end
+    elseif marker == "R:" then
+        if #fields % 5 ~= 0 then return end
+        local allowedRank = connection().rankPermissions.verification or 1
+        for index = 1, #fields, 5 do
+            local name, stamp, source = fields[index], number(fields[index + 3], time() + 300), fields[index + 4]
+            local sourceRank = iRC:GetGuildMemberRankIndex(source)
+            if validBool(fields[index + 1]) and validBool(fields[index + 2]) and stamp
+                and sourceRank and sourceRank <= allowedRank
+                and storeOverride(name, readBool(fields[index + 1]), readBool(fields[index + 2]), stamp, source, false) then
                 pendingRelays[iRC:NormalizeName(name)] = nil
             end
         end
@@ -281,16 +446,21 @@ end
 function Sync:Broadcast()
     local db = connection()
     if not db or not moneyReady then return end
+    self:RefreshMoneyMonitoring()
     local now = GetTime()
     if lastBroadcast[db.key] and now - lastBroadcast[db.key] < 5 then return end
     lastBroadcast[db.key] = now
     local name = shortName(iRC:GetPlayerName())
     local verified, clean, tamperAt = self:GetLocalRawStatus()
-    storeSelf(name, verified, clean, tamperAt, "iRC")
-    if (UnitLevel("player") or 0) >= 60 or iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND" then
+    local history = localHistory()
+    storeSelf(name, verified, clean, tamperAt, "iRC", history.moneyBeforeDiscrepancy, history.moneyAfterDiscrepancy)
+    if self:IsMoneyMonitoringActive() then
         local entry = entryFor(name)
         local msg = "S:" .. name .. "," .. wireBool(verified) .. "," .. wireBool(clean) .. "," .. tostring(tamperAt)
-        if entry.gmTimestamp then msg = msg .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. entry.gmTimestamp end
+        if entry.gmTimestamp or entry.moneyBefore ~= nil or entry.moneyAfter ~= nil then
+            msg = msg .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. tostring(entry.gmTimestamp or 0)
+                .. "," .. tostring(entry.moneyBefore or "") .. "," .. tostring(entry.moneyAfter or "")
+        end
         send(IRC_ROSTER, msg)
     end
 end
@@ -304,19 +474,43 @@ frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:RegisterEvent("UNIT_AURA")
 frame:RegisterEvent("PLAYER_DEAD")
 frame:RegisterEvent("CHAT_MSG_ADDON")
+frame:RegisterEvent("MAIL_SHOW")
+frame:RegisterEvent("MAIL_CLOSED")
+frame:RegisterEvent("MERCHANT_SHOW")
+frame:RegisterEvent("MERCHANT_CLOSED")
+frame:RegisterEvent("TRADE_SHOW")
+frame:RegisterEvent("TRADE_CLOSED")
+frame:RegisterEvent("QUEST_TURNED_IN")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
         local register = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix or RegisterAddonMessagePrefix
         if register then register(IRC_ROSTER) end
     elseif event == "PLAYER_LOGIN" then
-        Sync:ValidateMoney()
+        -- GetMoney can briefly expose an incomplete value while the character
+        -- enters the world. Comparing at PLAYER_LOGIN produced a false gold
+        -- discrepancy on every login for some clients.
+        moneyValidationAllowedAt = (GetTime and GetTime() or 0) + 5
+        C_Timer.After(5, function() Sync:ValidateMoney() end)
         C_Timer.After(5, function() Sync:Broadcast() end)
-    elseif event == "PLAYER_MONEY" or event == "PLAYER_LOGOUT" then
-        if moneyReady and GetMoney then localHistory().money = GetMoney() end
+    elseif event == "PLAYER_MONEY" then
+        if moneyReady then Sync:SaveCurrentMoney(event) else Sync:ValidateMoney() end
+    elseif event == "PLAYER_LOGOUT" then
+        Sync:SaveCurrentMoney(event)
+    elseif event == "MAIL_SHOW" or event == "MAIL_CLOSED"
+        or event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED"
+        or event == "TRADE_SHOW" or event == "TRADE_CLOSED" then
+        Sync:SaveCurrentMoney(event)
+        if event == "MAIL_CLOSED" or event == "MERCHANT_CLOSED" or event == "TRADE_CLOSED" then
+            C_Timer.After(0.5, function() Sync:SaveCurrentMoney(event .. "_SETTLED") end)
+        end
+    elseif event == "QUEST_TURNED_IN" then
+        Sync:SaveCurrentMoney(event)
+        C_Timer.After(1, function() Sync:SaveCurrentMoney("QUEST_TURNED_IN_SETTLED") end)
     elseif event == "UNIT_AURA" or event == "PLAYER_LEVEL_UP" then
         if event == "UNIT_AURA" and ... ~= "player" then return end
         Sync:ObserveSelfFound()
+        Sync:RefreshMoneyMonitoring()
     elseif event == "PLAYER_DEAD" then
         Sync:RecordDeath(iRC:GetPlayerName())
     elseif event == "CHAT_MSG_ADDON" then

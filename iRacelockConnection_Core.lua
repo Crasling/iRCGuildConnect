@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRacelockConnection"
 iRC.DisplayName = "iRacelockConnection"
-iRC.Version = "0.2.16"
+iRC.Version = "0.2.17"
 iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -354,7 +354,12 @@ end
 
 function iRC:GetPlayerGuildRankIndex()
     if self:IsTestAdminGuildMaster() then return 0 end
-    local _, _, rankIndex = GetGuildInfo and GetGuildInfo("player")
+    local rankIndex
+    if GetGuildInfo then
+        local _, _, playerRankIndex = GetGuildInfo("player")
+        rankIndex = playerRankIndex
+    end
+    if type(rankIndex) ~= "number" then rankIndex = self:GetGuildMemberRankIndex(self:GetPlayerName()) end
     return type(rankIndex) == "number" and rankIndex or nil
 end
 
@@ -498,16 +503,10 @@ function iRC:IsGuildMemberName(name)
     return false
 end
 
-function iRC:GetGuildFoundTradeStatus(name)
+function iRC:GetGuildFoundTradeStatus(name, allowOfflineGuildMember)
     if type(name) ~= "string" or name == "" then return false, "Choose a guild member first." end
     if not self:IsGuildMemberName(name) then
         return false, name .. " is not in your guild."
-    end
-
-    local profile = self:FindConnectionProfile(name)
-    local verification = self.GetMemberVerification and self:GetMemberVerification(name, true, profile) or nil
-    if not profile or not verification or verification.state ~= "verified" then
-        return false, name .. " does not have a current iRC response."
     end
 
     local targetIsGuildBank = self:IsGuildBankException(name)
@@ -518,17 +517,44 @@ function iRC:GetGuildFoundTradeStatus(name)
             if own.verified ~= nil then ownVerified = own.verified end
             if own.clean ~= nil then ownClean = own.clean end
         end
-        if not ownVerified or not ownClean then return false, self:Text("RL_LOCAL_INELIGIBLE") end
-        local status = self.RaceLockedSync:GetStatus(name)
-        if status and status.lastSeen then
-            if status.verified == true and status.clean == true then return true end
-            return false, self:Text("RL_MEMBER_INELIGIBLE", name)
+        if not ownVerified or not ownClean then
+            return false, self:Text("RL_LOCAL_INELIGIBLE_DETAIL",
+                self:Text(ownVerified and "RL_VERIFIED" or "RL_UNVERIFIED"),
+                self:Text(ownClean and "RL_CLEAN" or "RL_FLAGGED"))
         end
     end
 
+    -- A configured Guild Bank is the trusted destination/source exception.
+    -- The local character must still pass the check above, but the bank must
+    -- not be rejected by its own Self-Found, verification or gold state.
     if targetIsGuildBank then return true end
 
-    local evidence = profile.selfFoundEvidence or nil
+    local profile = self:FindConnectionProfile(name)
+    if not allowOfflineGuildMember then
+        local verification = self.GetMemberVerification and self:GetMemberVerification(name, true, profile) or nil
+        if not profile or not verification or verification.state ~= "verified" then
+            return false, name .. " does not have a current iRC response."
+        end
+    end
+
+    -- Offline mail cannot require live presence, but it must still use a saved
+    -- Guild Found decision. A roster entry alone is never sufficient.
+    if self.RaceLockedSync then
+        local status = self.RaceLockedSync:GetStatus(name)
+        if status and (status.lastSeen or status.gmTimestamp) then
+            if status.verified == true and status.clean == true then return true end
+            return false, self:Text("RL_MEMBER_INELIGIBLE_DETAIL", name,
+                self:Text(status.verified and "RL_VERIFIED" or "RL_UNVERIFIED"),
+                self:Text(status.clean and "RL_CLEAN" or "RL_FLAGGED"))
+        end
+        if allowOfflineGuildMember then
+            return false, self:Text("RL_MEMBER_NO_SAVED_VERIFICATION", name)
+        end
+    elseif allowOfflineGuildMember then
+        return false, self:Text("RL_MEMBER_NO_SAVED_VERIFICATION", name)
+    end
+
+    local evidence = profile and profile.selfFoundEvidence or nil
     local status = evidence and evidence.status or "UNVERIFIED"
     if status == "VERIFIED" or status == "LEVEL_60_EXCEPTION" then return true end
     return false, name .. " does not have verified Self-Found history (" .. string.lower(status) .. ")."

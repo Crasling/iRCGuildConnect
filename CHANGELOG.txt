@@ -2,6 +2,22 @@
 iRacelockConnection - Changelog
 ================================================================================
 
+v0.2.17 - Guild Statistics and Economy Verification
+--------------------------------------------------------------------------------
+[CHANGED] Guild Statistics now highlights recent activity with active level 60s, 30-day active members, 24-hour online peaks, and total members
+[CHANGED] Guild rankings prioritize active level 60s, active members, online peaks, then total members
+[NEW] Guild Statistics shows when cached reports are updating and uses a consistent class order
+[NEW] Guild Found reports show gold changes and protect their snapshots against manual tampering
+[CHANGED] Gold monitoring now covers all members of an active iRC guild, including Self-Found characters and Guild Banks
+[NEW] Authorized reviewers can review gold separately from Guild Found eligibility
+[NEW] Verification staff receive a local reminder every five minutes while members need attention
+[FIX] Guild Found decisions remain synchronized, and the Guild Master has final authority over rules and Management settings
+[FIX] Valid delegated Management changes are confirmed and republished by the Guild Master
+[FIX] Guild Banks work as trusted transaction exceptions without Self-Found warnings or rule violations
+[FIX] Unverified Guild Found members are correctly listed under Needs attention
+[FIX] Trades require current iRC presence, while offline mail requires saved Verified and Clean status
+[FIX] Login checks, delegated Management access, and cached Guild Statistics sharing are more reliable
+
 v0.2.16 - Progression Rules and Delegated Management
 --------------------------------------------------------------------------------
 [CHANGED] Progression Rules now use one clear choice: unrestricted, Self-Found, or Self-Found/Guild-Found

@@ -920,7 +920,7 @@ do
     _, y = CreateSubcategoryHeader(guildNotificationsContent, L.DELEGATED_PERMISSIONS_CATEGORY, y - 4)
     _, y = CreateInfoText(guildNotificationsContent, "Only the Guild Master can change these limits. Each selection includes that rank and every rank above it.", y, "GameFontDisableSmall")
     local permissionLabels = {
-        verification = "Verification decisions", presence = "Presence checks and warnings",
+        verification = "Verification decisions", presence = "Presence checks and automatic warnings",
         incidents = "Incident history", guildBanks = "Guild Bank Exceptions",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
     }

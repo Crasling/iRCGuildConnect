@@ -347,9 +347,17 @@ function Dashboard:Create()
                 "",
                 iRC:Text("GF_REPORT_RAW_VERIFIED", statusWord(status.rawVerified, "GF_HISTORY_VERIFIED", "GF_HISTORY_UNVERIFIED")),
                 iRC:Text("GF_REPORT_RAW_CLEAN", statusWord(status.rawClean, "GF_GOLD_CLEAN", "GF_GOLD_FLAGGED")),
+                iRC:Text("GF_REPORT_EFFECTIVE_VERIFIED", statusWord(status.verified, "RL_VERIFIED", "RL_UNVERIFIED")),
+                iRC:Text("GF_REPORT_EFFECTIVE_CLEAN", statusWord(status.clean, "RL_CLEAN", "RL_FLAGGED")),
             }
             if status.tamperAt and status.tamperAt > 0 then
                 lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
+                if status.moneyBefore ~= nil and status.moneyAfter ~= nil then
+                    local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
+                    lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_GOLD_CHANGE", formatMoney(status.moneyBefore), formatMoney(status.moneyAfter)) .. iRC.Colors.Reset
+                else
+                    lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
+                end
             end
             if status.gmTimestamp then
                 lines[#lines + 1] = ""
@@ -359,6 +367,9 @@ function Dashboard:Create()
                     or statusWord(status.gmClean, "RL_CLEAN", "RL_FLAGGED")
                 lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_VALUES", gmVerified, gmClean)
                 lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_SOURCE", status.overrideSource or iRC:Text("RL_STATUS_UNKNOWN"), date("%Y-%m-%d %H:%M", status.gmTimestamp))
+                if status.cleanDecisionSuperseded then
+                    lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
+                end
             end
             reportBody:SetText(table.concat(lines, "\n"))
         end
@@ -382,13 +393,16 @@ function Dashboard:Create()
         { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_APPROVE", gmOnly = true, maxLevelOnly = true, tone = "approve", run = function(targetName)
             iRC.RaceLockedSync:SetOverride(targetName, true, true)
         end },
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_MARK_CLEAN", gmOnly = true, tone = "approve", run = function(targetName)
+            iRC.RaceLockedSync:SetGoldOverride(targetName, true)
+        end },
         { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_UNVERIFY", gmOnly = true, maxLevelOnly = true, tone = "danger", run = function(targetName)
             iRC.RaceLockedSync:SetOverride(targetName, false, nil)
         end },
-        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_FLAG", gmOnly = true, maxLevelOnly = true, tone = "danger", run = function(targetName)
-            iRC.RaceLockedSync:SetOverride(targetName, nil, false)
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_FLAG", gmOnly = true, tone = "danger", run = function(targetName)
+            iRC.RaceLockedSync:SetGoldOverride(targetName, false)
         end },
-        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_RESET", gmOnly = true, maxLevelOnly = true, tone = "reset", run = function(targetName)
+        { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_RESET", gmOnly = true, tone = "reset", run = function(targetName)
             iRC.RaceLockedSync:SetOverride(targetName, nil, nil)
         end },
     }
@@ -619,6 +633,40 @@ local function classSummary(classes)
     return table.concat(list, ", ")
 end
 
+local function getEffectiveVerificationState(member, progressionMode, usesGuildFound)
+    if member.raceMismatch then return "attention" end
+    local state = member.verification and member.verification.state or "missing"
+    local hasLiveAddon = state == "verified" or state == "compatible"
+    if hasLiveAddon and iRC:IsGuildBankException(member.name) then return state end
+    if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
+        return "attention"
+    end
+    local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+    local needsGuildFoundVerification = hasLiveAddon and usesGuildFound
+        and ((progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and member.selfFound ~= true)
+            or (progressionMode == "SELF_FOUND" and (member.level or 0) >= 60))
+    if needsGuildFoundVerification and not (guildFoundStatus and guildFoundStatus.verified == true) then
+        return "attention"
+    end
+    return state
+end
+
+function Dashboard:GetNeedsAttentionCount()
+    if not iRC:IsGuildConnectionActive() then return 0 end
+    local rules = iRC:GetConnectionRules() or {}
+    local progressionMode = iRC:GetProgressionMode(rules)
+    local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+        or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
+    local attention = 0
+    for _, member in ipairs(iRC:GetGuildRosterRows()) do
+        local state = getEffectiveVerificationState(member, progressionMode, usesGuildFound)
+        if state ~= "verified" and state ~= "compatible" and state ~= "offline" and state ~= "inactive" then
+            attention = attention + 1
+        end
+    end
+    return attention
+end
+
 function Dashboard:Refresh()
     self.pendingRefresh = nil
     local frame = self:Create()
@@ -681,18 +729,7 @@ function Dashboard:Refresh()
         local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
             or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
         local function effectiveVerificationState(member)
-            if member.raceMismatch then return "attention" end
-            local state = member.verification and member.verification.state or "missing"
-            local hasLiveAddon = state == "verified" or state == "compatible"
-            if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
-                return "attention"
-            end
-            local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
-            if progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and state == "compatible" and member.selfFound ~= true
-                and not (guildFoundStatus and guildFoundStatus.verified == true) then
-                return "attention"
-            end
-            return state
+            return getEffectiveVerificationState(member, progressionMode, usesGuildFound)
         end
         local progressHeader = usesGuildFound and iRC:Text("VERIFICATION_PROGRESS_SF_GF_COLUMN")
             or (usesSelfFound and iRC:Text("VERIFICATION_PROGRESS_COLUMN") or iRC:Text("VERIFICATION_ONLY_COLUMN"))
@@ -794,9 +831,10 @@ function Dashboard:Refresh()
             local belowMaxLevel = (member.level or 0) < 60
             local lowerLevelStatusOK = liveState == "verified" or liveState == "compatible"
             local lowerLevelOffline = liveState == "offline" or liveState == "inactive"
-            local selfFoundViolation = (progressionMode == "SELF_FOUND" and belowMaxLevel and lowerLevelStatusOK and member.selfFound ~= true)
+            local selfFoundViolation = not guildBankException
+                and ((progressionMode == "SELF_FOUND" and belowMaxLevel and lowerLevelStatusOK and member.selfFound ~= true)
                 or (progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and liveState == "compatible" and member.selfFound ~= true
-                    and not (guildFoundStatus and guildFoundStatus.verified == true))
+                    and not (guildFoundStatus and guildFoundStatus.verified == true)))
             local cleanText = selfFoundViolation and iRC:Text("VERIFICATION_SELF_FOUND_INACTIVE_STATUS")
                 or (belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
                 or (lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")) or iRC:Text("RL_STATUS_UNKNOWN")
@@ -819,7 +857,11 @@ function Dashboard:Refresh()
             if iRC.RaceLockedSync then statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus) end
             if raceWarning then statusTooltip = statusTooltip .. "\n\n" .. raceWarning end
             if iRC:HasGuildPermission("verification") then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
-            local color = member.raceMismatch and RED or (verification.state == "verified" and GREEN or (verification.state == "compatible" and RED or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED)))
+            local effectiveState = effectiveVerificationState(member)
+            local color = effectiveState == "attention" and RED
+                or (verification.state == "verified" and GREEN
+                or (verification.state == "compatible" and RED
+                or ((verification.state == "offline" or verification.state == "inactive") and GRAY or RED)))
             local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
                 if mouseButton == "RightButton" then
                     openMemberManagementMenu(frame, selectedMember)
@@ -920,4 +962,14 @@ end
 
 function iRC:OpenConnectionDashboard()
     Dashboard:Open()
+end
+
+if C_Timer and C_Timer.NewTicker then
+    C_Timer.NewTicker(300, function()
+        if not iRC:HasGuildPermission("verification") then return end
+        local attention = Dashboard:GetNeedsAttentionCount()
+        if attention > 0 then
+            iRC:Print(iRC.Colors.Yellow .. iRC:Text("VERIFICATION_ATTENTION_REMINDER", attention) .. iRC.Colors.Reset)
+        end
+    end)
 end

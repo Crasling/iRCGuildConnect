@@ -16,6 +16,15 @@ local CACHE_REQUEST_WINDOW = 5
 local CACHE_TRANSFER_TIMEOUT = 15
 local CACHE_CHUNK_SIZE = 100
 local MAX_CACHE_PACKAGES = 32
+local cacheUpdatingUntil = 0
+
+local function setCacheUpdating(active)
+    cacheUpdatingUntil = active and ((GetTime and GetTime() or 0) + CACHE_TRANSFER_TIMEOUT) or 0
+end
+
+function RaceGrid:IsCacheUpdating()
+    return cacheUpdatingUntil > (GetTime and GetTime() or 0)
+end
 local SEP = "\t"
 local ALLIANCE_RACES = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HORDE_RACES = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
@@ -237,7 +246,8 @@ function RaceGrid:GetLocalReport()
         guid = profile.guid,
         guildName = guild.guildName, race = guild.race, faction = guild.faction,
         members = guild.members, activePlayers = guild.activePlayers,
-        membersLevel60 = guild.membersLevel60, averageLevel = guild.averageLevel,
+        membersLevel60 = guild.membersLevel60, activeLevel60 = guild.activeLevel60,
+        activeMembers = guild.activeMembers, averageLevel = guild.averageLevel,
         classes = guild.classes, guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
         guildContacts = guild.guildContacts,
@@ -276,14 +286,16 @@ end
 function RaceGrid:BuildOwnGuildReports()
     local connection = iRC:GetConnection()
     if not connection or not iRC:IsGuildConnectionActive() then return {} end
+    local profile = iRC:GetLocalProfile()
     local guildRace = normalizeRaceToken(iRC:GetGuildRace())
     local guildName = tostring(connection.guildName or (GetGuildInfo and GetGuildInfo("player")) or "")
     if not guildRace or guildName == "" then return {} end
     local rules = iRC:GetConnectionRules() or {}
     local group = {
+        name = profile.name, guid = profile.guid, addonVersion = iRC.Version,
         race = guildRace, faction = ALLIANCE_RACES[guildRace] and "Alliance" or "Horde",
-        guildName = guildName, members = 0, activePlayers = 0, totalLevel = 0,
-        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0,
+        guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
+        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel60 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
         rulesKnown = true,
@@ -307,15 +319,21 @@ function RaceGrid:BuildOwnGuildReports()
         if key ~= "" and not counted[key] then
             counted[key] = true
             local level, class = member.level or 1, member.class or "UNKNOWN"
+            local recentlyOnline = member.online == true
+                or member.lastOnlineDays ~= nil and member.lastOnlineDays <= 30
             group.members, group.totalLevel = group.members + 1, group.totalLevel + level
             if member.online then group.activePlayers = group.activePlayers + 1 end
+            if recentlyOnline then group.activeMembers = group.activeMembers + 1 end
             if participation == "verified" then group.verifiedMembers = group.verifiedMembers + 1
             elseif participation == "compatible" then group.compatibleMembers = group.compatibleMembers + 1 end
             if level >= 19 then
                 group.classes[class] = (group.classes[class] or 0) + 1
                 group.classTotals[class] = (group.classTotals[class] or 0) + level
             end
-            if level >= 60 then group.membersLevel60 = group.membersLevel60 + 1 end
+            if level >= 60 then
+                group.membersLevel60 = group.membersLevel60 + 1
+                if recentlyOnline then group.activeLevel60 = group.activeLevel60 + 1 end
+            end
         end
     end
     if group.members == 0 then return {} end
@@ -339,7 +357,8 @@ end
 
 local function serializeGuildReport(report)
     local fields = {
-        "GUILD_REPORT", WIRE_VERSION, report.name, report.guid, report.guildName, report.race,
+        "GUILD_REPORT", WIRE_VERSION, tostring(report.name or ""), tostring(report.guid or ""),
+        tostring(report.guildName or ""), tostring(report.race or ""),
         tostring(report.membersLevel60 or 0), tostring(report.activePlayers or 0), tostring(report.members or 0),
         tostring(report.averageLevel or 0), tostring(report.timestamp or time()), tostring(report.guildDeaths or 0),
     }
@@ -358,7 +377,9 @@ local function serializeGuildReport(report)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 140)
-    fields[#fields + 1] = report.addonVersion or iRC.Version
+    fields[#fields + 1] = tostring(report.addonVersion or iRC.Version or "")
+    fields[#fields + 1] = report.activeLevel60 ~= nil and tostring(report.activeLevel60) or ""
+    fields[#fields + 1] = report.activeMembers ~= nil and tostring(report.activeMembers) or ""
     return table.concat(fields, SEP)
 end
 
@@ -381,7 +402,8 @@ function RaceGrid:BroadcastReport(fromClick)
         iRC:DebugMsg(iRC:Text("RACEGRID_REPORT_SEND_FAILED", report.guildName, #payload), 1)
         return false
     end
-    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
+    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel60,
+        report.activeMembers, report.activePlayers, report.members), 3)
     return true
 end
 
@@ -455,9 +477,16 @@ local function parseGuildReport(parts)
     local guildContacts = tostring(parts[25] or "")
     if #guildContacts > 140 or guildContacts:find("[%c]") then return nil end
     local addonVersion = parts[26]
+    local activeLevel60, activeMembers
+    if parts[27] ~= nil and parts[27] ~= "" or parts[28] ~= nil and parts[28] ~= "" then
+        activeLevel60 = validNumber(parts[27], 0, members)
+        activeMembers = validNumber(parts[28], 0, members)
+        if not activeLevel60 or not activeMembers or activeLevel60 > level60 or activeLevel60 > activeMembers then return nil end
+    end
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
+        activeLevel60 = activeLevel60, activeMembers = activeMembers,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
         classes = classes, rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
@@ -503,7 +532,9 @@ local function sendCacheOffers(requestId, requester)
     observedCacheOffers[requestId] = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
     for _, report in pairs(store.guildReports) do
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or 0
-        if timestamp > 0 and now - timestamp <= REPORT_MAX_AGE and (tonumber(report.cacheHop) or 0) == 0 then
+        local hasSenderIdentity = type(report) == "table" and type(report.name) == "string" and report.name ~= ""
+            and type(report.guid) == "string" and report.guid ~= ""
+        if hasSenderIdentity and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE and (tonumber(report.cacheHop) or 0) == 0 then
             local payload = serializeGuildReport(report)
             local checksum, guildName = payloadChecksum(payload), report.guildName
             local function offer()
@@ -527,6 +558,7 @@ end
 local function requestBestCacheOffers(requestId)
     local request = cacheRequests[requestId]
     if not request then return end
+    local requested = 0
     for guildKey, offer in pairs(request.offers) do
         local localReport = getServerStore().guildReports[guildKey]
         local localTimestamp = localReport and (tonumber(localReport.timestamp) or 0) or 0
@@ -534,9 +566,14 @@ local function requestBestCacheOffers(requestId)
             or (offer.timestamp == localTimestamp and localReport and (tonumber(localReport.cacheHop) or 0) > 0)
         if shouldRequest then
             request.selected[guildKey] = offer
+            requested = requested + 1
             send(PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName, offer.timestamp, offer.checksum }, SEP), "WHISPER", offer.sender)
             iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REQUEST_SENT", offer.guildName, offer.sender), 3)
         end
+    end
+    if requested == 0 then
+        cacheRequests[requestId] = nil
+        setCacheUpdating(false)
     end
 end
 
@@ -549,6 +586,7 @@ function RaceGrid:RequestGuildCache()
         cacheRequests[requestId] = nil
         return false
     end
+    setCacheUpdating(true)
     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_DISCOVERY_SENT"), 3)
     if C_Timer and C_Timer.After then C_Timer.After(CACHE_REQUEST_WINDOW, function() requestBestCacheOffers(requestId) end) end
     return true
@@ -611,6 +649,7 @@ local function handleCacheMessage(parts, sender, distribution)
             or selected.checksum ~= checksum
             or not part or not total or total < 1 or total > 8 or part < 1 or part > total
             or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") or not chunk:match("^[0-9a-fA-F]+$") then return true end
+        setCacheUpdating(true)
         local key = fullNameKey(sender) .. ":" .. requestId .. ":" .. checksum
         local transfer = incomingCacheTransfers[key]
         if not transfer or transfer.total ~= total then
@@ -633,6 +672,12 @@ local function handleCacheMessage(parts, sender, distribution)
             iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REPORT_RECEIVED", report.guildName, sender), 3)
         end
         request.selected[normalizeGuildName(guildName)] = nil
+        local pending
+        for _ in pairs(request.selected) do pending = true; break end
+        if not pending then
+            cacheRequests[requestId] = nil
+            setCacheUpdating(false)
+        end
         return true
     end
     return false
@@ -650,7 +695,8 @@ local function handleMessage(prefix, message, sender, distribution)
     if not report or iRC:NormalizeName(report.name) ~= iRC:NormalizeName(sender) then return end
     iRC:CheckForNewVersion(report.addonVersion)
     RaceGrid:StoreGuildReport(report)
-    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.membersLevel60, report.activePlayers, report.members), 3)
+    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel60 or 0,
+        report.activeMembers or 0, report.activePlayers, report.members), 3)
 end
 
 function iRC:GetGlobalRaceOverview()
@@ -672,7 +718,8 @@ function iRC:GetGlobalRaceOverview()
 end
 
 local function guildRank(a, b)
-    if (a.membersLevel60 or 0) ~= (b.membersLevel60 or 0) then return (a.membersLevel60 or 0) > (b.membersLevel60 or 0) end
+    if (a.activeLevel60 or -1) ~= (b.activeLevel60 or -1) then return (a.activeLevel60 or -1) > (b.activeLevel60 or -1) end
+    if (a.activeMembers or -1) ~= (b.activeMembers or -1) then return (a.activeMembers or -1) > (b.activeMembers or -1) end
     if (a.activePlayers or 0) ~= (b.activePlayers or 0) then return (a.activePlayers or 0) > (b.activePlayers or 0) end
     if (a.members or 0) ~= (b.members or 0) then return (a.members or 0) > (b.members or 0) end
     return normalizeGuildName(a.guildName) < normalizeGuildName(b.guildName)

@@ -133,7 +133,11 @@ function iRC:IsPresenceNotificationLeader()
     -- Notification leadership must follow the real guild roster. Testing
     -- overrides may unlock configuration, but they cannot grant access to
     -- officer chat or displace an actual authorized iRC officer client.
-    local _, _, ownRankIndex = GetGuildInfo and GetGuildInfo("player")
+    local ownRankIndex
+    if GetGuildInfo then
+        local _, _, playerRankIndex = GetGuildInfo("player")
+        ownRankIndex = playerRankIndex
+    end
     local presenceRank = tonumber(connection.rankPermissions and connection.rankPermissions.presence) or 1
     if type(ownRankIndex) ~= "number" or ownRankIndex < 0 or ownRankIndex > presenceRank then return false end
     local ownName = self:NormalizeName(self:GetPlayerName())
@@ -400,6 +404,14 @@ function iRC:GetGuildRosterRows()
     for index = 1, count do
         local name, _, rankIndex, level, className, _, _, _, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
         if name then
+            local lastOnlineDays
+            if not online and GetGuildRosterLastOnline then
+                local years, months, days, hours = GetGuildRosterLastOnline(index)
+                if years ~= nil then
+                    lastOnlineDays = (tonumber(years) or 0) * 365 + (tonumber(months) or 0) * 30
+                        + (tonumber(days) or 0) + (tonumber(hours) or 0) / 24
+                end
+            end
             local key = self:NormalizeName(name)
             local profile = profiles[key]
             local compatibilityMember = compatibleMembers[key]
@@ -444,6 +456,7 @@ function iRC:GetGuildRosterRows()
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
                 level = level or (profile and profile.level) or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
                 race = race, online = online and true or false, profile = profile,
+                lastOnlineDays = lastOnlineDays,
                 compatibility = compatibility,
                 compatibilityMember = compatibilityMember,
                 raceLockedStatus = syncedStatus or false,
