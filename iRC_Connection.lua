@@ -1264,6 +1264,9 @@ local function handleMessage(prefix, message, distribution, sender)
             end
         end
     elseif kind == "GUILD_HOMEPAGE_DESC" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        if iRC:DeferLowTraffic("traffic:homepage-description-receive:" .. iRC:NormalizeName(sender), function()
+            handleMessage(prefix, message, distribution, sender)
+        end) then return end
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
         local value, timestamp = tostring(parts[3] or ""), tonumber(parts[4])

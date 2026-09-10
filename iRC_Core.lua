@@ -823,6 +823,7 @@ end
 
 function iRC:SetGuildHomepageDescription(value)
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
+    if self:IsLowTrafficMode() then return false end
     local connection = self:GetConnection()
     if not connection then return false end
     value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")

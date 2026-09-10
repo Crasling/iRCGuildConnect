@@ -260,6 +260,7 @@ end
 
 function RaceGrid:StoreGuildReport(report, silent)
     if type(report) ~= "table" or type(report.guildName) ~= "string" or report.guildName == "" then return false end
+    if iRC:IsLowTrafficMode() then return false end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.race = normalizeRaceToken(report.race)
     if not report.race then return false end
@@ -721,6 +722,10 @@ local function handleCacheMessage(parts, sender, distribution)
     elseif kind == "CACHE_DATA" and distribution == "WHISPER" then
         local guildName = tostring(parts[4] or "")
         local part, total = tonumber(parts[5]), tonumber(parts[6])
+        if iRC:DeferLowTraffic("traffic:racegrid-cache:" .. iRC:NormalizeName(sender) .. ":"
+            .. requestId .. ":" .. tostring(part or ""), function()
+                handleCacheMessage(parts, sender, distribution)
+            end) then return true end
         local checksum, chunk = tostring(parts[7] or ""):lower(), tostring(parts[8] or "")
         local request = cacheRequests[requestId]
         local selected = request and request.selected[normalizeGuildName(guildName)]
@@ -766,6 +771,10 @@ end
 local function handleMessage(prefix, message, sender, distribution)
     if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
+    if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC"))
+        and iRC:DeferLowTraffic("traffic:racegrid-report:" .. iRC:NormalizeName(sender), function()
+            handleMessage(prefix, message, sender, distribution)
+        end) then return end
     local parts = split(message)
     if parts[1] and parts[1]:match("^CACHE_") and handleCacheMessage(parts, sender, distribution) then return end
     if parts[1] == "GUILD_DESC" and parts[2] == WIRE_VERSION then
@@ -803,7 +812,7 @@ function iRC:GetGlobalRaceOverview()
     for key, report in pairs(stored) do
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or nil
         if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE
-            or iRC:ContainsProfanity(report.guildDescription) then
+            or (not iRC:IsLowTrafficMode() and iRC:ContainsProfanity(report.guildDescription)) then
             stored[key] = nil
             serverStore.guildActivity[key] = nil
         elseif normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then

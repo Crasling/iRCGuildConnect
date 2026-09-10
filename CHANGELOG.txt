@@ -9,7 +9,7 @@ v0.4.1 - Guild Connection
 [NEW] Added a dedicated Guild Found progression mode with verification and economy rules at every level
 [NEW] Made Race Lock an explicit guild rule. It starts disabled and controls race enforcement, native-language restrictions, and same-race group rules
 [NEW] Expanded Guild Homepage management with custom descriptions, 20 selectable icons for Normal and GuildFound guilds, and a dedicated contacts tab with delegated permissions
-[NEW] Added a multilingual profanity filter that blocks guild descriptions locally and rejects filtered live or cached reports
+[NEW] Added a multilingual profanity filter that blocks guild descriptions locally and rejects filtered live or cached reports without scanning during combat
 [NEW] Added Normal, RaceLocked, and GuildFound tags and filters to Guild Statistics, with automatic selection for the player's current guild
 [CHANGED] Members without rule-management permission now see a readable active-rules summary; delegated managers can switch between the summary and editor
 [CHANGED] Guild reports prioritize up to five online invite contacts, highlight fresh snapshots, cache roster details, and preserve scroll position during updates
