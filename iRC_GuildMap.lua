@@ -156,6 +156,10 @@ end
 local function initializeMap()
     if mapInitialized or not WorldMapFrame or not WorldMapFrame.ScrollContainer then return end
     mapInitialized = true
+    local function addLabelOutline(label)
+        local fontFile, fontSize = label:GetFont()
+        if fontFile and fontSize then label:SetFont(fontFile, fontSize, "OUTLINE") end
+    end
     local toggle = CreateFrame("CheckButton", "iRCGuildMapToggle", WorldMapFrame, "UICheckButtonTemplate")
     toggle:SetSize(22, 22)
     -- Keep this below Blizzard's top-right controls. The map canvas renders
@@ -166,6 +170,7 @@ local function initializeMap()
     toggle.label = toggle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     toggle.label:SetPoint("RIGHT", toggle, "LEFT", -2, 0)
     toggle.label:SetText("iRC: Share my Pos.")
+    addLabelOutline(toggle.label)
     toggle:SetScript("OnClick", function(self)
         iRC:GetSettings().shareGuildMapPosition = self:GetChecked() and true or false
         if self:GetChecked() then GuildMap:SchedulePosition(1) end
@@ -178,6 +183,7 @@ local function initializeMap()
     showToggle.label = showToggle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     showToggle.label:SetPoint("RIGHT", showToggle, "LEFT", -2, 0)
     showToggle.label:SetText("iRC: Show Guild Members")
+    addLabelOutline(showToggle.label)
     showToggle:SetScript("OnClick", function(self)
         GuildMap:SetShown(self:GetChecked() and true or false)
         if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
