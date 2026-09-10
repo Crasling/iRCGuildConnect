@@ -748,7 +748,8 @@ local attentionReminderToken = 0
 local attentionCheckPending = false
 
 function Dashboard:CheckAttentionReminder(periodic)
-    if not iRC:HasGuildPermission("verification") or not iRC:IsGuildConnectionActive() then
+    if iRC:GetSettings().hideAttentionReminders
+        or not iRC:HasGuildPermission("verification") or not iRC:IsGuildConnectionActive() then
         attentionReminderMembers = {}
         attentionReminderPending = false
         attentionReminderToken = attentionReminderToken + 1

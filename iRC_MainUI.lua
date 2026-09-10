@@ -281,6 +281,11 @@ local function makeRacePodium(parent)
         entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, 0)
         entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
         entry.race:SetJustifyH("LEFT")
+        entry.tag = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        entry.tag:SetPoint("TOPLEFT", entry.race, "BOTTOMLEFT", 0, -1)
+        entry.tag:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
+        entry.tag:SetJustifyH("LEFT")
+        entry.tag:Hide()
         podium.entries[rank] = entry
     end
     return podium
@@ -777,9 +782,21 @@ local function updateRacePodium(frame, rankedGroups)
         if group then
             entry.icon:SetTexture(getGuildCardIcon(group))
             entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
+            local tag, tagColor = getGuildCardTag(group)
+            local showTag = guildStatsFilter == "ALL" and tag ~= nil
+            entry.race:ClearAllPoints()
+            entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, showTag and 7 or 0)
+            entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, showTag and 7 or 0)
+            entry.tag:SetText(showTag and ("[" .. tag .. "]") or "")
+            if tagColor then entry.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
+            entry.tag:SetShown(showTag)
         else
             entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
             entry.race:SetText(iRC:Text("GUILD_STATS_NO_DATA"))
+            entry.race:ClearAllPoints()
+            entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, 0)
+            entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
+            entry.tag:Hide()
         end
         entry:Show()
     end

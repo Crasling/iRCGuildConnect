@@ -8,6 +8,7 @@ local IRC_ROSTER = "iRCGFRoster"
 local lastBroadcast, pendingRelays = {}, {}
 local moneyReady = false
 local moneyValidationAllowedAt = 0
+local moneyWatchdog
 local localHistory
 
 local function shortName(name)
@@ -188,6 +189,19 @@ function Sync:SaveCurrentMoney(reason)
     history.moneyLastLoggedAt = time()
     history.moneyLastLogReason = tostring(reason or "UPDATE")
     return true
+end
+
+function Sync:CheckLocalMoneySnapshot()
+    if iRC:IsLowTrafficMode() or not moneyReady or not GetMoney then return false end
+    local history = localHistory()
+    local openSnapshot = tonumber(history.money)
+    local sealedSnapshot = unsealSnapshot(history.rk)
+    -- Never repair a mismatched saved snapshot here; login validation owns
+    -- tamper detection. This only catches a missed in-game money event.
+    if sealedSnapshot == nil or openSnapshot ~= sealedSnapshot then return false end
+    local current = GetMoney()
+    if current == sealedSnapshot then return false end
+    return self:SaveCurrentMoney("LOCAL_MONEY_WATCHDOG")
 end
 
 function Sync:ValidateMoney()
@@ -483,6 +497,8 @@ frame:RegisterEvent("MERCHANT_SHOW")
 frame:RegisterEvent("MERCHANT_CLOSED")
 frame:RegisterEvent("TRADE_SHOW")
 frame:RegisterEvent("TRADE_CLOSED")
+frame:RegisterEvent("LOOT_OPENED")
+frame:RegisterEvent("LOOT_CLOSED")
 frame:RegisterEvent("QUEST_TURNED_IN")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -495,6 +511,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- discrepancy on every login for some clients.
         moneyValidationAllowedAt = (GetTime and GetTime() or 0) + 5
         C_Timer.After(5, function() Sync:ValidateMoney() end)
+        if not moneyWatchdog and C_Timer.NewTicker then
+            moneyWatchdog = C_Timer.NewTicker(15, function() Sync:CheckLocalMoneySnapshot() end)
+        end
         C_Timer.After(iRC:GetStartupTrafficDelay(), function() Sync:Broadcast() end)
     elseif event == "PLAYER_MONEY" then
         if moneyReady then Sync:SaveCurrentMoney(event) else Sync:ValidateMoney() end
@@ -502,9 +521,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         Sync:SaveCurrentMoney(event)
     elseif event == "MAIL_SHOW" or event == "MAIL_CLOSED"
         or event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED"
-        or event == "TRADE_SHOW" or event == "TRADE_CLOSED" then
+        or event == "TRADE_SHOW" or event == "TRADE_CLOSED"
+        or event == "LOOT_OPENED" or event == "LOOT_CLOSED" then
         Sync:SaveCurrentMoney(event)
-        if event == "MAIL_CLOSED" or event == "MERCHANT_CLOSED" or event == "TRADE_CLOSED" then
+        if event == "MAIL_CLOSED" or event == "MERCHANT_CLOSED" or event == "TRADE_CLOSED"
+            or event == "LOOT_CLOSED" then
             C_Timer.After(0.5, function() Sync:SaveCurrentMoney(event .. "_SETTLED") end)
         end
     elseif event == "QUEST_TURNED_IN" then

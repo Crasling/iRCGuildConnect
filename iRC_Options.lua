@@ -33,6 +33,9 @@ local function BuildActiveRulesExplanation()
     local progression = iRC:GetProgressionMode(rules)
     if progression == "SELF_FOUND" then
         lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SELF_FOUND")
+        if iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND" then
+            lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SWITCH_TO_GUILD_FOUND")
+        end
     elseif progression == "GUILD_FOUND" then
         lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_FOUND_ONLY")
     elseif progression == "SELF_FOUND_OR_GUILD_FOUND" then
@@ -40,7 +43,12 @@ local function BuildActiveRulesExplanation()
     end
     if rules.guildFoundTradeExceptions then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_TRADE_EXCEPTIONS") end
     if rules.raceLock == true and rules.sameRaceGroupsOnly then
-        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SAME_RACE", rules.sameRaceMinimumLevel or 1)
+        local minimumLevel = tonumber(rules.sameRaceMinimumLevel) or 1
+        local race = iRC:GetGuildRace()
+        local raceName = race ~= "" and iRC:Text("GUILD_RACE_" .. race) or iRC:Text("GUILD_STATS_UNKNOWN_GUILD")
+        lines[#lines + 1] = minimumLevel <= 1
+            and iRC:Text("RULES_READ_ONLY_SAME_RACE", raceName)
+            or iRC:Text("RULES_READ_ONLY_SAME_RACE_LEVEL", minimumLevel, raceName)
         if rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_MIXED_60") end
     end
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_GROUPS", rules.guildGroupsMinimumLevel or 1) end
@@ -83,10 +91,33 @@ local function SetSimpleTooltip(frame, title, description)
     end)
 end
 
-local function CreateSettingsCheckbox(parent, label, description, yOffset, getValue, setValue, indent)
+local function CreateSyncBadge(parent, yOffset)
+    local badge = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    badge:SetSize(38, 17)
+    badge:EnableMouse(true)
+    badge:SetPoint("TOPLEFT", parent, "TOPLEFT", 5, yOffset - 2)
+    badge:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 9,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    badge:SetBackdropColor(0.015, 0.075, 0.16, 0.92)
+    badge:SetBackdropBorderColor(0.18, 0.55, 1, 1)
+    badge.text = badge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    badge.text:SetPoint("CENTER", 0, 1)
+    badge.text:SetText("Sync")
+    badge.text:SetTextColor(0.45, 0.75, 1)
+    SetSimpleTooltip(badge, "Sync", "This setting is shared with the guild.")
+    return badge
+end
+
+local function CreateSettingsCheckbox(parent, label, description, yOffset, getValue, setValue, indent, synced)
     indent = indent or 0
     local checkbox = CreateFrame("CheckButton", nil, parent, CHECKBOX_TEMPLATE)
-    checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 20 + indent, yOffset)
+    local left = (synced and 48 or 20) + indent
+    checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", left, yOffset)
+    if synced then checkbox.syncBadge = CreateSyncBadge(parent, yOffset) end
     if not checkbox.Text then
         checkbox.Text = checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
@@ -100,8 +131,8 @@ local function CreateSettingsCheckbox(parent, label, description, yOffset, getVa
     local nextY = yOffset - 22
     if description and description ~= "" then
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        desc:SetPoint("TOPLEFT", parent, "TOPLEFT", 48 + indent, nextY)
-        desc:SetWidth(470 - indent)
+        desc:SetPoint("TOPLEFT", parent, "TOPLEFT", left + 28, nextY)
+        desc:SetWidth((synced and 442 or 470) - indent)
         desc:SetJustifyH("LEFT")
         desc:SetText(description)
         checkbox.description = desc
@@ -111,14 +142,16 @@ local function CreateSettingsCheckbox(parent, label, description, yOffset, getVa
     return checkbox, nextY
 end
 
-local function CreateSettingsDropdown(frameName, parent, label, description, yOffset, getValue, setValue, getOptions, getOptionLabel)
+local function CreateSettingsDropdown(frameName, parent, label, description, yOffset, getValue, setValue, getOptions, getOptionLabel, synced)
+    local left = synced and 48 or 20
     local title = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, yOffset)
+    title:SetPoint("TOPLEFT", parent, "TOPLEFT", left, yOffset)
     title:SetText(label)
+    if synced then CreateSyncBadge(parent, yOffset) end
 
     -- Classic's enable/disable helpers look up template children by frame name.
     local dropdown = CreateFrame("Frame", frameName, parent, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, yOffset - 15)
+    dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", left - 12, yOffset - 15)
     UIDropDownMenu_SetWidth(dropdown, 220)
     UIDropDownMenu_JustifyText(dropdown, "LEFT")
     dropdown.Refresh = function()
@@ -143,8 +176,8 @@ local function CreateSettingsDropdown(frameName, parent, label, description, yOf
     local nextY = yOffset - 48
     if description and description ~= "" then
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        desc:SetPoint("TOPLEFT", parent, "TOPLEFT", 48, nextY)
-        desc:SetWidth(470)
+        desc:SetPoint("TOPLEFT", parent, "TOPLEFT", left + 28, nextY)
+        desc:SetWidth(synced and 442 or 470)
         desc:SetJustifyH("LEFT")
         desc:SetText(description)
         nextY = nextY - math.max(desc:GetStringHeight(), 12) - 6
@@ -505,62 +538,32 @@ guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighligh
 _, y = CreateInfoText(connectionContent, L.GUILD_RULES_INTRO, y, "GameFontDisableSmall")
 guildActivationCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_ACTIVATION_LABEL, L.GUILD_ACTIVATION_DESC, y,
     function() return iRC:IsGuildConnectionActive() end,
-    function(value) iRC:SetGuildConnectionActive(value) end)
-_, y = CreateSubcategoryHeader(connectionContent, L.GUILD_RACE_HEADER, y - 2)
+    function(value) iRC:SetGuildConnectionActive(value) end, nil, true)
+_, y = CreateSubcategoryHeader(connectionContent, "Race Rules", y - 2)
 raceRuleUI.lock, y = CreateSettingsCheckbox(connectionContent, L.RACE_LOCK_RULE, L.RACE_LOCK_RULE_DESC, y,
     function() return iRC:GetConnectionRules().raceLock end,
-    function(value) iRC:SetConnectionRule("raceLock", value) end)
+    function(value) iRC:SetConnectionRule("raceLock", value) end, nil, true)
 raceRuleUI.race, y = CreateSettingsDropdown("iRCGuildRaceDropdown", connectionContent, L.GUILD_RACE_LABEL, L.GUILD_RACE_DESC, y,
     function() return iRC:GetGuildRace() end,
     function(value) iRC:SetGuildRace(value) end,
     function() return iRC:GetAvailableGuildRaces() end,
-    function(value) return iRC:Text("GUILD_RACE_" .. value) end)
-_, y = CreateSubcategoryHeader(connectionContent, "Language", y - 2)
+    function(value) return iRC:Text("GUILD_RACE_" .. value) end, true)
 raceRuleUI.language, y = CreateSettingsCheckbox(connectionContent, "Native language chat", "Forces your chat boxes to use your character's racial language when you send a message.", y,
     function() return iRC:GetConnectionRules().nativeTongueOnly end,
-    function(value) iRC:SetConnectionRule("nativeTongueOnly", value) end)
-_, y = CreateSubcategoryHeader(connectionContent, "Progression", y - 2)
-progressionModeDropdown, y = CreateSettingsDropdown("iRCProgressionModeDropdown", connectionContent,
-    L.PROGRESSION_MODE, L.PROGRESSION_MODE_DESC, y,
-    function() return iRC:GetProgressionMode() end,
-    function(value) iRC:SetProgressionMode(value) end,
-    function() return { "NONE", "SELF_FOUND", "GUILD_FOUND", "SELF_FOUND_OR_GUILD_FOUND" } end,
-    function(value)
-        if value == "SELF_FOUND" then return L.PROGRESSION_SELF_FOUND end
-        if value == "GUILD_FOUND" then return L.PROGRESSION_GUILD_FOUND end
-        if value == "SELF_FOUND_OR_GUILD_FOUND" then return L.PROGRESSION_HYBRID end
-        return L.PROGRESSION_NONE
-    end)
-maxLevelProgressionDropdown, y = CreateSettingsDropdown("iRCMaxLevelProgressionDropdown", connectionContent,
-    L.PROGRESSION_MAX_LEVEL, L.PROGRESSION_MAX_LEVEL_DESC, y,
-    function() return iRC:GetMaxLevelProgressionMode() end,
-    function(value) iRC:SetMaxLevelProgressionMode(value) end,
-    function() return { "SELF_FOUND", "GUILD_FOUND", "UNRESTRICTED" } end,
-    function(value)
-        if value == "GUILD_FOUND" then return L.PROGRESSION_MAX_GUILD_FOUND end
-        if value == "UNRESTRICTED" then return L.PROGRESSION_MAX_UNRESTRICTED end
-        return L.PROGRESSION_MAX_SELF_FOUND
-    end)
-guildFoundTradeExceptionsCheck, y = CreateSettingsCheckbox(connectionContent,
-    L.GUILD_FOUND_TRADE_EXCEPTIONS_RULE, L.GUILD_FOUND_TRADE_EXCEPTIONS_RULE_DESC, y,
-    function() return iRC:GetConnectionRules().guildFoundTradeExceptions end,
-    function(value) iRC:SetConnectionRule("guildFoundTradeExceptions", value) end)
-guildMapRuleCheck, y = CreateSettingsCheckbox(connectionContent,
-    L.GUILD_MAP_RULE, L.GUILD_MAP_RULE_DESC, y,
-    function() return iRC:GetConnectionRules().guildMapEnabled end,
-    function(value) iRC:SetConnectionRule("guildMapEnabled", value) end)
+    function(value) iRC:SetConnectionRule("nativeTongueOnly", value) end, nil, true)
 _, y = CreateSubcategoryHeader(connectionContent, "Group Rules", y - 2)
 raceRuleUI.groups, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
     function() return iRC:GetConnectionRules().sameRaceGroupsOnly end,
-    function(value) iRC:SetConnectionRule("sameRaceGroupsOnly", value) end)
+    function(value) iRC:SetConnectionRule("sameRaceGroupsOnly", value) end, nil, true)
 local sameRaceLevelLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-sameRaceLevelLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y)
+CreateSyncBadge(connectionContent, y)
+sameRaceLevelLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 58, y)
 sameRaceLevelLabel:SetText(L.SAME_RACE_MINIMUM_LEVEL)
 local sameRaceLevelValue = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 sameRaceLevelValue:SetPoint("LEFT", sameRaceLevelLabel, "RIGHT", 8, 0)
 sameRaceLevelValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
 sameRaceLevelSlider = CreateFrame("Slider", "iRCSameRaceMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
-sameRaceLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y - 22)
+sameRaceLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 58, y - 22)
 sameRaceLevelSlider:SetWidth(220)
 sameRaceLevelSlider:SetMinMaxValues(1, 60)
 sameRaceLevelSlider:SetValueStep(1)
@@ -577,18 +580,19 @@ end)
 y = y - 66
 raceRuleUI.level60Exception, y = CreateSettingsCheckbox(connectionContent, "Level 60 Mixed-Race Exception", "At level 60, allow mixed-race parties and raids. Same-race groups remain required while leveling.", y,
     function() return iRC:GetConnectionRules().allowLevel60MixedRaceGroups end,
-    function(value) iRC:SetConnectionRule("allowLevel60MixedRaceGroups", value) end, 18)
+    function(value) iRC:SetConnectionRule("allowLevel60MixedRaceGroups", value) end, 18, true)
 guildGroupsOnlyCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_GROUPS_ONLY, L.GUILD_GROUPS_ONLY_DESC, y,
     function() return iRC:GetConnectionRules().guildGroupsOnly end,
-    function(value) iRC:SetConnectionRule("guildGroupsOnly", value) end)
+    function(value) iRC:SetConnectionRule("guildGroupsOnly", value) end, nil, true)
 local guildGroupsLevelLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-guildGroupsLevelLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y)
+CreateSyncBadge(connectionContent, y)
+guildGroupsLevelLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 58, y)
 guildGroupsLevelLabel:SetText(L.GUILD_GROUPS_MINIMUM_LEVEL)
 local guildGroupsLevelValue = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 guildGroupsLevelValue:SetPoint("LEFT", guildGroupsLevelLabel, "RIGHT", 8, 0)
 guildGroupsLevelValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
 guildGroupsLevelSlider = CreateFrame("Slider", "iRCGuildGroupsMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
-guildGroupsLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y - 22)
+guildGroupsLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 58, y - 22)
 guildGroupsLevelSlider:SetWidth(220)
 guildGroupsLevelSlider:SetMinMaxValues(1, 60)
 guildGroupsLevelSlider:SetValueStep(1)
@@ -603,6 +607,37 @@ guildGroupsLevelSlider:SetScript("OnValueChanged", function(_, value)
     if not refreshingGuildGroupsLevel then iRC:SetGuildGroupsMinimumLevel(value) end
 end)
 y = y - 66
+_, y = CreateSubcategoryHeader(connectionContent, "Progression Rules", y - 2)
+progressionModeDropdown, y = CreateSettingsDropdown("iRCProgressionModeDropdown", connectionContent,
+    L.PROGRESSION_MODE, L.PROGRESSION_MODE_DESC, y,
+    function() return iRC:GetProgressionMode() end,
+    function(value) iRC:SetProgressionMode(value) end,
+    function() return { "NONE", "SELF_FOUND", "GUILD_FOUND", "SELF_FOUND_OR_GUILD_FOUND" } end,
+    function(value)
+        if value == "SELF_FOUND" then return L.PROGRESSION_SELF_FOUND end
+        if value == "GUILD_FOUND" then return L.PROGRESSION_GUILD_FOUND end
+        if value == "SELF_FOUND_OR_GUILD_FOUND" then return L.PROGRESSION_HYBRID end
+        return L.PROGRESSION_NONE
+    end, true)
+maxLevelProgressionDropdown, y = CreateSettingsDropdown("iRCMaxLevelProgressionDropdown", connectionContent,
+    L.PROGRESSION_MAX_LEVEL, L.PROGRESSION_MAX_LEVEL_DESC, y,
+    function() return iRC:GetMaxLevelProgressionMode() end,
+    function(value) iRC:SetMaxLevelProgressionMode(value) end,
+    function() return { "SELF_FOUND", "GUILD_FOUND", "UNRESTRICTED" } end,
+    function(value)
+        if value == "GUILD_FOUND" then return L.PROGRESSION_MAX_GUILD_FOUND end
+        if value == "UNRESTRICTED" then return L.PROGRESSION_MAX_UNRESTRICTED end
+        return L.PROGRESSION_MAX_SELF_FOUND
+    end, true)
+guildFoundTradeExceptionsCheck, y = CreateSettingsCheckbox(connectionContent,
+    L.GUILD_FOUND_TRADE_EXCEPTIONS_RULE, L.GUILD_FOUND_TRADE_EXCEPTIONS_RULE_DESC, y,
+    function() return iRC:GetConnectionRules().guildFoundTradeExceptions end,
+    function(value) iRC:SetConnectionRule("guildFoundTradeExceptions", value) end, nil, true)
+_, y = CreateSubcategoryHeader(connectionContent, "Miscellaneous", y - 2)
+guildMapRuleCheck, y = CreateSettingsCheckbox(connectionContent,
+    L.GUILD_MAP_RULE, L.GUILD_MAP_RULE_DESC, y,
+    function() return iRC:GetConnectionRules().guildMapEnabled end,
+    function(value) iRC:SetConnectionRule("guildMapEnabled", value) end, nil, true)
 connectionContent:SetHeight(math.abs(y) + 20)
 
 raceRuleUI.readOnly = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
@@ -651,11 +686,12 @@ local homepageY = -12
 _, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_HOMEPAGE_ICON_HEADER, homepageY)
 _, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_HOMEPAGE_ICON_DESC, homepageY, "GameFontDisableSmall")
 homepageDescriptionUI.iconButtons = {}
+CreateSyncBadge(guildHomepageContent, homepageY)
 for iconIndex, texture in ipairs(iRC.GuildHomepageIcons) do
     local selectedIndex = iconIndex
     local button = CreateFrame("Button", nil, guildHomepageContent, "BackdropTemplate")
     button:SetSize(38, 38)
-    button:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20 + ((iconIndex - 1) % 10) * 44,
+    button:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48 + ((iconIndex - 1) % 10) * 44,
         homepageY - math.floor((iconIndex - 1) / 10) * 44)
     button:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
@@ -694,8 +730,9 @@ homepageDescriptionUI.dropdown, homepageY = CreateSettingsDropdown("iRCGuildDesc
     function() return { 0, 1, 2, 3, 4 } end,
     function(value) return value == 0 and L.GUILD_DESCRIPTION_PRESET_CUSTOM or homepagePresets[value].name end)
 homepageDescriptionUI.edit = CreateFrame("EditBox", nil, guildHomepageContent, "BackdropTemplate")
-homepageDescriptionUI.edit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20, homepageY)
-homepageDescriptionUI.edit:SetSize(470, 72)
+CreateSyncBadge(guildHomepageContent, homepageY)
+homepageDescriptionUI.edit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48, homepageY)
+homepageDescriptionUI.edit:SetSize(442, 72)
 homepageDescriptionUI.edit:SetMultiLine(true); homepageDescriptionUI.edit:SetAutoFocus(false)
 homepageDescriptionUI.edit:SetFontObject(GameFontHighlight); homepageDescriptionUI.edit:SetTextInsets(8, 8, 7, 7)
 homepageDescriptionUI.edit:SetMaxLetters(iRC.GuildHomepageDescriptionMaxLength)
@@ -724,11 +761,12 @@ homepageY = homepageY - 128
 _, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_CONTACTS_HEADER, homepageY)
 _, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_CONTACTS_DESC, homepageY, "GameFontDisableSmall")
 local guildContactsLabel = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-guildContactsLabel:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20, homepageY)
+CreateSyncBadge(guildHomepageContent, homepageY)
+guildContactsLabel:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48, homepageY)
 guildContactsLabel:SetText(L.GUILD_CONTACTS_LABEL)
 guildContactsEdit = CreateFrame("EditBox", nil, guildHomepageContent, "InputBoxTemplate")
 guildContactsEdit:SetSize(285, 24)
-guildContactsEdit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 25, homepageY - 22)
+guildContactsEdit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48, homepageY - 22)
 guildContactsEdit:SetAutoFocus(false)
 guildContactsEdit:SetMaxLetters(60)
 guildContactSuggestionFrame = CreateFrame("Frame", nil, guildHomepageContent, "BackdropTemplate")
@@ -951,6 +989,7 @@ for _, addon in ipairs(companionAddons) do
 end
 
 local guildFoundAuditText, guildBankEdit, guildBankSave, guildBankListContent, guildBankListEmpty, guildBankConflictText
+local guildFoundStatus = {}
 local guildBankRows = {}
 local guildBankSuggestionFrame, guildBankSuggestionButtons
 local guildBankConflictMerge, guildBankConflictAccept, guildBankConflictKeep
@@ -961,30 +1000,37 @@ do
     local y = -12
     _, y = CreateSectionHeader(guildFoundContent, L.GUILDFOUND_TOOLS_TITLE, y)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_TOOLS_DESC, y, "GameFontDisableSmall")
+    local statusPanel = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
+    statusPanel:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 3)
+    statusPanel:SetSize(470, 54)
+    statusPanel:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    statusPanel:SetBackdropColor(0.035, 0.03, 0.025, 0.88)
+    statusPanel:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.50)
+    guildFoundStatus.protection = statusPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    guildFoundStatus.protection:SetPoint("LEFT", statusPanel, "LEFT", 12, 0)
+    guildFoundStatus.protection:SetWidth(145)
+    guildFoundStatus.protection:SetJustifyH("LEFT")
+    guildFoundStatus.exceptions = statusPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    guildFoundStatus.exceptions:SetPoint("CENTER", statusPanel, "CENTER", 0, 0)
+    guildFoundStatus.exceptions:SetWidth(145)
+    guildFoundStatus.exceptions:SetJustifyH("CENTER")
+    guildFoundStatus.access = statusPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    guildFoundStatus.access:SetPoint("RIGHT", statusPanel, "RIGHT", -12, 0)
+    guildFoundStatus.access:SetWidth(145)
+    guildFoundStatus.access:SetJustifyH("RIGHT")
+    y = y - 62
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_SETTINGS_HEADER, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_ENFORCEMENT_LOCKED, y, "GameFontHighlight")
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_FOUND_TRADE_EXCEPTIONS_HEADER, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILD_FOUND_TRADE_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
-    for _, entry in ipairs({
-        { "conjured", "GUILD_FOUND_EXCEPTION_CONJURED", "GUILD_FOUND_EXCEPTION_CONJURED_DESC" },
-        { "healthstones", "GUILD_FOUND_EXCEPTION_HEALTHSTONES", "GUILD_FOUND_EXCEPTION_HEALTHSTONES_DESC" },
-        { "questItems", "GUILD_FOUND_EXCEPTION_QUEST_ITEMS", "GUILD_FOUND_EXCEPTION_QUEST_ITEMS_DESC" },
-        { "lockpickOutgoing", "GUILD_FOUND_EXCEPTION_LOCKPICK_OUT", "GUILD_FOUND_EXCEPTION_LOCKPICK_OUT_DESC" },
-        { "lockpickIncoming", "GUILD_FOUND_EXCEPTION_LOCKPICK_IN", "GUILD_FOUND_EXCEPTION_LOCKPICK_IN_DESC" },
-    }) do
-        local key = entry[1]
-        guildFoundTradeExceptionChecks[key], y = CreateSettingsCheckbox(guildFoundContent,
-            L[entry[2]], L[entry[3]], y,
-            function() return iRC:GetGuildFoundTradeExceptionSettings()[key] == true end,
-            function(value) iRC:SetGuildFoundTradeException(key, value) end)
-    end
     local itemListFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
     itemListFrame:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 2)
-    itemListFrame:SetSize(470, 190)
+    itemListFrame:SetSize(470, 285)
     itemListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    itemListFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
-    itemListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+    itemListFrame:SetBackdropColor(0.045, 0.038, 0.028, 0.92)
+    itemListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.78)
     local itemScroll = CreateFrame("ScrollFrame", nil, itemListFrame, "UIPanelScrollFrameTemplate")
     itemScroll:SetPoint("TOPLEFT", 8, -8)
     itemScroll:SetPoint("BOTTOMRIGHT", -28, 8)
@@ -994,22 +1040,53 @@ do
     itemScroll:SetScrollChild(itemContent)
     local expandedCategories = {}
     local categories = {
-        { key = "conjured", setting = "conjured", label = L.GUILD_FOUND_EXCEPTION_CONJURED },
-        { key = "healthstones", setting = "healthstones", label = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES },
-        { key = "questItems", setting = "questItems", label = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS },
-        { key = "lockboxes", setting = "lockpickOutgoing", secondarySetting = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKBOX_ITEMS },
+        { key = "conjured", setting = "conjured", label = L.GUILD_FOUND_EXCEPTION_CONJURED,
+            description = L.GUILD_FOUND_EXCEPTION_CONJURED_DESC },
+        { key = "healthstones", setting = "healthstones", label = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES,
+            description = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES_DESC },
+        { key = "questItems", setting = "questItems", label = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS,
+            description = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS_DESC },
+        { key = "lockboxes", setting = "lockpickOutgoing", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT,
+            description = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT_DESC },
+        { key = "lockboxes", setting = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN,
+            description = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN_DESC },
     }
     for _, category in ipairs(categories) do
-        local categoryKey = category.key
-        local header = CreateFrame("Button", nil, itemContent)
-        header:SetSize(410, 24)
+        local categoryKey, itemCategoryKey, categorySetting = category.setting, category.key, category.setting
+        local header = CreateFrame("Button", nil, itemContent, "BackdropTemplate")
+        header:SetSize(410, 26)
+        header:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
+        header:SetBackdropColor(0.10, 0.075, 0.04, 0.72)
+        header.check = CreateFrame("CheckButton", nil, header, CHECKBOX_TEMPLATE)
+        header.check:SetSize(22, 22)
+        header.syncBadge = CreateSyncBadge(header, -3)
+        header.syncBadge:ClearAllPoints()
+        header.syncBadge:SetPoint("LEFT", header, "LEFT", 4, 0)
+        header.check:SetPoint("LEFT", header, "LEFT", 43, 0)
+        header.check:SetScript("OnClick", function(self)
+            iRC:SetGuildFoundTradeException(categorySetting, self:GetChecked() and true or false)
+        end)
+        header.check.Refresh = function()
+            header.check:SetChecked(iRC:GetGuildFoundTradeExceptionSettings()[categorySetting] == true)
+        end
+        SetSimpleTooltip(header.check, category.label, category.description)
+        guildFoundTradeExceptionChecks[category.setting] = header.check
         header.text = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        header.text:SetPoint("LEFT", 4, 0)
+        header.text:SetPoint("LEFT", 73, 0)
+        header.text:SetWidth(222)
         header.text:SetJustifyH("LEFT")
+        header.count = header:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        header.count:SetPoint("RIGHT", header, "RIGHT", -9, 0)
+        header.count:SetWidth(105)
+        header.count:SetJustifyH("RIGHT")
+        header.highlight = header:CreateTexture(nil, "HIGHLIGHT")
+        header.highlight:SetAllPoints()
+        header.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.12)
         header:SetScript("OnClick", function()
             expandedCategories[categoryKey] = not expandedCategories[categoryKey]
             refreshGuildFoundTradeItemList()
         end)
+        SetSimpleTooltip(header, category.label, category.description)
         category.header = header
         category.items = {}
         for _, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category.key] or {}) do
@@ -1021,8 +1098,12 @@ do
             checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
             checkbox.Text:SetWidth(355)
             checkbox.Text:SetJustifyH("LEFT")
+            checkbox.rowBackground = checkbox:CreateTexture(nil, "BACKGROUND")
+            checkbox.rowBackground:SetPoint("TOPLEFT", checkbox, "TOPLEFT", -5, 0)
+            checkbox.rowBackground:SetSize(395, 22)
+            checkbox.rowBackground:SetColorTexture(0.08, 0.07, 0.055, 0.48)
             checkbox:SetScript("OnClick", function(self)
-                iRC:SetGuildFoundTradeExceptionItem(categoryKey, selectedItemId, self:GetChecked() and true or false)
+                iRC:SetGuildFoundTradeExceptionItem(itemCategoryKey, selectedItemId, self:GetChecked() and true or false)
             end)
             checkbox:SetScript("OnEnter", function(self)
                 if GameTooltip then GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetItemByID(selectedItemId); GameTooltip:Show() end
@@ -1040,20 +1121,33 @@ do
         for _, category in ipairs(categories) do
             local categoryEnabled = settings[category.setting] == true
                 or (category.secondarySetting and settings[category.secondarySetting] == true)
+            local selectedCount = 0
+            for _, item in ipairs(category.items) do
+                if settings.items and settings.items[category.key] and settings.items[category.key][item.id] then
+                    selectedCount = selectedCount + 1
+                end
+            end
             category.header:ClearAllPoints()
             category.header:SetPoint("TOPLEFT", itemContent, "TOPLEFT", 2, -offset)
-            category.header.text:SetText((expandedCategories[category.key] and "- " or "+ ") .. category.label)
+            category.header.text:SetText((expandedCategories[category.setting] and "-  " or "+  ") .. category.label)
             category.header.text:SetTextColor(categoryEnabled and 1 or 0.65, categoryEnabled and 0.82 or 0.65, categoryEnabled and 0 or 0.65)
-            offset = offset + 24
+            category.header.count:SetText(iRC:Text("GUILD_FOUND_EXCEPTION_ITEMS_SELECTED", selectedCount))
+            category.header.count:SetTextColor(selectedCount > 0 and 0.72 or 0.48, selectedCount > 0 and 0.82 or 0.48,
+                selectedCount > 0 and 0.62 or 0.48)
+            category.header:SetBackdropColor(categoryEnabled and 0.13 or 0.075, categoryEnabled and 0.09 or 0.065,
+                categoryEnabled and 0.035 or 0.055, expandedCategories[category.setting] and 0.96 or 0.68)
+            offset = offset + 27
             for _, item in ipairs(category.items) do
                 local checkbox = item.checkbox
-                checkbox:SetShown(expandedCategories[category.key] == true)
-                if expandedCategories[category.key] then
+                checkbox:SetShown(expandedCategories[category.setting] == true)
+                if expandedCategories[category.setting] then
                     checkbox:ClearAllPoints()
                     checkbox:SetPoint("TOPLEFT", itemContent, "TOPLEFT", 20, -offset)
                     local selected = settings.items and settings.items[category.key] and settings.items[category.key][item.id]
                     checkbox:SetChecked(selected == true)
                     checkbox:SetEnabled(canEdit and categoryEnabled and true or false)
+                    checkbox.rowBackground:SetColorTexture(selected and 0.08 or 0.055, selected and 0.18 or 0.05,
+                        selected and 0.09 or 0.04, selected and 0.68 or 0.42)
                     local cachedItemName = GetItemInfo and GetItemInfo(item.id)
                     local itemName = cachedItemName or iRC.GuildFoundTradeExceptionItemNames[item.id] or "Unknown item"
                     checkbox.Text:SetText(itemName .. " (" .. item.id .. ")")
@@ -1064,12 +1158,13 @@ do
         itemContent:SetHeight(math.max(1, offset))
     end
     refreshGuildFoundTradeItemList()
-    y = y - 200
+    y = y - 295
     _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y - 4)
     _, y = CreateInfoText(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
     guildBankEdit = CreateFrame("EditBox", nil, guildFoundContent, "InputBoxTemplate")
+    CreateSyncBadge(guildFoundContent, y - 22)
     guildBankEdit:SetSize(285, 24)
-    guildBankEdit:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 25, y - 22)
+    guildBankEdit:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 48, y - 22)
     guildBankEdit:SetAutoFocus(false)
     guildBankEdit:SetMaxLetters(60)
     guildBankSuggestionFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
@@ -1164,22 +1259,31 @@ do
     listFrame:SetSize(470, 150)
     listFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    listFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
-    listFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+    listFrame:SetBackdropColor(0.045, 0.038, 0.028, 0.92)
+    listFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.78)
+    local listHeader = listFrame:CreateTexture(nil, "BACKGROUND")
+    listHeader:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 4, -4)
+    listHeader:SetPoint("TOPRIGHT", listFrame, "TOPRIGHT", -4, -4)
+    listHeader:SetHeight(23)
+    listHeader:SetColorTexture(0.13, 0.09, 0.04, 0.88)
     local headerName = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerName:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 12, -9)
     headerName:SetText(L.GUILD_BANK_COLUMN_NAME)
+    headerName:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local headerNote = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerNote:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 145, -9)
     headerNote:SetText(L.GUILD_BANK_COLUMN_NOTE)
+    headerNote:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local headerAddedBy = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerAddedBy:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 270, -9)
     headerAddedBy:SetWidth(85)
     headerAddedBy:SetJustifyH("CENTER")
     headerAddedBy:SetText(L.GUILD_BANK_COLUMN_ADDED_BY)
+    headerAddedBy:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local headerActions = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerActions:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 370, -9)
     headerActions:SetText(L.GUILD_BANK_COLUMN_ACTIONS)
+    headerActions:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local listScroll = CreateFrame("ScrollFrame", nil, listFrame, "UIPanelScrollFrameTemplate")
     listScroll:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 8, -27)
     listScroll:SetPoint("BOTTOMRIGHT", listFrame, "BOTTOMRIGHT", -28, 8)
@@ -1211,7 +1315,7 @@ do
     guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
 end
 
-local newMemberWelcomeCheck, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
+local newMemberWelcomeCheck, hideAttentionRemindersCheck, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
 local rankPermissionDropdowns = {}
 do
     local y = -12
@@ -1221,7 +1325,16 @@ do
     newMemberWelcomeCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
         L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, y - 4,
         function() return iRC:IsNewMemberWelcomeEnabled() end,
-        function(value) iRC:SetNewMemberWelcomeEnabled(value) end)
+        function(value) iRC:SetNewMemberWelcomeEnabled(value) end, nil, true)
+    hideAttentionRemindersCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
+        L.HIDE_ATTENTION_REMINDERS_OPTION, L.HIDE_ATTENTION_REMINDERS_OPTION_DESC, y,
+        function() return iRC:GetSettings().hideAttentionReminders == true end,
+        function(value)
+            iRC:GetSettings().hideAttentionReminders = value and true or false
+            if iRC.ConnectionDashboard and iRC.ConnectionDashboard.CheckAttentionReminder then
+                iRC.ConnectionDashboard:CheckAttentionReminder(false)
+            end
+        end)
     _, y = CreateSubcategoryHeader(guildNotificationsContent, L.DELEGATED_PERMISSIONS_CATEGORY, y - 4)
     _, y = CreateInfoText(guildNotificationsContent, "Only the Guild Master can change these limits. Each selection includes that rank and every rank above it.", y, "GameFontDisableSmall")
     local permissionLabels = {
@@ -1248,7 +1361,7 @@ do
             guildNotificationsContent, permissionLabels[permission], "Lowest guild rank allowed to use this feature. Every higher rank is also included.", y,
             function() return iRC:GetGuildRankPermission(permissionKey) end,
             function(value) iRC:SetGuildRankPermission(permissionKey, value) end,
-            rankValues, rankLabel)
+            rankValues, rankLabel, true)
     end
     welcomeConflictText, y = CreateInfoText(guildNotificationsContent, "", y - 4, "GameFontNormal")
     welcomeConflictAccept, y = CreateSettingsButton(guildNotificationsContent, L.MANAGEMENT_CONFLICT_ACCEPT, 130, y, function()
@@ -1292,6 +1405,19 @@ end
 local function RefreshGuildBankTools(guildFoundAvailable)
     local canEditGuildBanks = guildFoundAvailable and iRC:HasGuildPermission("guildBanks") and iRC:IsGuildConnectionActive()
     local tradeExceptionsEnabled = canEditGuildBanks and iRC:GetConnectionRules().guildFoundTradeExceptions == true
+    local rules = iRC:GetConnectionRules()
+    local protectionActive = iRC:IsGuildConnectionActive() and iRC:IsGuildFoundRequired()
+    local exceptionsActive = iRC:IsGuildConnectionActive() and rules.guildFoundTradeExceptions == true
+    local green, gray, orange = iRC.ColorValues.Green, iRC.ColorValues.Gray, iRC.ColorValues.Orange
+    guildFoundStatus.protection:SetText(iRC:Text("GUILDFOUND_STATUS_PROTECTION",
+        iRC:Text(protectionActive and "GUILDFOUND_STATUS_ACTIVE" or "GUILDFOUND_STATUS_INACTIVE")))
+    guildFoundStatus.protection:SetTextColor(unpack(protectionActive and green or gray))
+    guildFoundStatus.exceptions:SetText(iRC:Text("GUILDFOUND_STATUS_EXCEPTIONS",
+        iRC:Text(exceptionsActive and "GUILDFOUND_STATUS_ENABLED" or "GUILDFOUND_STATUS_DISABLED")))
+    guildFoundStatus.exceptions:SetTextColor(unpack(exceptionsActive and orange or gray))
+    guildFoundStatus.access:SetText(iRC:Text("GUILDFOUND_STATUS_ACCESS",
+        iRC:Text(canEditGuildBanks and "GUILDFOUND_STATUS_AVAILABLE" or "GUILDFOUND_STATUS_READ_ONLY")))
+    guildFoundStatus.access:SetTextColor(unpack(canEditGuildBanks and green or gray))
     for _, checkbox in pairs(guildFoundTradeExceptionChecks) do
         checkbox:Refresh()
         checkbox:SetEnabled(tradeExceptionsEnabled and true or false)
@@ -1310,8 +1436,12 @@ local function RefreshGuildBankTools(guildFoundAvailable)
         if not row then
             row = CreateFrame("Frame", nil, guildBankListContent, "BackdropTemplate")
             row:SetSize(420, 27)
+            row:EnableMouse(true)
             row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
-            row:SetBackdropColor(0.10, 0.08, 0.05, index % 2 == 0 and 0.55 or 0.35)
+            row:SetBackdropColor(0.09, 0.075, 0.05, index % 2 == 0 and 0.72 or 0.48)
+            row.highlight = row:CreateTexture(nil, "HIGHLIGHT")
+            row.highlight:SetAllPoints()
+            row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.08)
             row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             row.name:SetPoint("LEFT", row, "LEFT", 8, 0)
             row.name:SetWidth(130)
@@ -1468,6 +1598,8 @@ local function Refresh()
     minimapCheck:Refresh()
     newMemberWelcomeCheck:Refresh()
     newMemberWelcomeCheck:SetEnabled(iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive())
+    hideAttentionRemindersCheck:Refresh()
+    hideAttentionRemindersCheck:SetEnabled(iRC:HasGuildPermission("verification") and iRC:IsGuildConnectionActive())
     for _, dropdown in pairs(rankPermissionDropdowns) do
         dropdown:Refresh()
         if iRC:IsGuildMaster() then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end

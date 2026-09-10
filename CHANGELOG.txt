@@ -2,6 +2,20 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.4 - Guild Tools Polish
+--------------------------------------------------------------------------------
+[ADDED] Added a personal setting for authorized ranks to hide Needs Attention chat reminders without hiding verification status; it defaults on and is enabled when a progression mode is activated
+[ADDED] Marked guild-synced settings with a blue Blizzard-style Sync badge
+[FIX] Clarified that the hybrid progression ruleset uses Self-Found while leveling and switches to Guild-Found at level 60
+[CHANGED] Active rules now name the configured race in the race-only group explanation
+[CHANGED] The Guild Statistics top-three ranking now shows each guild's tag in the All filter
+[CHANGED] Reorganized Connection & Rules into Race Rules, Group Rules, Progression Rules, and Miscellaneous sections
+[FIX] Added a hidden local money watchdog that repairs missed in-game balance events without broadcasting a guild report
+[FIX] Money snapshots now settle after looting chests, lockboxes, and other openable items
+[CHANGED] Added a Guild Found status overview for economy protection, trade exceptions, and management access
+[CHANGED] Connected each Guild Found exception checkbox directly to its expandable item list and improved Guild Bank list styling
+[FIX] Clarified Low Traffic Mode logging so queued tasks are not mistaken for successful broadcasts
+
 v0.4.3 - Guild Statistics Filters
 --------------------------------------------------------------------------------
 [CHANGED] Added Race-Locked, Guild-Found, and Self-Found Guild Statistics tags and filters; unrestricted guilds retain the Normal tag

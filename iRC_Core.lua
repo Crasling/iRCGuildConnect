@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRC"
 iRC.DisplayName = "iRC"
-iRC.Version = "0.4.3"
+iRC.Version = "0.4.4"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -97,6 +97,10 @@ function iRC:LeaveLowTrafficMode()
         local callbacks = lowTrafficPending
         lowTrafficPending = {}
         lowTrafficPendingCount = 0
+        local networkCount, localCount = 0, 0
+        for _, key in ipairs(keys) do
+            if key:find("^traffic:") then networkCount = networkCount + 1 else localCount = localCount + 1 end
+        end
         for index, key in ipairs(keys) do
             C_Timer.After((index - 1) * 0.35, function()
                 local callback = callbacks[key]
@@ -104,7 +108,9 @@ function iRC:LeaveLowTrafficMode()
                 if iRC:IsLowTrafficMode() then iRC:DeferLowTraffic(key, callback) else callback() end
             end)
         end
-        iRC:DebugMsg("Low Traffic Mode ended: " .. tostring(#keys) .. " background update(s) resumed.", 3)
+        iRC:DebugMsg("Low Traffic Mode ended: " .. tostring(#keys) .. " queued task(s) resumed ("
+            .. tostring(networkCount) .. " network, " .. tostring(localCount)
+            .. " local). Inapplicable tasks may skip without sending.", 3)
     end)
 end
 
@@ -137,6 +143,7 @@ local DEFAULT_SETTINGS = {
     suppressPresenceWarnings = false,
     suppressRuleSending = false,
     showOfficerSettingsForTesting = false,
+    hideAttentionReminders = true,
     showGuildMap = true,
     shareGuildMapPosition = true,
 }
@@ -1008,6 +1015,9 @@ function iRC:SetProgressionMode(mode)
         connection.rules.guildFoundOnly = false
         connection.rules.level60GuildFound = false
         connection.rules.allowLevel60WithoutSelfFound = false
+    end
+    if mode == "SELF_FOUND" or mode == "GUILD_FOUND" or mode == "SELF_FOUND_OR_GUILD_FOUND" then
+        self:GetSettings().hideAttentionReminders = true
     end
     self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
