@@ -1,11 +1,11 @@
 local addonName, private = ...
-local iRC = LibStub("AceAddon-3.0"):NewAddon("iRC")
+local iRC = LibStub("AceAddon-3.0"):NewAddon("iRCGuildConnect")
 private.iRC = iRC
 
-iRC.Name = addonName or "iRacelockConnection"
+iRC.Name = addonName or "iRC"
 iRC.DisplayName = "iRC"
-iRC.Version = "0.3.2"
-iRC.IconPath = "Interface\\AddOns\\iRacelockConnection\\Images\\Logo_iRC"
+iRC.Version = "0.4.1"
+iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
 -- Testing-only controls are restricted to these exact character/realm pairs.
@@ -16,6 +16,21 @@ iRC.TestAdminNames = {
     "Crasdrum-Soulseeker"
 }
 iRC.Frame = CreateFrame("Frame")
+iRC.LegacyAddonName = "iRacelockConnection"
+
+function iRC:DisableLegacyAddon()
+    if self.Name == self.LegacyAddonName then return false end
+    local getInfo = C_AddOns and C_AddOns.GetAddOnInfo or GetAddOnInfo
+    local disable = C_AddOns and C_AddOns.DisableAddOn or DisableAddOn
+    if not getInfo or not disable then return false end
+    local ok, installed = pcall(getInfo, self.LegacyAddonName)
+    if not ok or not installed then return false end
+    local isLoaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
+    self.LegacyAddonWasLoaded = isLoaded and isLoaded(self.LegacyAddonName) and true or false
+    pcall(disable, self.LegacyAddonName)
+    iRCDB.legacyAddonDisabled = true
+    return true
+end
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
 iRC.Colors = {
     iRC = "|cffff9716",
@@ -123,8 +138,10 @@ local DEFAULT_SETTINGS = {
 
 iRC.DefaultConnectionRules = {
     guildRace = "",
+    raceLock = false,
     nativeTongueOnly = false,
     selfFoundOnly = false,
+    guildFoundOnly = false,
     level60GuildFound = false,
     allowLevel60WithoutSelfFound = false,
     sameRaceGroupsOnly = false,
@@ -140,6 +157,16 @@ iRC.DefaultConnectionRules = {
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     guildBanks = 1, notifications = 1, homepage = 0,
+}
+iRC.GuildHomepageDescriptionMaxLength = 180
+iRC.GuildHomepageIcons = {
+    "Interface\\Icons\\INV_Misc_QuestionMark", "Interface\\Icons\\INV_BannerPVP_01", "Interface\\Icons\\INV_BannerPVP_02",
+    "Interface\\Icons\\INV_Shield_05", "Interface\\Icons\\INV_Shield_06", "Interface\\Icons\\INV_Shield_09",
+    "Interface\\Icons\\INV_Sword_27", "Interface\\Icons\\INV_Axe_09", "Interface\\Icons\\INV_Hammer_04",
+    "Interface\\Icons\\INV_Helmet_06", "Interface\\Icons\\INV_Helmet_24", "Interface\\Icons\\INV_Crown_01",
+    "Interface\\Icons\\Spell_Holy_PrayerOfHealing", "Interface\\Icons\\Spell_Shadow_RaiseDead", "Interface\\Icons\\Spell_Nature_ProtectionformNature",
+    "Interface\\Icons\\Ability_Warrior_BattleShout", "Interface\\Icons\\Ability_Rogue_MasterOfSubtlety", "Interface\\Icons\\Ability_Hunter_BeastCall",
+    "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", "Interface\\Icons\\Achievement_GuildPerk_HastyHearth",
 }
 
 iRC.DefaultGuildFoundTradeExceptions = {
@@ -470,6 +497,14 @@ function iRC:GetConnection()
     end
     connection.guildContactDetails = connection.guildContactDetails or {}
     connection.guildContactsTimestamp = tonumber(connection.guildContactsTimestamp) or 0
+    connection.guildHomepageDescription = connection.guildHomepageDescription or { text = "", timestamp = 0, editedBy = "" }
+    connection.guildHomepageDescription.text = tostring(connection.guildHomepageDescription.text or ""):sub(1, self.GuildHomepageDescriptionMaxLength)
+    connection.guildHomepageDescription.timestamp = tonumber(connection.guildHomepageDescription.timestamp) or 0
+    connection.guildHomepageDescription.editedBy = tostring(connection.guildHomepageDescription.editedBy or "")
+    connection.guildHomepageIcon = connection.guildHomepageIcon or { icon = 0, timestamp = 0, editedBy = "" }
+    connection.guildHomepageIcon.icon = math.max(0, math.min(#self.GuildHomepageIcons, math.floor(tonumber(connection.guildHomepageIcon.icon) or 0)))
+    connection.guildHomepageIcon.timestamp = tonumber(connection.guildHomepageIcon.timestamp) or 0
+    connection.guildHomepageIcon.editedBy = tostring(connection.guildHomepageIcon.editedBy or "")
     connection.rankPermissions = connection.rankPermissions or {}
     for permission, rankIndex in pairs(self.DefaultRankPermissions) do
         if connection.rankPermissions[permission] == nil then connection.rankPermissions[permission] = rankIndex end
@@ -743,6 +778,7 @@ function iRC:SetGuildRace(race)
     if normalizedRace == "" then return false end
     local connection = self:GetConnection()
     if not connection then return false end
+    if connection.rules.raceLock ~= true then return false end
     connection.rules.guildRace = normalizedRace
     self:StampConnectionRules(connection)
     if self.SendConnectionRules then self:SendConnectionRules() end
@@ -782,6 +818,39 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild)
     if active and self.RefreshGuildRoster then self:RefreshGuildRoster() end
     if self.Enforcement then self.Enforcement:Refresh() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:SetGuildHomepageDescription(value)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
+    value = value:sub(1, self.GuildHomepageDescriptionMaxLength)
+    local data = connection.guildHomepageDescription
+    local now = GetServerTime and GetServerTime() or time()
+    data.text = value
+    data.timestamp = math.max(now, math.floor(tonumber(data.timestamp) or 0) + 1)
+    data.editedBy = self:GetPlayerName()
+    if self.SendGuildHomepageDescription then self:SendGuildHomepageDescription(nil, true) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
+    return true
+end
+
+function iRC:SetGuildHomepageIcon(icon)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
+    local connection = self:GetConnection()
+    icon = math.floor(tonumber(icon) or 0)
+    if not connection or icon < 1 or icon > #self.GuildHomepageIcons then return false end
+    local data = connection.guildHomepageIcon
+    local now = GetServerTime and GetServerTime() or time()
+    data.icon = icon
+    data.timestamp = math.max(now, math.floor(tonumber(data.timestamp) or 0) + 1)
+    data.editedBy = self:GetPlayerName()
+    if self.SendGuildHomepageIcon then self:SendGuildHomepageIcon(nil, true) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
     return true
 end
 
@@ -882,7 +951,7 @@ function iRC:IsGuildFoundRequired()
     local guildKey = self:GetGuildKey()
     if not connection or not guildKey then return false end
     local rules = connection.rules or self.DefaultConnectionRules
-    if rules.level60GuildFound == true then
+    if rules.guildFoundOnly == true or rules.level60GuildFound == true then
         self:MarkGuildFoundRequired(connection)
         return true
     end
@@ -893,6 +962,7 @@ end
 function iRC:GetProgressionMode(rules)
     rules = rules or self:GetConnectionRules() or self.DefaultConnectionRules
     if rules.selfFoundOnly then return "SELF_FOUND" end
+    if rules.guildFoundOnly then return "GUILD_FOUND" end
     if rules.level60GuildFound then return "SELF_FOUND_OR_GUILD_FOUND" end
     return "NONE"
 end
@@ -910,15 +980,24 @@ function iRC:SetProgressionMode(mode)
     if not connection then return false end
     if mode == "SELF_FOUND" then
         connection.rules.selfFoundOnly = true
+        connection.rules.guildFoundOnly = false
         connection.rules.level60GuildFound = false
         connection.rules.allowLevel60WithoutSelfFound = false
     elseif mode == "SELF_FOUND_OR_GUILD_FOUND" then
         connection.rules.selfFoundOnly = false
+        connection.rules.guildFoundOnly = false
         connection.rules.level60GuildFound = true
+        connection.rules.allowLevel60WithoutSelfFound = false
+        self:MarkGuildFoundRequired(connection)
+    elseif mode == "GUILD_FOUND" then
+        connection.rules.selfFoundOnly = false
+        connection.rules.guildFoundOnly = true
+        connection.rules.level60GuildFound = false
         connection.rules.allowLevel60WithoutSelfFound = false
         self:MarkGuildFoundRequired(connection)
     else
         connection.rules.selfFoundOnly = false
+        connection.rules.guildFoundOnly = false
         connection.rules.level60GuildFound = false
         connection.rules.allowLevel60WithoutSelfFound = false
     end
@@ -947,7 +1026,15 @@ function iRC:SetConnectionRule(key, value)
     if not self:IsGuildMaster() or self.DefaultConnectionRules[key] == nil then return false end
     local connection = self:GetConnection()
     if not connection then return false end
-    connection.rules[key] = value and true or false
+    value = value and true or false
+    if value and (key == "nativeTongueOnly" or key == "sameRaceGroupsOnly" or key == "allowLevel60MixedRaceGroups")
+        and connection.rules.raceLock ~= true then return false end
+    connection.rules[key] = value
+    if key == "raceLock" and not value then
+        connection.rules.nativeTongueOnly = false
+        connection.rules.sameRaceGroupsOnly = false
+        connection.rules.allowLevel60MixedRaceGroups = false
+    end
     if value and key == "level60GuildFound" then
         connection.rules.allowLevel60WithoutSelfFound = false
     elseif value and key == "allowLevel60WithoutSelfFound" then
@@ -1057,10 +1144,14 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRCDB.connections = iRCDB.connections or {}
         iRC:GetSettings()
         iRCCharDB = iRCCharDB or {}
+        iRC:DisableLegacyAddon()
     elseif event == "PLAYER_LOGIN" then
         iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()
+        if iRC.LegacyAddonWasLoaded then
+            iRC:Print(iRC.Colors.Yellow .. "The old iRacelockConnection addon was disabled. Please /reload before using iRC." .. iRC.Colors.Reset)
+        end
     elseif event == "PLAYER_REGEN_DISABLED" then
         iRC:EnterLowTrafficMode()
         iRC:CloseAllWindows()

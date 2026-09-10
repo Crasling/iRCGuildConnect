@@ -5,6 +5,27 @@ if not iRC then return end
 local UI = {}
 iRC.MainUI = UI
 local expandedGuildCards = {}
+local guildStatsFilter = "ALL"
+
+local function getGuildCardTag(group)
+    local rules = group and group.rulesKnown and group.rules
+    if not rules then return nil end
+    if rules.raceLock == true then return "RaceLocked", { 0.25, 0.85, 1 } end
+    local progression = iRC:GetProgressionMode(rules)
+    if progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND" then
+        return "GuildFound", { 0.30, 1, 0.35 }
+    end
+    return "Normal", { 0.72, 0.72, 0.72 }
+end
+
+local function getCurrentGuildStatsFilter()
+    if not iRC:IsGuildConnectionActive() then return "ALL" end
+    local rules = iRC:GetConnectionRules()
+    if rules.raceLock == true then return "RACE_LOCKED" end
+    local progression = iRC:GetProgressionMode(rules)
+    if progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND" then return "GUILD_FOUND" end
+    return "ALL"
+end
 
 local COLORS = {
     gold = iRC.ColorValues.Orange,
@@ -25,6 +46,14 @@ local RACE_ICONS = {
     TROLL = "Interface\\Icons\\Achievement_Character_Troll_Male",
     BLOODELF = "Interface\\Icons\\Achievement_Character_Bloodelf_Male",
 }
+local NO_DATA_ICON = "Interface\\Icons\\Achievement_General"
+
+local function getGuildCardIcon(group)
+    local rules = group and group.rulesKnown and group.rules
+    if rules and rules.raceLock == true then return RACE_ICONS[group.race] or NO_DATA_ICON end
+    local index = math.floor(tonumber(group and group.guildHomepageIcon) or 0)
+    return iRC.GuildHomepageIcons[index] or NO_DATA_ICON
+end
 
 local RACE_COLORS = {
     HUMAN = { 0.82, 0.62, 0.25 }, DWARF = { 0.74, 0.43, 0.18 }, NIGHTELF = { 0.56, 0.30, 0.78 }, GNOME = { 0.35, 0.68, 0.95 }, DRAENEI = { 0.45, 0.46, 0.90 },
@@ -86,7 +115,7 @@ end
 
 local function makeRaceCard(parent)
     local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    card:SetHeight(148)
+    card:SetHeight(158)
     createBackdrop(card, { 0.045, 0.055, 0.075, 0.98 }, { 0.30, 0.31, 0.34, 1 })
 
     card.accent = card:CreateTexture(nil, "ARTWORK")
@@ -105,6 +134,8 @@ local function makeRaceCard(parent)
     card.race = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     card.race:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -1)
     card.race:SetTextColor(unpack(COLORS.gold))
+    card.tag = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    card.tag:SetPoint("LEFT", card.race, "RIGHT", 9, 0)
     card.rank = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     card.rank:SetPoint("TOPRIGHT", -14, -16)
     card.rank:SetTextColor(unpack(COLORS.gold))
@@ -120,6 +151,8 @@ local function makeRaceCard(parent)
     card.guild:SetPoint("LEFT", card.guildLabel, "RIGHT", 7, 0)
     card.guild:SetWidth(180)
     card.guild:SetJustifyH("LEFT")
+    card.guildLabel:Hide()
+    card.guild:Hide()
 
     card.averageLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     card.averageLabel:SetPoint("TOP", card, "TOP", -240, -58)
@@ -147,41 +180,41 @@ local function makeRaceCard(parent)
     card.totalMembers:SetPoint("TOP", card.totalMembersLabel, "BOTTOM", 0, -3)
 
     card.classesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -91)
+    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -97)
     card.classesTitle:SetText(iRC:Text("GUILD_STATS_CLASS_BREAKDOWN"))
     card.classText = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.classText:SetPoint("TOPLEFT", 15, -103)
-    card.classText:SetPoint("TOPRIGHT", -15, -103)
+    card.classText:SetPoint("TOPLEFT", 15, -109)
+    card.classText:SetPoint("TOPRIGHT", -15, -109)
     card.classText:SetJustifyH("CENTER")
     card.classText:SetWordWrap(false)
     card.classBar = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.classBar:SetPoint("TOPLEFT", 16, -117)
-    card.classBar:SetPoint("TOPRIGHT", -16, -117)
+    card.classBar:SetPoint("TOPLEFT", 16, -123)
+    card.classBar:SetPoint("TOPRIGHT", -16, -123)
     card.classBar:SetHeight(12)
     createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
     card.classSegments = {}
     card.classLabels = {}
     card.expandHint = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.expandHint:SetPoint("TOPRIGHT", -16, -132)
+    card.expandHint:SetPoint("TOPRIGHT", -16, -138)
     card.expandHint:SetWidth(630)
     card.expandHint:SetJustifyH("RIGHT")
     card.rulesSeparator = card:CreateTexture(nil, "ARTWORK")
     card.rulesSeparator:SetColorTexture(0.35, 0.29, 0.16, 0.8)
-    card.rulesSeparator:SetPoint("TOPLEFT", 16, -149)
-    card.rulesSeparator:SetPoint("TOPRIGHT", -16, -149)
+    card.rulesSeparator:SetPoint("TOPLEFT", 16, -159)
+    card.rulesSeparator:SetPoint("TOPRIGHT", -16, -159)
     card.rulesSeparator:SetHeight(1)
     card.rulesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.rulesTitle:SetPoint("TOPLEFT", 16, -159)
+    card.rulesTitle:SetPoint("TOPLEFT", 16, -169)
     card.rulesTitle:SetText(iRC:Text("GUILD_STATS_GUILD_PROFILE"))
     card.rulesTitle:SetTextColor(unpack(COLORS.gold))
     card.rulesText = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.rulesText:SetPoint("TOPLEFT", 20, -178)
-    card.rulesText:SetPoint("TOPRIGHT", -20, -178)
+    card.rulesText:SetPoint("TOPLEFT", 20, -188)
+    card.rulesText:SetPoint("TOPRIGHT", -20, -188)
     card.rulesText:SetJustifyH("LEFT")
     card.rulesText:SetJustifyV("TOP")
     card.rulesText:SetWordWrap(true)
     card.contactsLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.contactsLabel:SetPoint("TOPLEFT", 20, -192)
+    card.contactsLabel:SetPoint("TOPLEFT", 20, -202)
     card.contactsLabel:SetText(iRC:Text("GUILD_CONTACTS_LABEL") .. ":")
     card.contactsLabel:SetTextColor(unpack(COLORS.gold))
     card.contactButtons = {}
@@ -272,7 +305,7 @@ end
 function UI:Create()
     if self.frame then return self.frame end
 
-    local frame = CreateFrame("Frame", "iRacelockConnectionMainFrame", UIParent, "BackdropTemplate")
+    local frame = CreateFrame("Frame", "iRCMainFrame", UIParent, "BackdropTemplate")
     frame:SetSize(980, 650)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
@@ -333,6 +366,10 @@ function UI:Create()
             tab.category = item.id
             tab:SetScript("OnClick", function(self)
                 frame.category = self.category
+                if self.category == "Race Overview" then
+                    guildStatsFilter = getCurrentGuildStatsFilter()
+                    UI.preservedRaceScroll = 0
+                end
                 if self.category == "Guild Members" then iRC:RefreshGuildRoster() end
                 if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
                 UI:Refresh()
@@ -354,6 +391,9 @@ function UI:Create()
     frame.raceRefresh:SetPoint("TOPRIGHT", -14, -9)
     frame.raceRefresh:SetText(iRC:Text("RL_GRID_REFRESH"))
     frame.raceRefresh:SetScript("OnClick", function()
+        if frame.category == "Race Overview" and frame.scroll then
+            UI.preservedRaceScroll = frame.scroll:GetVerticalScroll()
+        end
         if iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
         UI:Refresh()
     end)
@@ -400,6 +440,36 @@ function UI:Create()
     frame.contentSubtitle:SetPoint("RIGHT", main, "RIGHT", -22, 0)
     frame.contentSubtitle:SetJustifyH("LEFT")
     frame.contentSubtitle:SetWordWrap(true)
+
+    frame.guildStatsFilters = {}
+    for index, filter in ipairs({
+        { key = "ALL", label = "All" },
+        { key = "RACE_LOCKED", label = "RaceLocked" },
+        { key = "GUILD_FOUND", label = "GuildFound" },
+    }) do
+        local filterKey, filterLabel = filter.key, filter.label
+        local button = CreateFrame("Button", nil, main, "BackdropTemplate")
+        button:SetSize(160, 27)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 166, -50)
+        createBackdrop(button, { 0.055, 0.045, 0.035, 0.96 }, { 0.28, 0.23, 0.16, 0.9 })
+        button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
+        button.activeGlow:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
+        button.activeGlow:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -3, 3)
+        button.activeGlow:SetColorTexture(0, 0, 0, 0)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        button.text:SetPoint("CENTER")
+        button.text:SetText(filterLabel)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints(button)
+        button.highlight:SetColorTexture(1, 0.72, 0.22, 0.10)
+        button:SetScript("OnClick", function()
+            guildStatsFilter = filterKey
+            UI.preservedRaceScroll = 0
+            UI:Refresh()
+        end)
+        button.filterKey = filterKey
+        frame.guildStatsFilters[index] = button
+    end
 
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 15, -78)
@@ -541,9 +611,12 @@ end
 local function getActiveRuleLines(group)
     if not group.rulesKnown or type(group.rules) ~= "table" then return { iRC:Text("GUILD_STATS_RULES_UNKNOWN") } end
     local rules, lines = group.rules, {}
-    if rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NATIVE_TONGUE") end
+    if rules.raceLock then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_RACE_LOCK") end
+    if rules.raceLock and rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NATIVE_TONGUE") end
     local progressionMode = iRC:GetProgressionMode(rules)
-    if progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
+    if progressionMode == "GUILD_FOUND" then
+        lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_FOUND")
+    elseif progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
         lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_HYBRID")
     elseif progressionMode == "SELF_FOUND" then
         local maxMode = iRC:GetMaxLevelProgressionMode(rules)
@@ -553,8 +626,8 @@ local function getActiveRuleLines(group)
     else
         lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NO_PROGRESSION")
     end
-    if rules.sameRaceGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SAME_RACE", rules.sameRaceMinimumLevel or 1) end
-    if rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_MIXED_RACE_60") end
+    if rules.raceLock and rules.sameRaceGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_SAME_RACE", rules.sameRaceMinimumLevel or 1) end
+    if rules.raceLock and rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_MIXED_RACE_60") end
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_ONLY", rules.guildGroupsMinimumLevel or 1) end
     if rules.guildFoundTradeExceptions then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_TRADE_EXCEPTIONS") end
     if rules.guildMapEnabled then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_GUILD_MAP") end
@@ -564,28 +637,41 @@ local function getActiveRuleLines(group)
 end
 
 local function getGuildProfileLines(group)
+    local description = tostring(group.guildDescription or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if description == "" then description = iRC:Text("GUILD_STATS_NO_DESCRIPTION") end
     local lines = {
-        iRC:Text("GUILD_STATS_RACELOCKED_EXPLANATION"),
-        "",
-        "",
-        iRC:Text("GUILD_STATS_ACTIVE_RULES") .. ":",
+        description,
     }
+    if (tonumber(group.guildDescriptionTimestamp) or 0) > 0 and tostring(group.guildDescriptionEditedBy or "") ~= "" then
+        lines[#lines + 1] = iRC:Text("GUILD_STATS_DESCRIPTION_META", iRC:FormatPlayerName(group.guildDescriptionEditedBy),
+            date("%Y-%m-%d %H:%M", group.guildDescriptionTimestamp))
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = iRC:Text("GUILD_STATS_ACTIVE_RULES") .. ":"
     for _, line in ipairs(getActiveRuleLines(group)) do lines[#lines + 1] = line end
     return lines
 end
 
 local function guildCardHeight(group)
-    if not expandedGuildCards[guildCardKey(group)] then return 148 end
-    return 190 + #getGuildProfileLines(group) * 14
+    if not expandedGuildCards[guildCardKey(group)] then return 158 end
+    local descriptionLines = math.max(1, math.ceil(#tostring(group.guildDescription or "") / 72))
+    return 230 + #getGuildProfileLines(group) * 14 + (descriptionLines - 1) * 14
 end
 
 local function setRaceCard(card, group, rank)
-    local accent = RACE_COLORS[group.race] or RACE_COLORS.Unknown
+    local rules = group and group.rulesKnown and group.rules
+    local progression = rules and iRC:GetProgressionMode(rules) or "NONE"
+    local accent = rules and rules.raceLock == true and (RACE_COLORS[group.race] or RACE_COLORS.Unknown)
+        or (progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND")
+            and { 0.30, 1, 0.35 } or RACE_COLORS.Unknown
     card.accent:SetColorTexture(accent[1], accent[2], accent[3], 1)
-    card.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
+    card.icon:SetTexture(getGuildCardIcon(group))
     card.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
     card.rank:SetText("#" .. rank)
-    card.guild:SetText(RACE_LABELS[group.race] or group.race)
+    local tag, tagColor = getGuildCardTag(group)
+    card.tag:SetText(tag and ("[" .. tag .. "]") or "")
+    if tagColor then card.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
+    card.tag:SetShown(tag ~= nil)
     card.average:SetText(group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "—")
     card.members:SetText(formatNumber(group.activePlayers or 0))
     card.total:SetText(group.activeMembers ~= nil and formatNumber(group.activeMembers) or "—")
@@ -601,14 +687,28 @@ local function setRaceCard(card, group, rank)
     card.contactsLabel:SetShown(expanded and true or false)
     if expanded then
         card.rulesText:SetText(table.concat(getGuildProfileLines(group), "\n"))
-        local contacts = {}
+        card.contactsLabel:ClearAllPoints()
+        card.contactsLabel:SetPoint("TOPLEFT", card.rulesText, "BOTTOMLEFT", 0, -10)
+        local contacts, originalIndex = {}, 0
+        local onlineMask = math.floor(tonumber(group.guildContactsOnlineMask) or 0)
+        local onlineSnapshotFresh = tonumber(group.timestamp) and time() - tonumber(group.timestamp) <= 1800
         for name in tostring(group.guildContacts or ""):gmatch("[^,]+") do
             name = name:gsub("^%s+", ""):gsub("%s+$", "")
-            if name ~= "" then contacts[#contacts + 1] = name end
+            if name ~= "" and #contacts < 5 then
+                originalIndex = originalIndex + 1
+                contacts[#contacts + 1] = {
+                    name = name, order = originalIndex,
+                    online = onlineSnapshotFresh and math.floor(onlineMask / (2 ^ (originalIndex - 1))) % 2 == 1,
+                }
+            end
         end
+        table.sort(contacts, function(a, b)
+            if a.online ~= b.online then return a.online end
+            return a.order < b.order
+        end)
         card.contactsLabel:SetText(#contacts > 0 and (iRC:Text("GUILD_CONTACTS_LABEL") .. ":") or iRC:Text("GUILD_STATS_NO_CONTACTS"))
-        local x = 115
-        for index, name in ipairs(contacts) do
+        local previousButton
+        for index, contact in ipairs(contacts) do
             local button = card.contactButtons[index]
             if not button then
                 button = CreateFrame("Button", nil, card)
@@ -619,18 +719,27 @@ local function setRaceCard(card, group, rank)
                 button.highlight:SetAllPoints(); button.highlight:SetColorTexture(1, 0.55, 0, 0.15)
                 card.contactButtons[index] = button
             end
-            local contactName = name
-            local displayName = iRC:FormatPlayerName(name)
-            button:ClearAllPoints(); button:SetPoint("TOPLEFT", card, "TOPLEFT", x, -187)
-            button.text:SetText(displayName); button:SetWidth(math.max(55, button.text:GetStringWidth() + 14))
+            local contactName = contact.name
+            local displayName = iRC:FormatPlayerName(contact.name)
+            button:ClearAllPoints()
+            if previousButton then button:SetPoint("LEFT", previousButton, "RIGHT", 6, 0)
+            else button:SetPoint("LEFT", card.contactsLabel, "RIGHT", 8, 0) end
+            button.text:SetText(contact.online
+                and ("|TInterface\\FriendsFrame\\StatusIcon-Online:10:10:0:0|t " .. displayName) or displayName)
+            button:SetWidth(math.max(55, button.text:GetStringWidth() + 14))
             button:SetScript("OnClick", function()
+                local playerFaction = UnitFactionGroup and UnitFactionGroup("player")
+                if playerFaction and group.faction and playerFaction ~= group.faction then
+                    iRC:Print(iRC:Text("GUILD_CONTACT_CROSS_FACTION"))
+                    return
+                end
                 if ChatFrame_SendTell then ChatFrame_SendTell(contactName) end
             end)
             button:SetScript("OnEnter", function(self)
                 GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText(iRC:Text("GUILD_CONTACT_WHISPER", displayName)); GameTooltip:Show()
             end)
             button:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            button:Show(); x = x + button:GetWidth() + 6
+            button:Show(); previousButton = button
         end
         for index = #contacts + 1, #card.contactButtons do card.contactButtons[index]:Hide() end
     else
@@ -659,7 +768,7 @@ local function updateRacePodium(frame, rankedGroups)
         end
         entry.rank:SetText("#" .. rank)
         if group then
-            entry.icon:SetTexture(RACE_ICONS[group.race] or "Interface\\Icons\\Achievement_General")
+            entry.icon:SetTexture(getGuildCardIcon(group))
             entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
         else
             entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
@@ -672,6 +781,23 @@ end
 
 local function updateRaceOverview(frame)
     local allGroups = iRC:GetRaceGridOverview()
+    if guildStatsFilter == "RACE_LOCKED" then
+        local filtered = {}
+        for _, group in ipairs(allGroups) do
+            if group.rulesKnown and group.rules and group.rules.raceLock == true then filtered[#filtered + 1] = group end
+        end
+        allGroups = filtered
+    elseif guildStatsFilter == "GUILD_FOUND" then
+        local filtered = {}
+        for _, group in ipairs(allGroups) do
+            if group.rulesKnown and group.rules and group.rules.raceLock == false
+                and (iRC:GetProgressionMode(group.rules) == "GUILD_FOUND"
+                    or iRC:GetProgressionMode(group.rules) == "SELF_FOUND_OR_GUILD_FOUND") then
+                filtered[#filtered + 1] = group
+            end
+        end
+        allGroups = filtered
+    end
     local ranks = {}
     for index, group in ipairs(allGroups) do ranks[group.guildName] = index end
 
@@ -730,6 +856,22 @@ function UI:Refresh()
     self.pendingRefresh = nil
     local frame = self:Create()
     frame.raceRefresh:SetShown(frame.category == "Race Overview")
+    for _, button in ipairs(frame.guildStatsFilters or {}) do
+        local shown = frame.category == "Race Overview"
+        button:SetShown(shown)
+        if shown then
+            local active = button.filterKey == guildStatsFilter
+            button.activeGlow:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], active and 0.18 or 0)
+            button:SetBackdropColor(active and 0.18 or 0.055, active and 0.09 or 0.045, active and 0.025 or 0.035, 0.98)
+            button:SetBackdropBorderColor(active and COLORS.gold[1] or 0.28, active and COLORS.gold[2] or 0.23,
+                active and COLORS.gold[3] or 0.16, active and 1 or 0.9)
+            button.text:SetFontObject(active and GameFontHighlight or GameFontNormal)
+            button.text:SetTextColor(active and 1 or 0.78, active and 0.82 or 0.72, active and 0.36 or 0.62)
+        end
+    end
+    frame.scroll:ClearAllPoints()
+    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -82 or -78)
+    frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.cacheUpdating:SetShown(frame.category == "Race Overview" and iRC.RaceGrid and iRC.RaceGrid:IsCacheUpdating())
     local profile = getProfile(frame)
     local name = profile and profile.name or frame.subjectName or iRC:GetPlayerName()
@@ -750,6 +892,10 @@ function UI:Open(subjectName, publishFromClick)
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     frame.subjectName = subjectName or iRC:GetPlayerName()
     if not frame.category or not frame.tabs[frame.category] then frame.category = "Race Overview" end
+    if frame.category == "Race Overview" then
+        guildStatsFilter = getCurrentGuildStatsFilter()
+        self.preservedRaceScroll = 0
+    end
     if frame.category == "Guild Members" then iRC:RefreshGuildRoster() end
     frame:SetScale(iRC:GetSettings().mainWindowScale or 1)
     self:Refresh()
@@ -769,12 +915,23 @@ end
 
 function UI:RefreshIfShown()
     if not self.frame or not self.frame:IsShown() or self.pendingRefresh then return end
-    if not C_Timer or not C_Timer.After then self:Refresh(); return end
+    if not C_Timer or not C_Timer.After then
+        if self.frame.category == "Race Overview" and self.frame.scroll then
+            self.preservedRaceScroll = self.frame.scroll:GetVerticalScroll()
+        end
+        self:Refresh()
+        return
+    end
     local ticket = {}
     self.pendingRefresh = ticket
     C_Timer.After(0.2, function()
         if UI.pendingRefresh ~= ticket then return end
         UI.pendingRefresh = nil
-        if UI.frame and UI.frame:IsShown() then UI:Refresh() end
+        if UI.frame and UI.frame:IsShown() then
+            if UI.frame.category == "Race Overview" and UI.frame.scroll then
+                UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll()
+            end
+            UI:Refresh()
+        end
     end)
 end

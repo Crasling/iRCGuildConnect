@@ -48,12 +48,15 @@ groupWarningFrame.text:SetTextColor(1, 0.10, 0.10)
 groupWarningFrame:Hide()
 
 local function isRuleEnabled(key)
-    return iRC:IsGuildConnectionActive() and iRC:GetConnectionRules()[key] == true
+    local rules = iRC:GetConnectionRules()
+    if (key == "nativeTongueOnly" or key == "sameRaceGroupsOnly" or key == "allowLevel60MixedRaceGroups")
+        and rules.raceLock ~= true then return false end
+    return iRC:IsGuildConnectionActive() and rules[key] == true
 end
 
 local function isGuildFoundEconomyActive()
     local progressionMode = iRC:GetProgressionMode()
-    local eligible = progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
+    local eligible = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
         or (UnitLevel("player") or 0) >= 60 or iRC:IsGuildBankException(iRC:GetPlayerName())
     return iRC:IsGuildFoundRequired() and eligible and not iRC:GetSelfFoundState()
 end

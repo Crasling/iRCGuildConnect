@@ -250,6 +250,10 @@ function RaceGrid:GetLocalReport()
         classes = guild.classes, guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
         guildContacts = guild.guildContacts,
+        guildContactsOnlineMask = guild.guildContactsOnlineMask,
+        guildDescription = guild.guildDescription, guildDescriptionTimestamp = guild.guildDescriptionTimestamp,
+        guildDescriptionEditedBy = guild.guildDescriptionEditedBy,
+        guildHomepageIcon = guild.guildHomepageIcon,
         source = "iRC guild report", timestamp = time(), lastSeen = time(),
     }
 end
@@ -264,6 +268,11 @@ function RaceGrid:StoreGuildReport(report, silent)
     local oldTimestamp, newTimestamp = old and (tonumber(old.timestamp) or 0) or 0, tonumber(report.timestamp) or 0
     if old and (oldTimestamp > newTimestamp
         or (oldTimestamp == newTimestamp and (tonumber(old.cacheHop) or 0) < (tonumber(report.cacheHop) or 0))) then return false end
+    if old and (tonumber(old.guildDescriptionTimestamp) or 0) > (tonumber(report.guildDescriptionTimestamp) or 0) then
+        report.guildDescription = old.guildDescription
+        report.guildDescriptionTimestamp = old.guildDescriptionTimestamp
+        report.guildDescriptionEditedBy = old.guildDescriptionEditedBy
+    end
     report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
     report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     report.lastSeen = time()
@@ -302,8 +311,10 @@ function RaceGrid:BuildOwnGuildReports()
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
         rulesKnown = true,
         rules = {
+            raceLock = rules.raceLock == true,
             nativeTongueOnly = rules.nativeTongueOnly and true or false,
             selfFoundOnly = rules.selfFoundOnly and true or false,
+            guildFoundOnly = rules.guildFoundOnly and true or false,
             level60GuildFound = rules.level60GuildFound and true or false,
             allowLevel60WithoutSelfFound = rules.allowLevel60WithoutSelfFound and true or false,
             sameRaceGroupsOnly = rules.sameRaceGroupsOnly and true or false,
@@ -313,8 +324,21 @@ function RaceGrid:BuildOwnGuildReports()
             guildGroupsMinimumLevel = tonumber(rules.guildGroupsMinimumLevel) or 1,
         },
         guildContacts = tostring(rules.guildContacts or ""):sub(1, 140),
+        guildDescription = tostring(connection.guildHomepageDescription.text or ""):sub(1, iRC.GuildHomepageDescriptionMaxLength),
+        guildDescriptionTimestamp = math.floor(tonumber(connection.guildHomepageDescription.timestamp) or 0),
+        guildDescriptionEditedBy = tostring(connection.guildHomepageDescription.editedBy or ""):sub(1, 80),
+        guildHomepageIcon = math.max(0, math.min(#iRC.GuildHomepageIcons,
+            math.floor(tonumber(connection.guildHomepageIcon.icon) or 0))),
     }
-    local counted = {}
+    local counted, contactIndexes = {}, {}
+    local contactIndex = 0
+    for name in group.guildContacts:gmatch("[^,]+") do
+        contactIndex = contactIndex + 1
+        if contactIndex <= 5 then
+            contactIndexes[iRC:NormalizeName(name:gsub("^%s+", ""):gsub("%s+$", ""))] = contactIndex
+        end
+    end
+    group.guildContactsOnlineMask = 0
     for _, member in ipairs(iRC:GetGuildRosterRows()) do
         local participation = self:GetRosterParticipation(member)
         local key = iRC:NormalizeName(member.name)
@@ -325,6 +349,10 @@ function RaceGrid:BuildOwnGuildReports()
                 or member.lastOnlineDays ~= nil and member.lastOnlineDays <= 30
             group.members, group.totalLevel = group.members + 1, group.totalLevel + level
             if member.online then group.activePlayers = group.activePlayers + 1 end
+            local inviteIndex = contactIndexes[key]
+            if member.online and inviteIndex then
+                group.guildContactsOnlineMask = group.guildContactsOnlineMask + 2 ^ (inviteIndex - 1)
+            end
             if recentlyOnline then group.activeMembers = group.activeMembers + 1 end
             if participation == "verified" then group.verifiedMembers = group.verifiedMembers + 1
             elseif participation == "compatible" then group.compatibleMembers = group.compatibleMembers + 1 end
@@ -357,7 +385,7 @@ function RaceGrid:IsExternalBroadcaster()
     return true
 end
 
-local function serializeGuildReport(report)
+local function serializeGuildReport(report, includeDescription)
     local fields = {
         "GUILD_REPORT", WIRE_VERSION, tostring(report.name or ""), tostring(report.guid or ""),
         tostring(report.guildName or ""), tostring(report.race or ""),
@@ -374,7 +402,9 @@ local function serializeGuildReport(report)
         { "allowLevel60MixedRaceGroups", 32 }, { "guildGroupsOnly", 64 },
         { "guildFoundTradeExceptions", 128 },
     }) do
-        if rules[entry[1]] then ruleMask = ruleMask + entry[2] end
+        local raceOnly = entry[1] == "nativeTongueOnly" or entry[1] == "sameRaceGroupsOnly"
+            or entry[1] == "allowLevel60MixedRaceGroups"
+        if rules[entry[1]] and (not raceOnly or rules.raceLock == true) then ruleMask = ruleMask + entry[2] end
     end
     fields[#fields + 1] = tostring(ruleMask)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
@@ -384,6 +414,15 @@ local function serializeGuildReport(report)
     fields[#fields + 1] = report.activeLevel60 ~= nil and tostring(report.activeLevel60) or ""
     fields[#fields + 1] = report.activeMembers ~= nil and tostring(report.activeMembers) or ""
     fields[#fields + 1] = rules.guildMapEnabled and "1" or "0"
+    fields[#fields + 1] = rules.raceLock == true and "1" or "0"
+    fields[#fields + 1] = tostring(math.max(0, math.min(31, math.floor(tonumber(report.guildContactsOnlineMask) or 0))))
+    fields[#fields + 1] = rules.guildFoundOnly and "1" or "0"
+    fields[#fields + 1] = tostring(math.max(0, math.min(#iRC.GuildHomepageIcons, math.floor(tonumber(report.guildHomepageIcon) or 0))))
+    if includeDescription then
+        fields[#fields + 1] = tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength)
+        fields[#fields + 1] = tostring(math.floor(tonumber(report.guildDescriptionTimestamp) or 0))
+        fields[#fields + 1] = tostring(report.guildDescriptionEditedBy or ""):gsub("[%c]", ""):sub(1, 80)
+    end
     return table.concat(fields, SEP)
 end
 
@@ -406,6 +445,12 @@ function RaceGrid:BroadcastReport(fromClick)
     if not send(PREFIX, payload, "CHANNEL", CHANNEL_NAME) then
         iRC:DebugMsg(iRC:Text("RACEGRID_REPORT_SEND_FAILED", report.guildName, #payload), 1)
         return false
+    end
+    local description = tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength)
+    local descriptionTimestamp = math.floor(tonumber(report.guildDescriptionTimestamp) or 0)
+    local descriptionEditor = tostring(report.guildDescriptionEditedBy or ""):gsub("[%c]", ""):sub(1, 40)
+    if descriptionTimestamp > 0 and descriptionEditor ~= "" then
+        send(PREFIX, table.concat({ "GUILD_DESC", WIRE_VERSION, tostring(descriptionTimestamp), descriptionEditor, description }, SEP), "CHANNEL", CHANNEL_NAME)
     end
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel60,
         report.activeMembers, report.activePlayers, report.members), 3)
@@ -479,6 +524,7 @@ local function parseGuildReport(parts)
             guildGroupsOnly = enabled(64), sameRaceMinimumLevel = sameRaceLevel,
             guildFoundTradeExceptions = enabled(128),
             guildMapEnabled = parts[29] == "1",
+            raceLock = parts[30] == "1",
             guildGroupsMinimumLevel = guildGroupsLevel,
         }
     end
@@ -491,6 +537,19 @@ local function parseGuildReport(parts)
         activeMembers = validNumber(parts[28], 0, members)
         if not activeLevel60 or not activeMembers or activeLevel60 > level60 or activeLevel60 > activeMembers then return nil end
     end
+    local rawOnlineMask = parts[31]
+    local guildContactsOnlineMask = validNumber(rawOnlineMask or "0", 0, 31)
+    local pureGuildFoundPresent = guildContactsOnlineMask ~= nil and (parts[32] == "0" or parts[32] == "1")
+    if rules then rules.guildFoundOnly = pureGuildFoundPresent and parts[32] == "1" or false end
+    local iconField = pureGuildFoundPresent and validNumber(parts[33] or "", 0, #iRC.GuildHomepageIcons) or nil
+    local guildHomepageIcon = iconField and math.floor(iconField) or 0
+    local descriptionStart = guildContactsOnlineMask ~= nil and (pureGuildFoundPresent and (iconField and 34 or 33) or 32) or 31
+    guildContactsOnlineMask = guildContactsOnlineMask or 0
+    local guildDescription = tostring(parts[descriptionStart] or "")
+    local guildDescriptionTimestamp = tonumber(parts[descriptionStart + 1]) or 0
+    local guildDescriptionEditedBy = tostring(parts[descriptionStart + 2] or "")
+    if #guildDescription > iRC.GuildHomepageDescriptionMaxLength or guildDescription:find("[%c]")
+        or #guildDescriptionEditedBy > 80 or guildDescriptionEditedBy:find("[%c]") then return nil end
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
@@ -498,6 +557,10 @@ local function parseGuildReport(parts)
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
         classes = classes, rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
+        guildContactsOnlineMask = guildContactsOnlineMask,
+        guildDescription = guildDescription, guildDescriptionTimestamp = guildDescriptionTimestamp,
+        guildDescriptionEditedBy = guildDescriptionEditedBy,
+        guildHomepageIcon = guildHomepageIcon,
         addonVersion = addonVersion,
         source = "iRC guild report",
     }
@@ -544,7 +607,7 @@ local function sendCacheOffers(requestId, requester)
         local hasSenderIdentity = type(report) == "table" and type(report.name) == "string" and report.name ~= ""
             and type(report.guid) == "string" and report.guid ~= ""
         if hasSenderIdentity and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE and (tonumber(report.cacheHop) or 0) == 0 then
-            local payload = serializeGuildReport(report)
+            local payload = serializeGuildReport(report, true)
             local checksum, guildName = payloadChecksum(payload), report.guildName
             local function offer()
                 if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(requester) then return end
@@ -702,6 +765,21 @@ local function handleMessage(prefix, message, sender, distribution)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts = split(message)
     if parts[1] and parts[1]:match("^CACHE_") and handleCacheMessage(parts, sender, distribution) then return end
+    if parts[1] == "GUILD_DESC" and parts[2] == WIRE_VERSION then
+        local timestamp, editedBy, value = tonumber(parts[3]), tostring(parts[4] or ""), tostring(parts[5] or "")
+        if timestamp and timestamp > 0 and timestamp <= time() + 300 and #editedBy <= 40 and not editedBy:find("[%c]")
+            and #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]") then
+            for _, report in pairs(getServerStore().guildReports) do
+                if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
+                    and timestamp > math.floor(tonumber(report.guildDescriptionTimestamp) or 0) then
+                    report.guildDescription, report.guildDescriptionTimestamp, report.guildDescriptionEditedBy = value, timestamp, editedBy
+                    if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+                    break
+                end
+            end
+        end
+        return
+    end
     local report = parseGuildReport(parts)
     -- WoW may qualify the channel sender with its realm while the profile in
     -- the payload uses the character's short name. Compare them using iRC's

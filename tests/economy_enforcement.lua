@@ -49,7 +49,7 @@ local iRC = {
     RecordSelfFoundState = function() end,
 }
 local private = { iRC = iRC }
-assert(loadfile("iRacelockConnection_Enforcement.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_Enforcement.lua"))("iRC", private)
 local enforcement = assert(iRC.Enforcement)
 enforcement:InstallTradeAPIGuard()
 enforcement:InstallMailAPIGuards()

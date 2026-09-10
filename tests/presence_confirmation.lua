@@ -49,12 +49,12 @@ local function advance(seconds)
 end
 local addon, private = {}, {}
 function LibStub() return { NewAddon = function() return addon end } end
-assert(loadfile("iRacelockConnection_Core.lua"))("iRacelockConnection", private)
-assert(loadfile("iRacelockConnection_Localization_enUS.lua"))("iRacelockConnection", private)
-assert(loadfile("iRacelockConnection_Guild.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_Core.lua"))("iRC", private)
+assert(loadfile("iRC_Localization_enUS.lua"))("iRC", private)
+assert(loadfile("iRC_Guild.lua"))("iRC", private)
 local guildFrame = frames[#frames]
-assert(loadfile("iRacelockConnection_Connection.lua"))("iRacelockConnection", private)
-assert(loadfile("iRacelockConnection_Compatibility.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_Connection.lua"))("iRC", private)
+assert(loadfile("iRC_Compatibility.lua"))("iRC", private)
 local iRC = private.iRC
 iRCDB, iRCCharDB = {}, {}
 function iRC:DebugMsg() end

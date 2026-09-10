@@ -21,6 +21,35 @@ local function CanUseManagementTools()
     return iRC:HasAnyManagementPermission()
 end
 
+local function BuildActiveRulesExplanation()
+    if not iRC:IsGuildConnectionActive() then return iRC:Text("RULES_READ_ONLY_INACTIVE") end
+    local rules, lines = iRC:GetConnectionRules(), {}
+    if rules.raceLock == true then
+        local race = iRC:GetGuildRace()
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_RACE_LOCK",
+            race ~= "" and iRC:Text("GUILD_RACE_" .. race) or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
+        if rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_NATIVE_LANGUAGE") end
+    end
+    local progression = iRC:GetProgressionMode(rules)
+    if progression == "SELF_FOUND" then
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SELF_FOUND")
+    elseif progression == "GUILD_FOUND" then
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_FOUND_ONLY")
+    elseif progression == "SELF_FOUND_OR_GUILD_FOUND" then
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_FOUND")
+    end
+    if rules.guildFoundTradeExceptions then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_TRADE_EXCEPTIONS") end
+    if rules.raceLock == true and rules.sameRaceGroupsOnly then
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SAME_RACE", rules.sameRaceMinimumLevel or 1)
+        if rules.allowLevel60MixedRaceGroups then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_MIXED_60") end
+    end
+    if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_GROUPS", rules.guildGroupsMinimumLevel or 1) end
+    if rules.guildMapEnabled then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_MAP") end
+    if #lines == 0 then return iRC:Text("RULES_READ_ONLY_NONE") end
+    for index, line in ipairs(lines) do lines[index] = "|cffffa31a•|r " .. line end
+    return table.concat(lines, "\n\n")
+end
+
 local function CreateSectionHeader(parent, text, yOffset)
     local header = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     header:SetHeight(24)
@@ -198,7 +227,7 @@ local function CreateConnectionStatusCard(parent, yOffset)
     return { status = status, detail = detail }, yOffset - 92
 end
 
-local settingsFrame = CreateFrame("Frame", "iRacelockConnectionSettingsFrame", UIParent, "BackdropTemplate")
+local settingsFrame = CreateFrame("Frame", "iRCSettingsFrame", UIParent, "BackdropTemplate")
 settingsFrame:SetSize(750, 520)
 settingsFrame:SetPoint("CENTER", UIParent, "CENTER")
 settingsFrame:SetBackdrop({
@@ -304,7 +333,8 @@ local iSTContainer, iSTContent = CreateTabContent()
 local guildFoundContainer, guildFoundContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
 local guildNotificationsContainer, guildNotificationsContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer }
+local guildHomepageContainer, guildHomepageContent = CreateTabContent()
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer }
 local sidebarButtons = {}
 local selectedTab = 1
 
@@ -332,6 +362,7 @@ local standardSidebarItems = {
     { type = "tab", label = "About", index = 4 },
     { type = "header", label = L.MANAGEMENT_HEADER, managementOnly = true },
     { type = "tab", label = L.GUILD_NOTIFICATIONS_TAB, index = 11, managementOnly = true },
+    { type = "tab", label = L.GUILD_HOMEPAGE_TAB, index = 12, homepageOnly = true },
     { type = "tab", label = L.GUILDFOUND_TOOLS_TAB, index = 9, guildFoundOnly = true },
     { type = "header", label = "Other Addons" },
     { type = "tab", label = "iWillRemember", index = 5 },
@@ -345,14 +376,13 @@ if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 10 }
 end
 local sidebarY = -6
-local managementSidebarHeader
 for _, item in ipairs(sidebarItems) do
     if item.type == "header" then
         local headerText = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         headerText:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 12, sidebarY - 2)
         headerText:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
         headerText:SetText(item.label)
-        if item.managementOnly then managementSidebarHeader = headerText end
+        item.widget = headerText
         sidebarY = sidebarY - 20
     else
         local button = CreateFrame("Button", nil, sidebar)
@@ -370,8 +400,30 @@ for _, item in ipairs(sidebarItems) do
         button:SetScript("OnClick", function() ShowTab(item.index) end)
         button.guildFoundOnly = item.guildFoundOnly
         button.managementOnly = item.managementOnly
+        button.homepageOnly = item.homepageOnly
+        item.widget = button
         sidebarButtons[item.index] = button
         sidebarY = sidebarY - 28
+    end
+end
+
+local function LayoutSidebar(managementAvailable)
+    local offset = -6
+    for _, item in ipairs(sidebarItems) do
+        local widget = item.widget
+        local restricted = item.managementOnly or item.homepageOnly or item.guildFoundOnly
+        local visible = not restricted or managementAvailable
+        widget:SetShown(visible)
+        if visible then
+            widget:ClearAllPoints()
+            if item.type == "header" then
+                widget:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 12, offset - 2)
+                offset = offset - 20
+            else
+                widget:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, offset)
+                offset = offset - 28
+            end
+        end
     end
 end
 
@@ -392,7 +444,7 @@ scaleLabel:SetText(L.IRC_MAIN_WINDOW_SCALE)
 local scaleValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 10, 0)
 scaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-local slider = CreateFrame("Slider", "iRacelockConnectionMainWindowScaleSlider", generalContent, "OptionsSliderTemplate")
+local slider = CreateFrame("Slider", "iRCMainWindowScaleSlider", generalContent, "OptionsSliderTemplate")
 slider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 slider:SetWidth(240)
 slider:SetMinMaxValues(0.8, 1.2)
@@ -441,9 +493,12 @@ end, "Send your latest progress to the guild.")
 broadcastButton:ClearAllPoints()
 broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
 y = connectionActionsY - 36
+local rulesEditorTopY = y - 2
 
 local guildRulesStatus
-local guildActivationCheck, guildRaceDropdown, nativeTongueCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, sameRaceGroupsCheck, sameRaceLevelSlider, level60SameRaceExceptionCheck, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local guildActivationCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, sameRaceLevelSlider, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local raceRuleUI = {}
+local homepageDescriptionUI = {}
 local guildContactRows = {}
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
@@ -452,27 +507,31 @@ guildActivationCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_ACTI
     function() return iRC:IsGuildConnectionActive() end,
     function(value) iRC:SetGuildConnectionActive(value) end)
 _, y = CreateSubcategoryHeader(connectionContent, L.GUILD_RACE_HEADER, y - 2)
-guildRaceDropdown, y = CreateSettingsDropdown("iRacelockConnectionGuildRaceDropdown", connectionContent, L.GUILD_RACE_LABEL, L.GUILD_RACE_DESC, y,
+raceRuleUI.lock, y = CreateSettingsCheckbox(connectionContent, L.RACE_LOCK_RULE, L.RACE_LOCK_RULE_DESC, y,
+    function() return iRC:GetConnectionRules().raceLock end,
+    function(value) iRC:SetConnectionRule("raceLock", value) end)
+raceRuleUI.race, y = CreateSettingsDropdown("iRCGuildRaceDropdown", connectionContent, L.GUILD_RACE_LABEL, L.GUILD_RACE_DESC, y,
     function() return iRC:GetGuildRace() end,
     function(value) iRC:SetGuildRace(value) end,
     function() return iRC:GetAvailableGuildRaces() end,
     function(value) return iRC:Text("GUILD_RACE_" .. value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Language", y - 2)
-nativeTongueCheck, y = CreateSettingsCheckbox(connectionContent, "Native language chat", "Forces your chat boxes to use your character's racial language when you send a message.", y,
+raceRuleUI.language, y = CreateSettingsCheckbox(connectionContent, "Native language chat", "Forces your chat boxes to use your character's racial language when you send a message.", y,
     function() return iRC:GetConnectionRules().nativeTongueOnly end,
     function(value) iRC:SetConnectionRule("nativeTongueOnly", value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Progression", y - 2)
-progressionModeDropdown, y = CreateSettingsDropdown("iRacelockConnectionProgressionModeDropdown", connectionContent,
+progressionModeDropdown, y = CreateSettingsDropdown("iRCProgressionModeDropdown", connectionContent,
     L.PROGRESSION_MODE, L.PROGRESSION_MODE_DESC, y,
     function() return iRC:GetProgressionMode() end,
     function(value) iRC:SetProgressionMode(value) end,
-    function() return { "NONE", "SELF_FOUND", "SELF_FOUND_OR_GUILD_FOUND" } end,
+    function() return { "NONE", "SELF_FOUND", "GUILD_FOUND", "SELF_FOUND_OR_GUILD_FOUND" } end,
     function(value)
         if value == "SELF_FOUND" then return L.PROGRESSION_SELF_FOUND end
+        if value == "GUILD_FOUND" then return L.PROGRESSION_GUILD_FOUND end
         if value == "SELF_FOUND_OR_GUILD_FOUND" then return L.PROGRESSION_HYBRID end
         return L.PROGRESSION_NONE
     end)
-maxLevelProgressionDropdown, y = CreateSettingsDropdown("iRacelockConnectionMaxLevelProgressionDropdown", connectionContent,
+maxLevelProgressionDropdown, y = CreateSettingsDropdown("iRCMaxLevelProgressionDropdown", connectionContent,
     L.PROGRESSION_MAX_LEVEL, L.PROGRESSION_MAX_LEVEL_DESC, y,
     function() return iRC:GetMaxLevelProgressionMode() end,
     function(value) iRC:SetMaxLevelProgressionMode(value) end,
@@ -491,7 +550,7 @@ guildMapRuleCheck, y = CreateSettingsCheckbox(connectionContent,
     function() return iRC:GetConnectionRules().guildMapEnabled end,
     function(value) iRC:SetConnectionRule("guildMapEnabled", value) end)
 _, y = CreateSubcategoryHeader(connectionContent, "Group Rules", y - 2)
-sameRaceGroupsCheck, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
+raceRuleUI.groups, y = CreateSettingsCheckbox(connectionContent, "Same-race groups only", "Warn the group and leave any party or raid that includes a different race.", y,
     function() return iRC:GetConnectionRules().sameRaceGroupsOnly end,
     function(value) iRC:SetConnectionRule("sameRaceGroupsOnly", value) end)
 local sameRaceLevelLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -500,7 +559,7 @@ sameRaceLevelLabel:SetText(L.SAME_RACE_MINIMUM_LEVEL)
 local sameRaceLevelValue = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 sameRaceLevelValue:SetPoint("LEFT", sameRaceLevelLabel, "RIGHT", 8, 0)
 sameRaceLevelValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-sameRaceLevelSlider = CreateFrame("Slider", "iRacelockConnectionSameRaceMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
+sameRaceLevelSlider = CreateFrame("Slider", "iRCSameRaceMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
 sameRaceLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y - 22)
 sameRaceLevelSlider:SetWidth(220)
 sameRaceLevelSlider:SetMinMaxValues(1, 60)
@@ -516,7 +575,7 @@ sameRaceLevelSlider:SetScript("OnValueChanged", function(_, value)
     if not refreshingSameRaceLevel then iRC:SetSameRaceMinimumLevel(value) end
 end)
 y = y - 66
-level60SameRaceExceptionCheck, y = CreateSettingsCheckbox(connectionContent, "Level 60 Mixed-Race Exception", "At level 60, allow mixed-race parties and raids. Same-race groups remain required while leveling.", y,
+raceRuleUI.level60Exception, y = CreateSettingsCheckbox(connectionContent, "Level 60 Mixed-Race Exception", "At level 60, allow mixed-race parties and raids. Same-race groups remain required while leveling.", y,
     function() return iRC:GetConnectionRules().allowLevel60MixedRaceGroups end,
     function(value) iRC:SetConnectionRule("allowLevel60MixedRaceGroups", value) end, 18)
 guildGroupsOnlyCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_GROUPS_ONLY, L.GUILD_GROUPS_ONLY_DESC, y,
@@ -528,7 +587,7 @@ guildGroupsLevelLabel:SetText(L.GUILD_GROUPS_MINIMUM_LEVEL)
 local guildGroupsLevelValue = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 guildGroupsLevelValue:SetPoint("LEFT", guildGroupsLevelLabel, "RIGHT", 8, 0)
 guildGroupsLevelValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-guildGroupsLevelSlider = CreateFrame("Slider", "iRacelockConnectionGuildGroupsMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
+guildGroupsLevelSlider = CreateFrame("Slider", "iRCGuildGroupsMinimumLevelSlider", connectionContent, "OptionsSliderTemplate")
 guildGroupsLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 38, y - 22)
 guildGroupsLevelSlider:SetWidth(220)
 guildGroupsLevelSlider:SetMinMaxValues(1, 60)
@@ -544,20 +603,139 @@ guildGroupsLevelSlider:SetScript("OnValueChanged", function(_, value)
     if not refreshingGuildGroupsLevel then iRC:SetGuildGroupsMinimumLevel(value) end
 end)
 y = y - 66
-_, y = CreateSubcategoryHeader(connectionContent, L.GUILD_CONTACTS_HEADER, y - 2)
-local guildContactsLabel = connectionContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-guildContactsLabel:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 20, y)
+connectionContent:SetHeight(math.abs(y) + 20)
+
+raceRuleUI.readOnly = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
+local readOnlyRules = raceRuleUI.readOnly
+readOnlyRules:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 0, rulesEditorTopY)
+readOnlyRules:SetPoint("TOPRIGHT", connectionContent, "TOPRIGHT", 0, rulesEditorTopY)
+readOnlyRules:SetHeight(math.abs(y - rulesEditorTopY) + 24)
+readOnlyRules:SetFrameLevel(connectionContent:GetFrameLevel() + 20)
+readOnlyRules:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
+readOnlyRules:SetBackdropColor(0.025, 0.022, 0.018, 1)
+readOnlyRules.header = readOnlyRules:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+readOnlyRules.header:SetPoint("TOPLEFT", 20, -18)
+readOnlyRules.header:SetText(L.RULES_READ_ONLY_HEADER)
+readOnlyRules.header:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+readOnlyRules.intro = readOnlyRules:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+readOnlyRules.intro:SetPoint("TOPLEFT", readOnlyRules.header, "BOTTOMLEFT", 0, -8)
+readOnlyRules.intro:SetWidth(470); readOnlyRules.intro:SetJustifyH("LEFT"); readOnlyRules.intro:SetWordWrap(true)
+readOnlyRules.intro:SetText(L.RULES_READ_ONLY_DESC)
+readOnlyRules.rules = readOnlyRules:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+readOnlyRules.rules:SetPoint("TOPLEFT", readOnlyRules.intro, "BOTTOMLEFT", 0, -18)
+readOnlyRules.rules:SetWidth(470); readOnlyRules.rules:SetJustifyH("LEFT"); readOnlyRules.rules:SetJustifyV("TOP"); readOnlyRules.rules:SetWordWrap(true)
+readOnlyRules:Hide()
+raceRuleUI.showReadOnly = false
+raceRuleUI.viewToggle = CreateFrame("Button", nil, connectionContent, "BackdropTemplate")
+raceRuleUI.viewToggle:SetSize(160, 27)
+raceRuleUI.viewToggle:SetPoint("TOPRIGHT", connectionContent, "TOPRIGHT", -12, rulesEditorTopY + 2)
+raceRuleUI.viewToggle:SetFrameLevel(connectionContent:GetFrameLevel() + 30)
+raceRuleUI.viewToggle:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+raceRuleUI.viewToggle.activeGlow = raceRuleUI.viewToggle:CreateTexture(nil, "BACKGROUND")
+raceRuleUI.viewToggle.activeGlow:SetPoint("TOPLEFT", 3, -3)
+raceRuleUI.viewToggle.activeGlow:SetPoint("BOTTOMRIGHT", -3, 3)
+raceRuleUI.viewToggle.activeGlow:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
+raceRuleUI.viewToggle.text = raceRuleUI.viewToggle:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+raceRuleUI.viewToggle.text:SetPoint("CENTER")
+raceRuleUI.viewToggle.highlight = raceRuleUI.viewToggle:CreateTexture(nil, "HIGHLIGHT")
+raceRuleUI.viewToggle.highlight:SetAllPoints()
+raceRuleUI.viewToggle.highlight:SetColorTexture(1, 0.72, 0.22, 0.10)
+raceRuleUI.viewToggle:SetScript("OnClick", function()
+    raceRuleUI.showReadOnly = not raceRuleUI.showReadOnly
+    if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+end)
+raceRuleUI.viewToggle:Hide()
+
+local homepageY = -12
+_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_HOMEPAGE_ICON_HEADER, homepageY)
+_, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_HOMEPAGE_ICON_DESC, homepageY, "GameFontDisableSmall")
+homepageDescriptionUI.iconButtons = {}
+for iconIndex, texture in ipairs(iRC.GuildHomepageIcons) do
+    local selectedIndex = iconIndex
+    local button = CreateFrame("Button", nil, guildHomepageContent, "BackdropTemplate")
+    button:SetSize(38, 38)
+    button:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20 + ((iconIndex - 1) % 10) * 44,
+        homepageY - math.floor((iconIndex - 1) / 10) * 44)
+    button:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    button:SetBackdropColor(0.03, 0.03, 0.03, 0.9)
+    button.icon = button:CreateTexture(nil, "ARTWORK")
+    button.icon:SetPoint("CENTER"); button.icon:SetSize(30, 30); button.icon:SetTexture(texture)
+    button:SetScript("OnClick", function() iRC:SetGuildHomepageIcon(selectedIndex) end)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(iRC:Text("GUILD_HOMEPAGE_ICON_NUMBER", selectedIndex)); GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    homepageDescriptionUI.iconButtons[iconIndex] = button
+end
+homepageY = homepageY - 94
+_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_DESCRIPTION_HEADER, homepageY)
+_, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_DESCRIPTION_DESC, homepageY, "GameFontDisableSmall")
+local homepagePresets = {
+    { name = L.GUILD_DESCRIPTION_PRESET_RACE, text = L.GUILD_DESCRIPTION_TEXT_RACE },
+    { name = L.GUILD_DESCRIPTION_PRESET_SF, text = L.GUILD_DESCRIPTION_TEXT_SF },
+    { name = L.GUILD_DESCRIPTION_PRESET_GF, text = L.GUILD_DESCRIPTION_TEXT_GF },
+    { name = L.GUILD_DESCRIPTION_PRESET_COMMUNITY, text = L.GUILD_DESCRIPTION_TEXT_COMMUNITY },
+}
+homepageDescriptionUI.selectedPreset = 0
+homepageDescriptionUI.dropdown, homepageY = CreateSettingsDropdown("iRCGuildDescriptionPreset", guildHomepageContent,
+    L.GUILD_DESCRIPTION_PRESET_LABEL, L.GUILD_DESCRIPTION_PRESET_DESC, homepageY,
+    function() return homepageDescriptionUI.selectedPreset end,
+    function(value)
+        homepageDescriptionUI.selectedPreset = value
+        local preset = homepagePresets[value]
+        if preset then
+            homepageDescriptionUI.edit:SetText(preset.text)
+            homepageDescriptionUI.selectedPreset = value
+            homepageDescriptionUI.edit:SetFocus()
+        end
+    end,
+    function() return { 0, 1, 2, 3, 4 } end,
+    function(value) return value == 0 and L.GUILD_DESCRIPTION_PRESET_CUSTOM or homepagePresets[value].name end)
+homepageDescriptionUI.edit = CreateFrame("EditBox", nil, guildHomepageContent, "BackdropTemplate")
+homepageDescriptionUI.edit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20, homepageY)
+homepageDescriptionUI.edit:SetSize(470, 72)
+homepageDescriptionUI.edit:SetMultiLine(true); homepageDescriptionUI.edit:SetAutoFocus(false)
+homepageDescriptionUI.edit:SetFontObject(GameFontHighlight); homepageDescriptionUI.edit:SetTextInsets(8, 8, 7, 7)
+homepageDescriptionUI.edit:SetMaxLetters(iRC.GuildHomepageDescriptionMaxLength)
+homepageDescriptionUI.edit:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+homepageDescriptionUI.edit:SetBackdropColor(0.03, 0.03, 0.03, 0.85)
+homepageDescriptionUI.edit:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+homepageDescriptionUI.edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+homepageDescriptionUI.counter = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+homepageDescriptionUI.counter:SetPoint("TOPRIGHT", homepageDescriptionUI.edit, "BOTTOMRIGHT", 0, -3)
+homepageDescriptionUI.edit:SetScript("OnTextChanged", function(self)
+    homepageDescriptionUI.counter:SetFormattedText("%d / %d", #self:GetText(), iRC.GuildHomepageDescriptionMaxLength)
+    homepageDescriptionUI.selectedPreset = 0
+    if homepageDescriptionUI.dropdown then homepageDescriptionUI.dropdown:Refresh() end
+end)
+homepageDescriptionUI.save = CreateFrame("Button", nil, guildHomepageContent, "UIPanelButtonTemplate")
+homepageDescriptionUI.save:SetSize(100, 24); homepageDescriptionUI.save:SetPoint("TOPLEFT", homepageDescriptionUI.edit, "BOTTOMLEFT", 0, -20)
+homepageDescriptionUI.save:SetText(L.GUILD_DESCRIPTION_SAVE)
+homepageDescriptionUI.save:SetScript("OnClick", function()
+    if iRC:SetGuildHomepageDescription(homepageDescriptionUI.edit:GetText()) then homepageDescriptionUI.edit:ClearFocus() end
+end)
+homepageDescriptionUI.meta = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+homepageDescriptionUI.meta:SetPoint("LEFT", homepageDescriptionUI.save, "RIGHT", 12, 0); homepageDescriptionUI.meta:SetWidth(350); homepageDescriptionUI.meta:SetJustifyH("LEFT")
+homepageY = homepageY - 128
+
+_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_CONTACTS_HEADER, homepageY)
+_, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_CONTACTS_DESC, homepageY, "GameFontDisableSmall")
+local guildContactsLabel = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+guildContactsLabel:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20, homepageY)
 guildContactsLabel:SetText(L.GUILD_CONTACTS_LABEL)
-guildContactsEdit = CreateFrame("EditBox", nil, connectionContent, "InputBoxTemplate")
+guildContactsEdit = CreateFrame("EditBox", nil, guildHomepageContent, "InputBoxTemplate")
 guildContactsEdit:SetSize(285, 24)
-guildContactsEdit:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 25, y - 22)
+guildContactsEdit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 25, homepageY - 22)
 guildContactsEdit:SetAutoFocus(false)
 guildContactsEdit:SetMaxLetters(60)
-guildContactSuggestionFrame = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
+guildContactSuggestionFrame = CreateFrame("Frame", nil, guildHomepageContent, "BackdropTemplate")
 guildContactSuggestionFrame:SetSize(285, 128)
 guildContactSuggestionFrame:SetPoint("TOPLEFT", guildContactsEdit, "BOTTOMLEFT", 0, -2)
 guildContactSuggestionFrame:SetFrameStrata("DIALOG")
-guildContactSuggestionFrame:SetFrameLevel(connectionContent:GetFrameLevel() + 20)
+guildContactSuggestionFrame:SetFrameLevel(guildHomepageContent:GetFrameLevel() + 20)
 guildContactSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
 guildContactSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
@@ -633,14 +811,14 @@ guildContactsEdit:SetScript("OnTabPressed", function(self)
 end)
 guildContactsEdit:SetScript("OnEscapePressed", function(self) guildContactSuggestionFrame:Hide(); self:ClearFocus() end)
 SetSimpleTooltip(guildContactsEdit, L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC)
-guildContactsSave = CreateFrame("Button", nil, connectionContent, "UIPanelButtonTemplate")
+guildContactsSave = CreateFrame("Button", nil, guildHomepageContent, "UIPanelButtonTemplate")
 guildContactsSave:SetSize(90, 24)
 guildContactsSave:SetPoint("LEFT", guildContactsEdit, "RIGHT", 10, 0)
 guildContactsSave:SetText(L.GUILD_CONTACTS_ADD)
 guildContactsSave:SetScript("OnClick", addGuildContact)
 SetSimpleTooltip(guildContactsSave, L.GUILD_CONTACTS_ADD, L.GUILD_CONTACTS_DESC)
-local contactsListFrame = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
-contactsListFrame:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 20, y - 55)
+local contactsListFrame = CreateFrame("Frame", nil, guildHomepageContent, "BackdropTemplate")
+contactsListFrame:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20, homepageY - 55)
 contactsListFrame:SetSize(470, 130)
 contactsListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
@@ -664,8 +842,8 @@ contactsScroll:SetScrollChild(guildContactsListContent)
 guildContactsListEmpty = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
 guildContactsListEmpty:SetPoint("CENTER", contactsListFrame, "CENTER", 0, 0)
 guildContactsListEmpty:SetText(L.GUILD_CONTACTS_EMPTY)
-y = y - 195
-connectionContent:SetHeight(math.abs(y) + 20)
+homepageY = homepageY - 195
+guildHomepageContent:SetHeight(math.abs(homepageY) + 20)
 
 y = -12
 _, y = CreateSectionHeader(roleplayContent, "Player Settings", y)
@@ -724,7 +902,7 @@ do
     y = y - aboutDescription:GetStringHeight() - 15
 
     _, y = CreateSectionHeader(aboutContent, "Links", y)
-    _, y = CreateInfoText(aboutContent, "GitHub: github.com/Crasling/iRacelockConnection", y, "GameFontDisableSmall")
+    _, y = CreateInfoText(aboutContent, "GitHub: github.com/Crasling/iRCGuildConnect", y, "GameFontDisableSmall")
     _, y = CreateSectionHeader(aboutContent, L.DEVELOPER_HEADER, y - 6)
     debugModeCheck, y = CreateSettingsCheckbox(aboutContent, L.ENABLE_DEBUG_MODE, L.ENABLE_DEBUG_MODE_DESC, y,
         function() return iRC:GetSettings().debugMode end,
@@ -1237,10 +1415,22 @@ end
 local function Refresh()
     local guildFoundAvailable = CanUseGuildFoundTools()
     local managementAvailable = CanUseManagementTools()
-    if managementSidebarHeader then managementSidebarHeader:SetShown(managementAvailable) end
-    if sidebarButtons[11] then sidebarButtons[11]:SetShown(managementAvailable) end
-    if sidebarButtons[9] then sidebarButtons[9]:SetShown(guildFoundAvailable) end
-    if (selectedTab == 9 and not guildFoundAvailable) or (selectedTab == 11 and not managementAvailable) then ShowTab(1) end
+    local canSwitchRulesView = managementAvailable or iRC:IsTestAdminGuildMaster()
+    local showReadOnlyRules = not canSwitchRulesView or raceRuleUI.showReadOnly
+    raceRuleUI.readOnly:SetShown(showReadOnlyRules)
+    raceRuleUI.viewToggle:SetShown(canSwitchRulesView)
+    if showReadOnlyRules then raceRuleUI.readOnly.rules:SetText(BuildActiveRulesExplanation()) end
+    if canSwitchRulesView then
+        raceRuleUI.viewToggle.text:SetText(iRC:Text(showReadOnlyRules and "RULES_VIEW_EDITOR" or "RULES_VIEW_ACTIVE"))
+        raceRuleUI.viewToggle:SetBackdropColor(showReadOnlyRules and 0.18 or 0.055,
+            showReadOnlyRules and 0.09 or 0.045, showReadOnlyRules and 0.025 or 0.035, 0.98)
+        raceRuleUI.viewToggle:SetBackdropBorderColor(showReadOnlyRules and ORANGE[1] or 0.28,
+            showReadOnlyRules and ORANGE[2] or 0.23, showReadOnlyRules and ORANGE[3] or 0.16,
+            showReadOnlyRules and 1 or 0.9)
+        raceRuleUI.viewToggle.activeGlow:SetAlpha(showReadOnlyRules and 1 or 0)
+    end
+    LayoutSidebar(managementAvailable)
+    if (selectedTab == 9 or selectedTab == 11 or selectedTab == 12) and not managementAvailable then ShowTab(1) end
     if guildFoundAuditText then
         local records = iRC.GetGuildFoundAuditRecords and iRC:GetGuildFoundAuditRecords() or {}
         local lines = {}
@@ -1301,17 +1491,18 @@ local function Refresh()
         connectionDetail:SetText("Join a guild to use shared progress and rules.")
     end
     guildActivationCheck:Refresh()
-    guildRaceDropdown:Refresh()
-    nativeTongueCheck:Refresh()
+    raceRuleUI.lock:Refresh()
+    raceRuleUI.race:Refresh()
+    raceRuleUI.language:Refresh()
     progressionModeDropdown:Refresh()
     maxLevelProgressionDropdown:Refresh()
     guildFoundTradeExceptionsCheck:Refresh()
     guildMapRuleCheck:Refresh()
-    sameRaceGroupsCheck:Refresh()
+    raceRuleUI.groups:Refresh()
     refreshingSameRaceLevel = true
     sameRaceLevelSlider:SetValue(iRC:GetConnectionRules().sameRaceMinimumLevel or 1)
     refreshingSameRaceLevel = false
-    level60SameRaceExceptionCheck:Refresh()
+    raceRuleUI.level60Exception:Refresh()
     guildGroupsOnlyCheck:Refresh()
     refreshingGuildGroupsLevel = true
     guildGroupsLevelSlider:SetValue(iRC:GetConnectionRules().guildGroupsMinimumLevel or 1)
@@ -1319,6 +1510,26 @@ local function Refresh()
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local guildActive = connection and iRC:IsGuildConnectionActive()
     local canEditHomepage = guildActive and iRC:HasGuildPermission("homepage")
+    homepageDescriptionUI.edit:SetEnabled(canEditHomepage and true or false)
+    homepageDescriptionUI.save:SetEnabled(canEditHomepage and true or false)
+    if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.dropdown) else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.dropdown) end
+    local homepageData = connection and connection.guildHomepageDescription or { text = "", timestamp = 0, editedBy = "" }
+    local homepageIcon = connection and connection.guildHomepageIcon or { icon = 0 }
+    local customIconEnabled = canEditHomepage and iRC:GetConnectionRules().raceLock == false
+    for index, button in ipairs(homepageDescriptionUI.iconButtons) do
+        button:SetEnabled(customIconEnabled and true or false)
+        local selected = tonumber(homepageIcon.icon) == index
+        button:SetBackdropBorderColor(selected and 1 or 0.35, selected and 0.65 or 0.30, selected and 0 or 0.25, selected and 1 or 0.8)
+        button.icon:SetDesaturated(not customIconEnabled)
+        button.icon:SetAlpha(customIconEnabled and 1 or 0.45)
+    end
+    if not homepageDescriptionUI.edit:HasFocus() then homepageDescriptionUI.edit:SetText(homepageData.text or "") end
+    homepageDescriptionUI.counter:SetFormattedText("%d / %d", #homepageDescriptionUI.edit:GetText(), iRC.GuildHomepageDescriptionMaxLength)
+    if (tonumber(homepageData.timestamp) or 0) > 0 then
+        homepageDescriptionUI.meta:SetText(iRC:Text("GUILD_DESCRIPTION_META", iRC:FormatPlayerName(homepageData.editedBy), date("%Y-%m-%d %H:%M", homepageData.timestamp)))
+    else
+        homepageDescriptionUI.meta:SetText(L.GUILD_DESCRIPTION_NEVER_SAVED)
+    end
     guildContactsEdit:SetEnabled(canEditHomepage and true or false)
     guildContactsSave:SetEnabled(canEditHomepage and true or false)
     local contactNames = {}
@@ -1417,12 +1628,14 @@ local function Refresh()
     guildContactsListContent:SetHeight(math.max(1, #contactNames * 29))
     broadcastButton:SetEnabled(guildActive and true or false)
     guildActivationCheck:SetEnabled(isGuildMaster and true or false)
-    if isGuildMaster and guildActive then
-        UIDropDownMenu_EnableDropDown(guildRaceDropdown)
+    local raceLockEnabled = guildActive and iRC:GetConnectionRules().raceLock == true
+    raceRuleUI.lock:SetEnabled(isGuildMaster and guildActive and true or false)
+    if isGuildMaster and raceLockEnabled then
+        UIDropDownMenu_EnableDropDown(raceRuleUI.race)
     else
-        UIDropDownMenu_DisableDropDown(guildRaceDropdown)
+        UIDropDownMenu_DisableDropDown(raceRuleUI.race)
     end
-    nativeTongueCheck:SetEnabled(isGuildMaster and guildActive and true or false)
+    raceRuleUI.language:SetEnabled(isGuildMaster and raceLockEnabled and true or false)
     if isGuildMaster and guildActive then
         UIDropDownMenu_EnableDropDown(progressionModeDropdown)
     else
@@ -1434,12 +1647,12 @@ local function Refresh()
     local tradeExceptionsRuleEnabled = isGuildMaster and guildActive and iRC:IsGuildFoundRequired()
     guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
     guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
-    sameRaceGroupsCheck:SetEnabled(isGuildMaster and guildActive and true or false)
-    local sameRaceExceptionEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().sameRaceGroupsOnly
+    raceRuleUI.groups:SetEnabled(isGuildMaster and raceLockEnabled and true or false)
+    local sameRaceExceptionEnabled = isGuildMaster and raceLockEnabled and iRC:GetConnectionRules().sameRaceGroupsOnly
     sameRaceLevelSlider:SetEnabled(sameRaceExceptionEnabled and true or false)
     local sameRaceLevelColor = sameRaceExceptionEnabled and iRC.ColorValues.Green or iRC.ColorValues.Gray
     sameRaceLevelLabel:SetTextColor(sameRaceLevelColor[1], sameRaceLevelColor[2], sameRaceLevelColor[3])
-    level60SameRaceExceptionCheck:SetEnabled(sameRaceExceptionEnabled and true or false)
+    raceRuleUI.level60Exception:SetEnabled(sameRaceExceptionEnabled and true or false)
     guildGroupsOnlyCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     local guildGroupsLevelEnabled = isGuildMaster and guildActive and iRC:GetConnectionRules().guildGroupsOnly
     guildGroupsLevelSlider:SetEnabled(guildGroupsLevelEnabled and true or false)
@@ -1447,11 +1660,12 @@ local function Refresh()
     guildGroupsLevelLabel:SetTextColor(guildGroupsLevelColor[1], guildGroupsLevelColor[2], guildGroupsLevelColor[3])
     local rules = iRC:GetConnectionRules()
     SetRuleVisualState(guildActivationCheck, guildActive)
-    SetRuleVisualState(nativeTongueCheck, rules.nativeTongueOnly)
+    SetRuleVisualState(raceRuleUI.lock, rules.raceLock)
+    SetRuleVisualState(raceRuleUI.language, rules.raceLock and rules.nativeTongueOnly)
     SetRuleVisualState(guildFoundTradeExceptionsCheck, rules.guildFoundTradeExceptions)
     SetRuleVisualState(guildMapRuleCheck, rules.guildMapEnabled)
-    SetRuleVisualState(sameRaceGroupsCheck, rules.sameRaceGroupsOnly)
-    SetRuleVisualState(level60SameRaceExceptionCheck, rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
+    SetRuleVisualState(raceRuleUI.groups, rules.raceLock and rules.sameRaceGroupsOnly)
+    SetRuleVisualState(raceRuleUI.level60Exception, rules.raceLock and rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
     SetRuleVisualState(guildGroupsOnlyCheck, rules.guildGroupsOnly)
     if not connection then
         guildRulesStatus:SetText(iRC.Colors.Gray .. L.GUILD_STATUS_NO_GUILD .. iRC.Colors.Reset)
@@ -1502,7 +1716,7 @@ settingsFrame:SetScript("OnShow", Refresh)
 ShowTab(1)
 iRC.SettingsFrame = settingsFrame
 
-local stubPanel = CreateFrame("Frame", "iRacelockConnectionOptionsPanel", UIParent)
+local stubPanel = CreateFrame("Frame", "iRCOptionsPanel", UIParent)
 stubPanel.name = iRC.DisplayName
 local stubTitle = stubPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 stubTitle:SetPoint("TOPLEFT", 16, -16)

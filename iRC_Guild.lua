@@ -13,6 +13,7 @@ local pendingPresenceChecks = {}
 local presenceConnection, reviewTicket, reviewAt, selectedOfficer
 local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 45, 60
 local sessionStartedAt = time()
+local guildRosterSnapshot, guildRosterSnapshotValid = {}, false
 
 local function isFreshCompatibility(entry, profile)
     if type(entry) ~= "table" then return false end
@@ -61,6 +62,44 @@ end
 local function memberKey(name, guid)
     if guid and guid ~= "" then return "guid:" .. guid end
     return "name:" .. iRC:NormalizeName(name)
+end
+
+function iRC:InvalidateGuildRosterSnapshot()
+    guildRosterSnapshotValid = false
+end
+
+function iRC:GetGuildRosterSnapshot()
+    if guildRosterSnapshotValid then return guildRosterSnapshot end
+    local snapshot = {}
+    local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
+    for index = 1, count do
+        local name, _, rankIndex, level, className, _, _, _, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
+        if name then
+            local lastOnlineDays
+            if not online and GetGuildRosterLastOnline then
+                local years, months, days, hours = GetGuildRosterLastOnline(index)
+                if years ~= nil then
+                    lastOnlineDays = (tonumber(years) or 0) * 365 + (tonumber(months) or 0) * 30
+                        + (tonumber(days) or 0) + (tonumber(hours) or 0) / 24
+                end
+            end
+            snapshot[#snapshot + 1] = {
+                name = name,
+                rankIndex = rankIndex,
+                level = level,
+                className = className,
+                classFile = classFile,
+                online = online and true or false,
+                guid = guid,
+                lastOnlineDays = lastOnlineDays,
+            }
+        end
+    end
+    guildRosterSnapshot = snapshot
+    -- An empty result during initial guild loading is not authoritative; keep
+    -- retrying until WoW supplies the roster or confirms that we have no guild.
+    guildRosterSnapshotValid = #snapshot > 0 or not self:IsInGuildConnection()
+    return guildRosterSnapshot
 end
 
 function iRC:GetMemberAttentionSince(name, verification, connection)
@@ -142,10 +181,9 @@ function iRC:IsPresenceNotificationLeader()
     if type(ownRankIndex) ~= "number" or ownRankIndex < 0 or ownRankIndex > presenceRank then return false end
     local ownName = self:NormalizeName(self:GetPlayerName())
     local candidate = { name = self:GetPlayerName(), rankIndex = ownRankIndex }
-    local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
     local now, sessionStartedAt = time(), self.ConnectionSessionStartedAt or 0
-    for index = 1, count do
-        local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(index)
+    for _, member in ipairs(self:GetGuildRosterSnapshot()) do
+        local name, rankIndex, online = member.name, member.rankIndex, member.online
         if name and online and self:NormalizeName(name) ~= ownName then
             local profile = connection.members[self:NormalizeName(name)]
             local lastSeen = profile and tonumber(profile.lastSeen)
@@ -354,18 +392,15 @@ end
 function iRC:CheckGuildRosterForNewMembers()
     if not self:IsGuildConnectionActive() then return end
     local connection = self:GetConnection()
-    local count = GetNumGuildMembers and GetNumGuildMembers(true) or 0
-    if not connection or count < 1 or not GetGuildRosterInfo then return end
+    local roster = self:GetGuildRosterSnapshot()
+    if not connection or #roster < 1 then return end
     local previous = connection.rosterMembers or {}
     local current, newMembers = {}, {}
     local hasBaseline = connection.rosterBaselineReady and true or false
-    for index = 1, count do
-        local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, guid = GetGuildRosterInfo(index)
-        if name then
-            local id = memberKey(name, guid)
-            current[id] = true
-            if hasBaseline and not previous[id] then newMembers[#newMembers + 1] = id end
-        end
+    for _, member in ipairs(roster) do
+        local id = memberKey(member.name, member.guid)
+        current[id] = true
+        if hasBaseline and not previous[id] then newMembers[#newMembers + 1] = id end
     end
     connection.rosterMembers = current
     connection.rosterBaselineReady = true
@@ -380,7 +415,7 @@ end
 
 function iRC:GetGuildMemberRaceCheck(race, connection)
     connection = connection or self:GetConnection()
-    local expected = connection and connection.active == true
+    local expected = connection and connection.active == true and connection.rules and connection.rules.raceLock == true
         and self:NormalizeGuildRace(connection.rules and connection.rules.guildRace) or ""
     local actual = self:NormalizeGuildRace(race)
     return {
@@ -392,26 +427,21 @@ function iRC:GetGuildMemberRaceCheck(race, connection)
 end
 
 function iRC:GetGuildRosterRows()
-    local rows, count = {}, GetNumGuildMembers and GetNumGuildMembers(true) or 0
+    local rows, roster = {}, self:GetGuildRosterSnapshot()
     local selfName = self:GetPlayerName()
-    -- One connection snapshot for this synchronous pass; do not cache across
-    -- events, so incoming presence/rules and guild changes apply immediately.
+    -- Static roster data is event-cached. Live addon and verification state is
+    -- still derived on every call so incoming profiles apply immediately.
     local connection = self:GetConnection()
     local active = connection and connection.active == true
     local profiles = connection and connection.members or {}
     local compatibleMembers = active and connection.compatibilityMembers or {}
     local context = { connection = connection, selfKey = self:NormalizeName(selfName) }
-    for index = 1, count do
-        local name, _, rankIndex, level, className, _, _, _, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
+    for _, rosterMember in ipairs(roster) do
+        local name, rankIndex, level = rosterMember.name, rosterMember.rankIndex, rosterMember.level
+        local className, classFile = rosterMember.className, rosterMember.classFile
+        local online, guid = rosterMember.online, rosterMember.guid
         if name then
-            local lastOnlineDays
-            if not online and GetGuildRosterLastOnline then
-                local years, months, days, hours = GetGuildRosterLastOnline(index)
-                if years ~= nil then
-                    lastOnlineDays = (tonumber(years) or 0) * 365 + (tonumber(months) or 0) * 30
-                        + (tonumber(days) or 0) + (tonumber(hours) or 0) / 24
-                end
-            end
+            local lastOnlineDays = rosterMember.lastOnlineDays
             local key = self:NormalizeName(name)
             local profile = profiles[key]
             local compatibilityMember = compatibleMembers[key]
@@ -535,6 +565,7 @@ frame:SetScript("OnEvent", function(_, event)
             end)
         end
     elseif event == "GUILD_ROSTER_UPDATE" then
+        iRC:InvalidateGuildRosterSnapshot()
         iRC:CheckGuildRosterForNewMembers()
         if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
         if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end

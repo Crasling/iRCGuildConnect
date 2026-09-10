@@ -161,7 +161,8 @@ end
 
 function Sync:IsGuildFoundSubject()
     if not iRC:IsGuildConnectionActive() or not iRC:IsGuildFoundRequired() then return false end
-    return iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
+    local progression = iRC:GetProgressionMode()
+    return progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND"
         or (UnitLevel("player") or 0) >= 60
         or iRC:IsGuildBankException(iRC:GetPlayerName())
 end
@@ -330,8 +331,9 @@ function Sync:SetOverride(name, verified, clean, goldOnly)
             end
         end
     end
-    local hybridProgression = iRC:GetProgressionMode() == "SELF_FOUND_OR_GUILD_FOUND"
-    if not memberLevel or (not goldOnly and verified ~= nil and memberLevel < 60 and not hybridProgression) then
+    local progression = iRC:GetProgressionMode()
+    local allowsEarlyVerification = progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND"
+    if not memberLevel or (not goldOnly and verified ~= nil and memberLevel < 60 and not allowsEarlyVerification) then
         iRC:Print(iRC:Text("RL_OVERRIDE_LEVEL_60_ONLY"))
         return false
     end

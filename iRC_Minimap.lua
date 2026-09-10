@@ -4,7 +4,7 @@ if not iRC then return end
 
 local Minimap = {}
 iRC.Minimap = Minimap
-local objectName = "iRacelockConnection_MinimapButton"
+local objectName = "iRC_MinimapButton"
 
 function Minimap:UpdateVisibility()
     if not iRC.LDBIcon then return end

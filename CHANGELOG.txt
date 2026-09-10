@@ -2,6 +2,37 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.1 - Guild Connection
+--------------------------------------------------------------------------------
+[NEW] Added a dedicated Guild Found progression mode that applies Guild Found verification and economy rules at every level
+[NEW] Normal and GuildFound guilds can select one of 20 Guild Homepage icons; RaceLocked guilds retain their race icon
+[CHANGED] Guild Statistics cards no longer display a separate race label
+[FIX] Online invite contacts now use WoW's round online-status icon instead of a font-dependent square glyph
+[CHANGED] Simplified the Guild Statistics introduction text
+[CHANGED] Renamed the addon folder, TOC, and Lua files to iRC while retaining the existing SavedVariables
+[NEW] The renamed addon disables a detected legacy iRacelockConnection installation and requests one reload when both were loaded
+[FIX] Moved Guild Statistics values and class breakdown down to prevent overlap with the snapshot label
+[CHANGED] Guild roster details are now cached until WoW reports a roster change instead of being reread for every live profile
+[CHANGED] Guild Homepage contacts now have a dedicated Management tab; any delegated manager may view Management pages while each editor remains locked to its specific rank permission
+[NEW] Guild Homepage managers can publish a timestamped custom guild description from editable templates for display on Guild Statistics cards
+[NEW] Race Lock is now an explicit guild rule; disabling it prevents race mismatches and disables all race-specific language and group settings
+[CHANGED] Race Lock is disabled by default and must be explicitly enabled in the guild rules
+[CHANGED] Updated the in-addon GitHub link to github.com/Crasling/iRCGuildConnect
+[FIX] Expanded Guild Statistics cards now space descriptions, contacts, and active rules correctly and use a clearer show/hide information hint
+[NEW] Guild cards now receive one prioritized RaceLocked, GuildFound, or Normal tag, with All, RaceLocked, and GuildFound filters on Guild Statistics
+[FIX] Grouped race-rule settings controls to keep the Classic Lua settings refresh below its 60-upvalue limit
+[FIX] Incoming Guild Statistics updates now preserve the current scroll position instead of jumping back to the top
+[FIX] Self-Found guilds no longer receive the GuildFound tag from a leftover level-60 flag
+[CHANGED] Guild Statistics filters now use the same framed active-state styling as the Guild Verification filters
+[CHANGED] Opening Guild Statistics now selects the current guild's RaceLocked or GuildFound tag filter automatically, falling back to All
+[NEW] Guild reports now prioritize up to five online invite contacts and mark fresh online snapshots in green for 30 minutes
+[FIX] Clicking an opposite-faction invite contact no longer opens a whisper and instead explains that cross-faction whispers are unavailable
+[FIX] RaceLocked guilds now belong exclusively to the RaceLocked tag filter even when Guild Found rules are also active
+[NEW] Members without delegated permissions now see a readable explanation of active guild rules instead of disabled rule controls
+[NEW] Delegated managers and Fake GM can switch between the active-rules summary and rule editor from a filter-styled button
+[FIX] Centered the rules view/editor toggle vertically inside the Guild Enforced Rules title bar
+[FIX] The settings sidebar now repacks visible sections so hidden Management tabs no longer leave an empty gap
+
 v0.3.2 - Combat Performance & Roleplay
 --------------------------------------------------------------------------------
 [NEW] Low Traffic Mode pauses and combines background updates during combat, then resumes them gradually after combat ends

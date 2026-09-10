@@ -36,10 +36,10 @@ local addon = {}
 function LibStub() return { NewAddon = function() return addon end } end
 C_ChatInfo = { SendAddonMessage = function(...) messages[#messages + 1] = { ... } end }
 local private = {}
-assert(loadfile("iRacelockConnection_Core.lua"))("iRacelockConnection", private)
-assert(loadfile("iRacelockConnection_Localization_enUS.lua"))("iRacelockConnection", private)
-assert(loadfile("iRacelockConnection_Guild.lua"))("iRacelockConnection", private)
-assert(loadfile("iRacelockConnection_Connection.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_Core.lua"))("iRC", private)
+assert(loadfile("iRC_Localization_enUS.lua"))("iRC", private)
+assert(loadfile("iRC_Guild.lua"))("iRC", private)
+assert(loadfile("iRC_Connection.lua"))("iRC", private)
 local connectionFrame, iRC = frames[#frames], private.iRC
 assert(iRC:IsTestAdminName("Crasling-Soulseeker"), "Crasling is an explicit test admin")
 assert(iRC:IsTestAdminName("Crasjin-Soulseeker"), "Crasjin is an explicit test admin")
@@ -156,7 +156,7 @@ assert(not iRC:IsPresenceNotificationLeader(), "inactive guild never elects a no
 
 -- Exercise actual guild roster -> Race Overview with offline characters whose
 -- races are unavailable, mixed addon sources, duplicate rows and a departed member.
-assert(loadfile("iRacelockConnection_RaceGrid.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_RaceGrid.lua"))("iRC", private)
 db.active, player = true, "Crasjin"
 roster[2].online, roster[3].online, roster[6].online = false, false, false
 db.members = {
@@ -206,7 +206,7 @@ print("Presence leader tests passed: iRC-only officers, test overrides, fresh/se
 
 -- Large-guild regression: one roster read per member, constant connection
 -- lookups, and no persistent cache hiding changes from subsequent passes.
-assert(loadfile("iRacelockConnection_RaceLockedSync.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_RaceLockedSync.lua"))("iRC", private)
 roster, db.members, db.compatibilityMembers, db.guildFoundRoster = {}, {}, {}, {}
 for index = 1, 1000 do
     local name = index == 1 and "Crasjin" or string.format("Member%04d", index)
@@ -237,7 +237,7 @@ function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:SetScript(event, callback) self[event] = callback end
 function CreateFrame() return widget() end
-assert(loadfile("iRacelockConnection_ConnectionDashboard.lua"))("iRacelockConnection", private)
+assert(loadfile("iRC_ConnectionDashboard.lua"))("iRC", private)
 local dashboard, offset, shown = iRC.ConnectionDashboard, 0, true
 local view = { rows = {}, rowData = {}, content = widget(), scroll = {
     GetVerticalScroll = function() return offset end, GetHeight = function() return 360 end,
