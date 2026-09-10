@@ -281,6 +281,7 @@ iRC.L = {
     GUILD_DESCRIPTION_TEXT_GF = "A challenge guild using Self-Found progression and a verified Guild Found economy.",
     GUILD_DESCRIPTION_TEXT_COMMUNITY = "A friendly WoW Classic community for players who enjoy shared progression and guild events.",
     GUILD_DESCRIPTION_SAVE = "Save",
+    GUILD_DESCRIPTION_PROFANITY = "The guild description contains a blocked word and was not saved.",
     GUILD_DESCRIPTION_META = "Edited by %s on %s",
     GUILD_DESCRIPTION_NEVER_SAVED = "No description has been saved yet.",
     GUILD_CONTACTS_LABEL = "Invite contacts",

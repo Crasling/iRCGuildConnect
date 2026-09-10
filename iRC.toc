@@ -15,6 +15,7 @@
 embeds.xml
 
 iRC_Core.lua
+iRC_Profanity.lua
 iRC_Localization_enUS.lua
 iRC_Connection.lua
 iRC_GuildMap.lua

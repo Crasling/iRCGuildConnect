@@ -260,6 +260,7 @@ end
 
 function RaceGrid:StoreGuildReport(report, silent)
     if type(report) ~= "table" or type(report.guildName) ~= "string" or report.guildName == "" then return false end
+    if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.race = normalizeRaceToken(report.race)
     if not report.race then return false end
     local reports = getServerStore().guildReports
@@ -273,6 +274,7 @@ function RaceGrid:StoreGuildReport(report, silent)
         report.guildDescriptionTimestamp = old.guildDescriptionTimestamp
         report.guildDescriptionEditedBy = old.guildDescriptionEditedBy
     end
+    if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
     report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     report.lastSeen = time()
@@ -549,6 +551,7 @@ local function parseGuildReport(parts)
     local guildDescriptionTimestamp = tonumber(parts[descriptionStart + 1]) or 0
     local guildDescriptionEditedBy = tostring(parts[descriptionStart + 2] or "")
     if #guildDescription > iRC.GuildHomepageDescriptionMaxLength or guildDescription:find("[%c]")
+        or iRC:ContainsProfanity(guildDescription)
         or #guildDescriptionEditedBy > 80 or guildDescriptionEditedBy:find("[%c]") then return nil end
     return {
         name = name, guid = guid, guildName = guildName, race = race,
@@ -768,7 +771,8 @@ local function handleMessage(prefix, message, sender, distribution)
     if parts[1] == "GUILD_DESC" and parts[2] == WIRE_VERSION then
         local timestamp, editedBy, value = tonumber(parts[3]), tostring(parts[4] or ""), tostring(parts[5] or "")
         if timestamp and timestamp > 0 and timestamp <= time() + 300 and #editedBy <= 40 and not editedBy:find("[%c]")
-            and #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]") then
+            and #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]")
+            and not iRC:ContainsProfanity(value) then
             for _, report in pairs(getServerStore().guildReports) do
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and timestamp > math.floor(tonumber(report.guildDescriptionTimestamp) or 0) then
@@ -798,7 +802,8 @@ function iRC:GetGlobalRaceOverview()
     local now = time()
     for key, report in pairs(stored) do
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or nil
-        if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE then
+        if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE
+            or iRC:ContainsProfanity(report.guildDescription) then
             stored[key] = nil
             serverStore.guildActivity[key] = nil
         elseif normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then

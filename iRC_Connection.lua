@@ -4,6 +4,7 @@ if not iRC then return end
 
 local SEP = "\t"
 local WIRE_VERSION = "9"
+local MINIMUM_RULESET_VERSION = { 0, 4, 1 }
 local requestNumber = 0
 local SECONDS_PER_DAY = 86400
 local lastPresencePollAt = 0
@@ -26,6 +27,21 @@ local profileDebugSummary = { count = 0, names = {}, scheduled = false }
 local rulesAckSummaries = {}
 local legacyRulesAckSummaries = {}
 iRC.ConnectionSessionStartedAt = time()
+
+local function supportsCurrentRuleset(version)
+    local parts = {}
+    for value in tostring(version or ""):gmatch("%d+") do
+        parts[#parts + 1] = tonumber(value) or 0
+        if #parts == 3 then break end
+    end
+    if #parts ~= 3 then return false end
+    for index = 1, 3 do
+        if parts[index] ~= MINIMUM_RULESET_VERSION[index] then
+            return parts[index] > MINIMUM_RULESET_VERSION[index]
+        end
+    end
+    return true
+end
 
 local function registerPrefix(prefix)
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then return C_ChatInfo.RegisterAddonMessagePrefix(prefix) end
@@ -574,6 +590,7 @@ function iRC:SendGuildHomepageDescription(targetName, force)
     local editedBy = tostring(data.editedBy or ""):gsub("[%c]", ""):sub(1, 80)
     if timestamp <= 0 or editedBy == "" then return false end
     local value = tostring(data.text or ""):gsub("[%c]", " "):sub(1, self.GuildHomepageDescriptionMaxLength)
+    if self:ContainsProfanity(value) then return false end
     local checksum = rulesBackupChecksum(value .. SEP .. timestamp .. SEP .. editedBy)
     send(self.Prefix, table.concat({ "GUILD_HOMEPAGE_DESC", WIRE_VERSION, value, tostring(timestamp), editedBy, checksum }, SEP),
         targetName and "WHISPER" or "GUILD", targetName)
@@ -1254,6 +1271,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local checksum = tostring(parts[6] or ""):lower()
         local saved = connection.guildHomepageDescription
         if #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]")
+            and not iRC:ContainsProfanity(value)
             and senderRank and senderRank <= (connection.rankPermissions.homepage or 0)
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(value .. SEP .. timestamp .. SEP .. editedBy) then
@@ -1619,6 +1637,9 @@ local function handleMessage(prefix, message, distribution, sender)
         local guildFoundChecksumValid = not guildFoundFlagPresent or guildFoundChecksum == rulesBackupChecksum(table.concat({
             incomingRules.guildFoundOnly and "1" or "0", timestampHex, timestampSource,
         }, SEP))
+        local rulesSchemaSupported = supportsCurrentRuleset(parts[19])
+            and raceLockFlagPresent and guildFoundFlagPresent
+            and raceLockChecksumValid and guildFoundChecksumValid
         local sameStampMatches = incomingTimestamp ~= savedTimestamp or not connection
             or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
             or connection.receivedRulesBackup == incomingBackup
@@ -1630,8 +1651,10 @@ local function handleMessage(prefix, message, distribution, sender)
         local timestampAccepted = senderIsGuildMaster or incomingTimestamp >= savedTimestamp
         local contentAccepted = senderIsGuildMaster or checksumValid and exceptionChecksumValid and mapChecksumValid
             and raceLockChecksumValid and guildFoundChecksumValid and sameStampMatches
-        local acceptRules = senderIsGuildMaster or senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5
-            and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid and timestampAccepted and contentAccepted
+        local acceptRules = rulesSchemaSupported and (senderIsGuildMaster
+            or senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5
+                and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid
+                and timestampAccepted and contentAccepted)
         if connection and acceptRules then
             for key, value in pairs(incomingRules) do connection.rules[key] = value end
             connection.rulesTimestampHex = timestampHex

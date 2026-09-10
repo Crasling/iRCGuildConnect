@@ -827,6 +827,10 @@ function iRC:SetGuildHomepageDescription(value)
     if not connection then return false end
     value = tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
     value = value:sub(1, self.GuildHomepageDescriptionMaxLength)
+    if self:ContainsProfanity(value) then
+        self:Print(self.Colors.Red .. self:Text("GUILD_DESCRIPTION_PROFANITY") .. self.Colors.Reset)
+        return false
+    end
     local data = connection.guildHomepageDescription
     local now = GetServerTime and GetServerTime() or time()
     data.text = value
