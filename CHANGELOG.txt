@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.5 - Ruleset Bootstrap & Guild Map
+--------------------------------------------------------------------------------
+[CHANGED] Login and reload now request the active ruleset after the startup delay; the selected authority replies only when its ruleset timestamp is newer
+[CHANGED] Periodic ruleset checksum verification now runs every two minutes instead of every five minutes
+[CHANGED] Replaced the General-page Guild Map visibility checkbox with a 5-15 pin-size slider; visibility remains controlled on the World Map
+[CHANGED] Guild Map positions now remain valid for 90 seconds but are removed immediately when the guild roster reports that a member went offline
+[CHANGED] Guild Map positions are now broadcast every 25 seconds and continue broadcasting during combat
+
 v0.4.4 - Guild Tools Polish
 --------------------------------------------------------------------------------
 [ADDED] Added a personal setting for authorized ranks to hide Needs Attention chat reminders without hiding verification status; it defaults on and is enabled when a progression mode is activated

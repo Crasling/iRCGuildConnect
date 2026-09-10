@@ -884,6 +884,15 @@ function iRC:SendConnectionRules(targetName, force)
     self:DebugMsg(self:Text("RULES_SENT"), 3)
 end
 
+function iRC:RequestConnectionRules()
+    if self:DeferLowTraffic("traffic:rules-request", function() iRC:RequestConnectionRules() end) then return false end
+    if not self:IsInGuildConnection() then return false end
+    local connection = self:GetConnection()
+    local timestampHex = tostring(connection and connection.rulesTimestampHex or "0"):lower()
+    if #timestampHex > 12 or not timestampHex:match("^[0-9a-f]+$") then timestampHex = "0" end
+    return send(self.Prefix, table.concat({ "RULES_REQUEST", WIRE_VERSION, timestampHex }, SEP), "GUILD") and true or false
+end
+
 function iRC:RequestGuildPresence(isOfficerPoll)
     if self:DeferLowTraffic("traffic:presence-request", function() iRC:RequestGuildPresence(isOfficerPoll) end) then return false end
     if not self:IsGuildConnectionActive() then return false end
@@ -1124,6 +1133,16 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:SendGuildHomepageIcon(sender)
             send(iRC.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION, "REQUEST" }, SEP), "WHISPER", sender)
         end
+        return
+    elseif kind == "RULES_REQUEST" and parts[2] == WIRE_VERSION and distribution == "GUILD"
+        and iRC:IsGuildMemberName(sender) and iRC:IsRulesetBroadcaster() and iRC:IsGuildConnectionActive() then
+        local requestedHex = tostring(parts[3] or "0"):lower()
+        local requestedTimestamp = #requestedHex <= 12 and requestedHex:match("^[0-9a-f]+$")
+            and (tonumber(requestedHex, 16) or 0) or -1
+        local connection = iRC:GetConnection()
+        local localHex = tostring(connection and connection.rulesTimestampHex or "0"):lower()
+        local localTimestamp = localHex:match("^[0-9a-f]+$") and (tonumber(localHex, 16) or 0) or 0
+        if requestedTimestamp >= 0 and localTimestamp > requestedTimestamp then iRC:SendConnectionRules(sender) end
         return
     end
     if not iRC:IsGuildConnectionActive() then return end
@@ -1714,7 +1733,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             iRC:RequestGuildActivation()
             scheduleHello(nil, 5)
             if iRC:HasGuildPermission("presence") then iRC:PollGuildPresence() else iRC:RequestGuildPresence() end
-            iRC:SendConnectionRules()
+            iRC:RequestConnectionRules()
             iRC:SendGuildManagementSettings()
             iRC:SendGuildBankExceptions()
             iRC:SendGuildFoundTradeExceptions()
@@ -1726,8 +1745,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 iRC:RequestGuildActivation()
                 scheduleHello(nil, 15)
             end)
-            C_Timer.NewTicker(300, function()
+            C_Timer.NewTicker(120, function()
                 iRC:SendConnectionRules()
+            end)
+            C_Timer.NewTicker(300, function()
                 iRC:SendGuildManagementSettings()
                 iRC:SendGuildBankExceptions()
                 iRC:SendGuildFoundTradeExceptions()

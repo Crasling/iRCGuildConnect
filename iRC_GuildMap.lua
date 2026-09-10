@@ -6,7 +6,7 @@ local GuildMap = { positions = {}, pins = {}, pool = {} }
 iRC.GuildMap = GuildMap
 
 local POSITION_VERSION = "1"
-local POSITION_LIFETIME = 30
+local POSITION_LIFETIME = 90
 local initialized, mapInitialized, positionSendPending
 local mapTicker
 
@@ -35,8 +35,14 @@ end
 function GuildMap:Cleanup()
     if not enabled() then self:Clear(); return end
     local now = GetTime()
+    local rosterOnline = {}
+    if iRC.GetGuildRosterSnapshot then
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            rosterOnline[iRC:NormalizeName(member.name)] = member.online == true
+        end
+    end
     for name, position in pairs(self.positions) do
-        if now - (position.receivedAt or 0) > POSITION_LIFETIME then
+        if now - (position.receivedAt or 0) > POSITION_LIFETIME or rosterOnline[name] == false then
             self.positions[name] = nil
             clearPin(name)
         end
@@ -47,7 +53,8 @@ local function acquirePin(parent)
     local pin = table.remove(GuildMap.pool)
     if not pin then
         pin = CreateFrame("Frame", nil, parent)
-        pin:SetSize(12, 12)
+        local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12)))
+        pin:SetSize(size, size)
         pin:SetFrameStrata("HIGH")
         pin.border = pin:CreateTexture(nil, "BACKGROUND")
         pin.border:SetAllPoints()
@@ -69,6 +76,8 @@ local function acquirePin(parent)
         pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
     pin:SetParent(parent)
+    local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12)))
+    pin:SetSize(size, size)
     pin:Show()
     return pin
 end
@@ -118,7 +127,7 @@ function GuildMap:UpdatePins()
 end
 
 function GuildMap:BroadcastPosition()
-    if iRC:IsLowTrafficMode() or not enabled() or iRC:GetSettings().shareGuildMapPosition == false or not C_Map then return false end
+    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false or not C_Map then return false end
     local _, instanceType = GetInstanceInfo()
     if instanceType and instanceType ~= "none" then return false end
     local mapId = C_Map.GetBestMapForUnit("player")
@@ -146,7 +155,7 @@ end
 
 local function scheduleNextPosition()
     if not C_Timer or not C_Timer.After then return end
-    C_Timer.After(10 + math.random() * 5, function()
+    C_Timer.After(25, function()
         GuildMap:BroadcastPosition()
         GuildMap:Cleanup()
         scheduleNextPosition()
@@ -214,6 +223,13 @@ end
 function GuildMap:SetShown(enabledValue)
     iRC:GetSettings().showGuildMap = enabledValue and true or false
     if self.UpdateToggle then self.UpdateToggle() end
+    self:UpdatePins()
+end
+
+function GuildMap:SetPinSize(value)
+    value = math.max(5, math.min(15, math.floor(tonumber(value) or 12)))
+    iRC:GetSettings().guildMapPinSize = value
+    for _, pin in pairs(self.pins) do pin:SetSize(value, value) end
     self:UpdatePins()
 end
 

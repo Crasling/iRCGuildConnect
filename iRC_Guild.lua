@@ -566,6 +566,7 @@ frame:SetScript("OnEvent", function(_, event)
         end
     elseif event == "GUILD_ROSTER_UPDATE" then
         iRC:InvalidateGuildRosterSnapshot()
+        if iRC.GuildMap then iRC.GuildMap:Cleanup() end
         iRC:CheckGuildRosterForNewMembers()
         if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
         if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end

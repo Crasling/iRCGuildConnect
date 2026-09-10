@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRC"
 iRC.DisplayName = "iRC"
-iRC.Version = "0.4.4"
+iRC.Version = "0.4.5"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -145,6 +145,7 @@ local DEFAULT_SETTINGS = {
     showOfficerSettingsForTesting = false,
     hideAttentionReminders = true,
     showGuildMap = true,
+    guildMapPinSize = 12,
     shareGuildMapPosition = true,
 }
 

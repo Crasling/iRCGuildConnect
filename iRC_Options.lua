@@ -461,7 +461,7 @@ local function LayoutSidebar(managementAvailable)
 end
 
 local y = -12
-local debugModeCheck, guildMapPersonalCheck
+local debugModeCheck
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
 minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
@@ -501,12 +501,28 @@ _, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, fun
     iRC:Print(L.MAIN_WINDOW_RESET_DONE)
 end, L.IRC_MAIN_WINDOW_RESET_DESC)
 _, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
-guildMapPersonalCheck, y = CreateSettingsCheckbox(generalContent, L.GUILD_MAP_PERSONAL,
-    L.GUILD_MAP_PERSONAL_DESC, y,
-    function() return iRC:GetSettings().showGuildMap ~= false end,
-    function(value)
-        if iRC.GuildMap then iRC.GuildMap:SetShown(value) else iRC:GetSettings().showGuildMap = value and true or false end
-    end)
+local pinSizeLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+pinSizeLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
+pinSizeLabel:SetText(L.GUILD_MAP_PIN_SIZE)
+local pinSizeValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+pinSizeValue:SetPoint("LEFT", pinSizeLabel, "RIGHT", 10, 0)
+pinSizeValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+local pinSizeSlider = CreateFrame("Slider", "iRCGuildMapPinSizeSlider", generalContent, "OptionsSliderTemplate")
+pinSizeSlider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
+pinSizeSlider:SetWidth(240)
+pinSizeSlider:SetMinMaxValues(5, 15)
+pinSizeSlider:SetValueStep(1)
+_G[pinSizeSlider:GetName() .. "Low"]:SetText("5")
+_G[pinSizeSlider:GetName() .. "High"]:SetText("15")
+_G[pinSizeSlider:GetName() .. "Text"]:SetText("")
+SetSimpleTooltip(pinSizeSlider, L.GUILD_MAP_PIN_SIZE, L.GUILD_MAP_PIN_SIZE_DESC)
+pinSizeSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value + 0.5)
+    pinSizeValue:SetText(tostring(value))
+    if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
+end)
+pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12))))
+y = y - 74
 generalContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -1574,10 +1590,6 @@ local function Refresh()
         RefreshGuildBankTools(guildFoundAvailable)
     end
     if debugModeCheck then debugModeCheck:Refresh() end
-    if guildMapPersonalCheck then
-        guildMapPersonalCheck:Refresh()
-        guildMapPersonalCheck:SetEnabled(iRC:IsGuildConnectionActive() and iRC:GetConnectionRules().guildMapEnabled and true or false)
-    end
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
         suppressWarningsCheck:Refresh()
