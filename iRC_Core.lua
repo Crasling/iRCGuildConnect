@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRC"
 iRC.DisplayName = "iRC"
-iRC.Version = "0.4.5"
+iRC.Version = "0.4.6"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -53,6 +53,29 @@ iRC.ColorValues = {
 -- gets its own delay so independent startup packets do not form a new burst.
 function iRC:GetStartupTrafficDelay()
     return 3 + math.random() * 5
+end
+
+function iRC:EnableIdleWindowFade(frame)
+    if not frame or frame.idleFadeEnabled then return end
+    frame.idleFadeEnabled = true
+    frame.idleFadeOutsideFor = 0
+    frame:HookScript("OnUpdate", function(self, elapsed)
+        local mouseOver = self.IsMouseOver and self:IsMouseOver()
+            or (MouseIsOver and MouseIsOver(self))
+        if mouseOver then
+            self.idleFadeOutsideFor = 0
+            if self:GetAlpha() ~= 1 then self:SetAlpha(1) end
+            return
+        end
+        self.idleFadeOutsideFor = (self.idleFadeOutsideFor or 0) + elapsed
+        if self.idleFadeOutsideFor < 2 then return end
+        local alpha = self:GetAlpha()
+        if alpha > 0.45 then self:SetAlpha(math.max(0.45, alpha - elapsed * 0.9)) end
+    end)
+    frame:HookScript("OnShow", function(self)
+        self.idleFadeOutsideFor = 0
+        self:SetAlpha(1)
+    end)
 end
 
 local lowTrafficPending, lowTrafficPendingCount, lowTrafficGeneration = {}, 0, 0
@@ -137,6 +160,7 @@ end
 
 local DEFAULT_SETTINGS = {
     mainWindowScale = 1,
+    verificationWindowScale = 1,
     shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,
@@ -494,6 +518,9 @@ function iRC:GetConnection()
     connection.guildNotifications = connection.guildNotifications or { welcomeNewMembers = false }
     if connection.guildNotifications.welcomeNewMembers == nil then
         connection.guildNotifications.welcomeNewMembers = false
+    end
+    for _, key in ipairs({ "disableOfficerWarnings", "disableWhisperWarnings", "disableGuildWarnings" }) do
+        if connection.guildNotifications[key] == nil then connection.guildNotifications[key] = false end
     end
     connection.guildBankExceptions = connection.guildBankExceptions or { members = {} }
     connection.guildBankExceptions.members = connection.guildBankExceptions.members or {}
@@ -879,6 +906,13 @@ function iRC:IsNewMemberWelcomeEnabled()
     local connection = self:GetConnection()
     return connection and connection.guildNotifications
         and connection.guildNotifications.welcomeNewMembers == true or false
+end
+
+function iRC:IsAutomaticWarningDisabled(channel)
+    local connection = self:GetConnection()
+    local settings = connection and connection.guildNotifications
+    local key = ({ OFFICER = "disableOfficerWarnings", WHISPER = "disableWhisperWarnings", GUILD = "disableGuildWarnings" })[channel]
+    return key and settings and settings[key] == true or false
 end
 
 local function normalizeFullPlayerName(name, defaultRealm)

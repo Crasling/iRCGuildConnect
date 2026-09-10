@@ -315,7 +315,9 @@ function UI:Create()
     if self.frame then return self.frame end
 
     local frame = CreateFrame("Frame", "iRCMainFrame", UIParent, "BackdropTemplate")
+    local settings = iRC:GetSettings()
     frame:SetSize(980, 650)
+    frame:SetScale(settings.mainWindowScale or 1)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetToplevel(true)
@@ -328,6 +330,30 @@ function UI:Create()
     frame:Hide()
     tinsert(UISpecialFrames, frame:GetName())
     self.frame = frame
+
+    local resize = CreateFrame("Button", nil, frame)
+    resize:SetSize(20, 20); resize:SetPoint("BOTTOMRIGHT", -3, 3)
+    resize:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resize:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    resize:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    resize:SetScript("OnMouseDown", function(self, button)
+        if button ~= "LeftButton" then return end
+        local x, y = GetCursorPosition()
+        self.dragging, self.startX, self.startY, self.startScale = true, x, y, frame:GetScale()
+    end)
+    resize:SetScript("OnUpdate", function(self)
+        if not self.dragging then return end
+        local x, y = GetCursorPosition()
+        local delta = ((x - self.startX) - (y - self.startY)) / (2 * (UIParent:GetEffectiveScale() or 1))
+        frame:SetScale(math.max(0.6, math.min(1.2, self.startScale + delta / 815)))
+    end)
+    resize:SetScript("OnMouseUp", function(self)
+        self.dragging = false
+        settings.mainWindowScale = math.floor(frame:GetScale() * 20 + 0.5) / 20
+        frame:SetScale(settings.mainWindowScale)
+    end)
+    frame.resizeHandle = resize
+    iRC:EnableIdleWindowFade(frame)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     frame.close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 4, 4)

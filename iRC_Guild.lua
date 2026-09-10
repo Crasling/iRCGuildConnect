@@ -228,10 +228,10 @@ local function announcePresenceMismatch(member, verification, escalated)
         and iRC:Text("PRESENCE_PLAYER_ESCALATION")
         or iRC:Text("PRESENCE_PLAYER_NOTICE")
     if SendChatMessage then
-        SendChatMessage(officerMessage, "OFFICER")
-        SendChatMessage(whisperMessage, "WHISPER", nil, member.name)
+        if not iRC:IsAutomaticWarningDisabled("OFFICER") then SendChatMessage(officerMessage, "OFFICER") end
+        if not iRC:IsAutomaticWarningDisabled("WHISPER") then SendChatMessage(whisperMessage, "WHISPER", nil, member.name) end
         if escalated then
-            SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", member.name), "GUILD")
+            if not iRC:IsAutomaticWarningDisabled("GUILD") then SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", member.name), "GUILD") end
             local occurredAt = time()
             iRC:StoreOfficerIncident({
                 id = "presence:" .. iRC:NormalizeName(member.name) .. ":" .. occurredAt,
@@ -282,7 +282,7 @@ function iRC:CheckPresenceMismatches()
         local verification = member.verification or { state = "missing" }
         if member.raceMismatch and member.raceCheck then
             local signature = table.concat({ tostring(member.guid or ""), member.raceCheck.actual, member.raceCheck.expected }, ":")
-            if connection.raceMismatchNotices[key] ~= signature and SendChatMessage then
+            if connection.raceMismatchNotices[key] ~= signature and SendChatMessage and not self:IsAutomaticWarningDisabled("OFFICER") then
                 local actualRace = self:Text("GUILD_RACE_" .. member.raceCheck.actual)
                 local expectedRace = self:Text("GUILD_RACE_" .. member.raceCheck.expected)
                 local sent = pcall(SendChatMessage, self:Text("RACE_MISMATCH_OFFICER_NOTICE", member.name, actualRace, expectedRace), "OFFICER")

@@ -512,10 +512,11 @@ function iRC:SendGuildManagementSettings(targetName, force)
         return false
     end
     local enabled = settings.welcomeNewMembers ~= false
+    local warningMask = (settings.disableOfficerWarnings and 1 or 0) + (settings.disableWhisperWarnings and 2 or 0) + (settings.disableGuildWarnings and 4 or 0)
     local distribution = targetName and "WHISPER" or "GUILD"
     send(self.Prefix, table.concat({
         "GUILD_SETTINGS", WIRE_VERSION, enabled and "1" or "0", tostring(timestamp), source,
-        guildSettingsChecksum(enabled, timestamp, source),
+        guildSettingsChecksum(enabled, timestamp, source), tostring(warningMask),
     }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("GUILD_SETTINGS_SENT"), 3)
     return true
@@ -651,6 +652,20 @@ function iRC:SetNewMemberWelcomeEnabled(enabled)
     local settings = connection.guildNotifications
     local now = GetServerTime and GetServerTime() or time()
     settings.welcomeNewMembers = enabled and true or false
+    settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
+    settings.source = self:GetPlayerName()
+    self:SendGuildManagementSettings(nil, true)
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:SetAutomaticWarningDisabled(channel, disabled)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
+    local settings = self:GetConnection().guildNotifications
+    local key = ({ OFFICER = "disableOfficerWarnings", WHISPER = "disableWhisperWarnings", GUILD = "disableGuildWarnings" })[channel]
+    if not key then return false end
+    settings[key] = disabled and true or false
+    local now = GetServerTime and GetServerTime() or time()
     settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
     settings.source = self:GetPlayerName()
     self:SendGuildManagementSettings(nil, true)
@@ -1009,7 +1024,7 @@ function iRC:SendGroupViolation(record)
         seenGroupViolations[violationId] = true
         record.reporter = record.reporter or self:GetPlayerName()
         self:StoreOfficerIncident(record)
-        SendChatMessage(self:Text("GROUP_VIOLATION_OFFICER", self:GetPlayerName(), instanceName, players), "OFFICER")
+        if not self:IsAutomaticWarningDisabled("OFFICER") then SendChatMessage(self:Text("GROUP_VIOLATION_OFFICER", self:GetPlayerName(), instanceName, players), "OFFICER") end
         locallyReported = true
     end
     return locallyReported
@@ -1174,7 +1189,7 @@ local function handleMessage(prefix, message, distribution, sender)
                     id = violationId, reporter = sender, occurredAt = occurredAt,
                     instanceName = instanceName, players = players,
                 })
-                SendChatMessage(iRC:Text("GROUP_VIOLATION_OFFICER", sender, instanceName, players), "OFFICER")
+                if not iRC:IsAutomaticWarningDisabled("OFFICER") then SendChatMessage(iRC:Text("GROUP_VIOLATION_OFFICER", sender, instanceName, players), "OFFICER") end
             end
             -- Always acknowledge a valid repeat. The first acknowledgement may
             -- have been lost even though the officer notice was already sent.
@@ -1245,7 +1260,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local timestamp = tonumber(parts[4])
         local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
         local checksum = tostring(parts[6] or ""):lower()
-        local itemMasks = tostring(parts[7] or "0,0,0,0")
+        local warningMask = parts[7] and math.max(0, math.min(7, math.floor(tonumber(parts[7]) or 0))) or nil
         local now = GetServerTime and GetServerTime() or time()
         if senderRank and senderRank <= (connection.rankPermissions.notifications or 1) and timestamp and timestamp > 0 and timestamp <= now + 300
             and source ~= "" and checksum == guildSettingsChecksum(enabled, timestamp, source) then
@@ -1254,8 +1269,15 @@ local function handleMessage(prefix, message, distribution, sender)
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
             local savedSource = tostring(settings.source or "")
             local currentEnabled = settings.welcomeNewMembers == true
+            local function applyWarningSettings()
+                if warningMask == nil then return end
+                settings.disableOfficerWarnings = warningMask % 2 >= 1
+                settings.disableWhisperWarnings = math.floor(warningMask / 2) % 2 >= 1
+                settings.disableGuildWarnings = math.floor(warningMask / 4) % 2 >= 1
+            end
             if senderIsGuildMaster then
                 settings.welcomeNewMembers = enabled
+                applyWarningSettings()
                 settings.timestamp = math.floor(timestamp)
                 settings.source = source
                 if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.WELCOME = nil end
@@ -1264,6 +1286,7 @@ local function handleMessage(prefix, message, distribution, sender)
             elseif receiverIsGuildMaster and (timestamp > savedTimestamp or enabled ~= currentEnabled) then
                 -- The Guild Master confirms a delegated change by saving and
                 -- broadcasting a fresh GM-authored package.
+                applyWarningSettings()
                 iRC:SetNewMemberWelcomeEnabled(enabled)
                 if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.WELCOME = nil end
             elseif timestamp == savedTimestamp and enabled ~= currentEnabled then
@@ -1276,6 +1299,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 end)
             elseif timestamp > savedTimestamp then
                 settings.welcomeNewMembers = enabled
+                applyWarningSettings()
                 settings.timestamp = math.floor(timestamp)
                 settings.source = source
                 iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)

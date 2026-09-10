@@ -2,6 +2,15 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.6 - Window Controls & Warning Settings
+--------------------------------------------------------------------------------
+[ADDED] Added aspect-locked resize handles that proportionally scale the main iRC window and Verification panel and save their scale
+[CHANGED] Extended proportional window scaling down to 60%; the maximum remains 120%
+[ADDED] Added Verification panel scale and position-reset controls to General settings
+[ADDED] The main iRC window and Verification panel now fade after the mouse remains outside for two seconds
+[ADDED] Added guild-synced controls to disable automatic Officer Chat, whisper, and Guild Chat warnings separately
+[FIX] Older guild-settings packets now preserve the new per-channel warning controls during mixed-version operation
+
 v0.4.5 - Ruleset Bootstrap & Guild Map
 --------------------------------------------------------------------------------
 [CHANGED] Login and reload now request the active ruleset after the startup delay; the selected authority replies only when its ruleset timestamp is newer

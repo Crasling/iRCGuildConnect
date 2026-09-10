@@ -480,9 +480,9 @@ scaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
 local slider = CreateFrame("Slider", "iRCMainWindowScaleSlider", generalContent, "OptionsSliderTemplate")
 slider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 slider:SetWidth(240)
-slider:SetMinMaxValues(0.8, 1.2)
+slider:SetMinMaxValues(0.6, 1.2)
 slider:SetValueStep(0.05)
-_G[slider:GetName() .. "Low"]:SetText("80%")
+_G[slider:GetName() .. "Low"]:SetText("60%")
 _G[slider:GetName() .. "High"]:SetText("120%")
 _G[slider:GetName() .. "Text"]:SetText("")
 SetSimpleTooltip(slider, L.IRC_MAIN_WINDOW_SCALE, L.IRC_MAIN_WINDOW_SCALE_DESC)
@@ -500,6 +500,35 @@ _, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, fun
     mainFrame:SetPoint("CENTER")
     iRC:Print(L.MAIN_WINDOW_RESET_DONE)
 end, L.IRC_MAIN_WINDOW_RESET_DESC)
+_, y = CreateSubcategoryHeader(generalContent, L.VERIFICATION_WINDOW_SETTINGS, y - 2)
+local verificationScaleLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+verificationScaleLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
+verificationScaleLabel:SetText(L.VERIFICATION_WINDOW_SCALE)
+local verificationScaleValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+verificationScaleValue:SetPoint("LEFT", verificationScaleLabel, "RIGHT", 10, 0)
+verificationScaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+local verificationScaleSlider = CreateFrame("Slider", "iRCVerificationWindowScaleSlider", generalContent, "OptionsSliderTemplate")
+verificationScaleSlider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
+verificationScaleSlider:SetWidth(240)
+verificationScaleSlider:SetMinMaxValues(0.6, 1.2)
+verificationScaleSlider:SetValueStep(0.05)
+_G[verificationScaleSlider:GetName() .. "Low"]:SetText("60%")
+_G[verificationScaleSlider:GetName() .. "High"]:SetText("120%")
+_G[verificationScaleSlider:GetName() .. "Text"]:SetText("")
+SetSimpleTooltip(verificationScaleSlider, L.VERIFICATION_WINDOW_SCALE, L.VERIFICATION_WINDOW_SCALE_DESC)
+verificationScaleSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value * 20 + 0.5) / 20
+    iRC:GetSettings().verificationWindowScale = value
+    verificationScaleValue:SetText(math.floor(value * 100 + 0.5) .. "%")
+    if iRC.ConnectionDashboard and iRC.ConnectionDashboard.frame then iRC.ConnectionDashboard.frame:SetScale(value) end
+end)
+y = y - 74
+_, y = CreateSettingsButton(generalContent, L.VERIFICATION_WINDOW_RESET, 240, y, function()
+    local verificationFrame = iRC.ConnectionDashboard:Create()
+    verificationFrame:ClearAllPoints()
+    verificationFrame:SetPoint("CENTER")
+    iRC:Print(L.VERIFICATION_WINDOW_RESET_DONE)
+end, L.VERIFICATION_WINDOW_RESET_DESC)
 _, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
 local pinSizeLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 pinSizeLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
@@ -1331,7 +1360,7 @@ do
     guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
 end
 
-local newMemberWelcomeCheck, hideAttentionRemindersCheck, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
+local newMemberWelcomeCheck, hideAttentionRemindersCheck, automaticWarningChecks, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
 local rankPermissionDropdowns = {}
 do
     local y = -12
@@ -1342,6 +1371,15 @@ do
         L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, y - 4,
         function() return iRC:IsNewMemberWelcomeEnabled() end,
         function(value) iRC:SetNewMemberWelcomeEnabled(value) end, nil, true)
+    automaticWarningChecks = {}
+    for _, entry in ipairs({
+        { "OFFICER", L.DISABLE_OFFICER_WARNINGS }, { "WHISPER", L.DISABLE_WHISPER_WARNINGS }, { "GUILD", L.DISABLE_GUILD_WARNINGS },
+    }) do
+        local channel = entry[1]
+        automaticWarningChecks[channel], y = CreateSettingsCheckbox(guildNotificationsContent, entry[2], L.DISABLE_AUTOMATIC_WARNINGS_DESC, y,
+            function() return iRC:IsAutomaticWarningDisabled(channel) end,
+            function(value) iRC:SetAutomaticWarningDisabled(channel, value) end, nil, true)
+    end
     hideAttentionRemindersCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
         L.HIDE_ATTENTION_REMINDERS_OPTION, L.HIDE_ATTENTION_REMINDERS_OPTION_DESC, y,
         function() return iRC:GetSettings().hideAttentionReminders == true end,
@@ -1610,6 +1648,9 @@ local function Refresh()
     minimapCheck:Refresh()
     newMemberWelcomeCheck:Refresh()
     newMemberWelcomeCheck:SetEnabled(iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive())
+    for _, checkbox in pairs(automaticWarningChecks) do
+        checkbox:Refresh(); checkbox:SetEnabled(iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive())
+    end
     hideAttentionRemindersCheck:Refresh()
     hideAttentionRemindersCheck:SetEnabled(iRC:HasGuildPermission("verification") and iRC:IsGuildConnectionActive())
     for _, dropdown in pairs(rankPermissionDropdowns) do
@@ -1621,6 +1662,7 @@ local function Refresh()
     welcomeConflictAccept:SetShown(welcomeConflict ~= nil)
     welcomeConflictKeep:SetShown(welcomeConflict ~= nil)
     slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
+    verificationScaleSlider:SetValue(iRC:GetSettings().verificationWindowScale or 1)
     local connection = iRC:GetConnection()
     if connection then
         if iRC:IsGuildConnectionActive() then
