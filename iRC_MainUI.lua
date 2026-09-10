@@ -643,8 +643,10 @@ local function getGuildProfileLines(group)
         description,
     }
     if (tonumber(group.guildDescriptionTimestamp) or 0) > 0 and tostring(group.guildDescriptionEditedBy or "") ~= "" then
-        lines[#lines + 1] = iRC:Text("GUILD_STATS_DESCRIPTION_META", iRC:FormatPlayerName(group.guildDescriptionEditedBy),
-            date("%Y-%m-%d %H:%M", group.guildDescriptionTimestamp))
+        lines[#lines + 1] = iRC.Colors.Gray
+            .. iRC:Text("GUILD_STATS_DESCRIPTION_META", iRC:FormatPlayerName(group.guildDescriptionEditedBy),
+                date("%Y-%m-%d %H:%M", group.guildDescriptionTimestamp))
+            .. iRC.Colors.Reset
     end
     lines[#lines + 1] = ""
     lines[#lines + 1] = iRC:Text("GUILD_STATS_ACTIVE_RULES") .. ":"
