@@ -55,14 +55,20 @@ function iRC:GetSelfFoundEvidence() return { status = "UNVERIFIED" } end
 player = "Aleader"
 local beforeBootstrap = #messages
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t9", "GUILD", "Member-Soulseeker")
-assert(#messages == beforeBootstrap + 3, "GM sends activation, rules and a presence request to bootstrap the member")
+assert(#messages == beforeBootstrap + 5, "GM sends activation, rules, contacts, permissions and a presence request to bootstrap the member")
 assert(messages[beforeBootstrap + 1][2]:match("^GUILD_ACTIVATION\t9\t1$"), "bootstrap starts with active guild state")
 assert(messages[beforeBootstrap + 1][3] == "WHISPER" and messages[beforeBootstrap + 1][4] == "Member-Soulseeker", "activation targets requester")
 assert(messages[beforeBootstrap + 2][2]:match("^RULES\t9\t"), "bootstrap includes current rules")
 assert(messages[beforeBootstrap + 2][3] == "WHISPER" and messages[beforeBootstrap + 2][4] == "Member-Soulseeker", "rules target requester")
-local gmRulesTimestamp, gmRulesSource = messages[beforeBootstrap + 2][2]:match("\t([0-9a-f]+)\t([^\t]+)$")
+assert(#messages[beforeBootstrap + 2][2] <= 255, "core rules fit WoW's addon-message limit")
+local ruleParts = {}
+for value in (messages[beforeBootstrap + 2][2] .. "\t"):gmatch("(.-)\t") do ruleParts[#ruleParts + 1] = value end
+local gmRulesTimestamp, gmRulesSource = ruleParts[14], ruleParts[15]
 assert(gmRulesTimestamp and gmRulesSource == "Aleader-Soulseeker", "GM authors the rules timestamp and source")
-assert(messages[beforeBootstrap + 3][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
+assert(ruleParts[13] == "", "core rules leave guild contacts to their dedicated packet")
+assert(messages[beforeBootstrap + 3][2]:match("^GUILD_CONTACTS\t9\t"), "guild contacts use their dedicated packet")
+assert(messages[beforeBootstrap + 4][2]:match("^RANK_PERMISSIONS\t9\t"), "bootstrap includes rank permissions")
+assert(messages[beforeBootstrap + 5][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
 local beforeDirectHello = #messages
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t9\tREQUEST", "WHISPER", "Member-Soulseeker")
 assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t9\t"), "presence request returns HELLO")
@@ -79,7 +85,9 @@ assert(iRC:IsRulesetBroadcaster(), "an ordinary member relays rules when no high
 local beforeMemberBootstrap = #messages
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t9", "GUILD", "Jujukhan-Soulseeker")
 assert(#messages == beforeMemberBootstrap + 3, "highest available ordinary rank bootstraps a new member with activation, rules and presence")
-local relayedTimestamp, relayedSource = messages[beforeMemberBootstrap + 2][2]:match("\t([0-9a-f]+)\t([^\t]+)$")
+local relayedParts = {}
+for value in (messages[beforeMemberBootstrap + 2][2] .. "\t"):gmatch("(.-)\t") do relayedParts[#relayedParts + 1] = value end
+local relayedTimestamp, relayedSource = relayedParts[14], relayedParts[15]
 assert(relayedTimestamp == gmRulesTimestamp and relayedSource == gmRulesSource, "lower ranks relay the original GM timestamp and source unchanged")
 roster[2].online, roster[3].online, roster[4].online = true, true, true
 player = "Crasjin"

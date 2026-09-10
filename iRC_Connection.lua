@@ -295,7 +295,7 @@ local function getRulesAuthority()
     return bestName, bestRank
 end
 
-local function rulesBackupFingerprint(rules, timestampHex, timestampSource)
+local function rulesBackupFingerprint(rules, timestampHex, timestampSource, includeContacts)
     rules = rules or {}
     return table.concat({
         rules.nativeTongueOnly and "1" or "0",
@@ -308,7 +308,7 @@ local function rulesBackupFingerprint(rules, timestampHex, timestampSource)
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))),
         rules.guildGroupsOnly and "1" or "0",
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))),
-        tostring(rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 140),
+        includeContacts and tostring(rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 140) or "",
         tostring(timestampHex or "0"):lower(),
         tostring(timestampSource or ""):gsub("[%c]", " "):sub(1, 80),
     }, SEP)
@@ -865,7 +865,7 @@ function iRC:SendConnectionRules(targetName)
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.sameRaceMinimumLevel) or 1)))),
         rules.guildGroupsOnly and "1" or "0",
         tostring(math.max(1, math.min(60, math.floor(tonumber(rules.guildGroupsMinimumLevel) or 1)))),
-        tostring(rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 140),
+        "",
         timestampHex,
         tostring(timestampSource or ""):gsub("[%c]", " "):sub(1, 80),
         rulesBackupChecksum(backup),
@@ -879,6 +879,7 @@ function iRC:SendConnectionRules(targetName)
         rules.guildFoundOnly and "1" or "0",
         rulesBackupChecksum(table.concat({ rules.guildFoundOnly and "1" or "0", timestampHex, tostring(timestampSource or "") }, SEP)),
     }, SEP), distribution, targetName)
+    if self:IsGuildMaster() and self.SendGuildContacts then self:SendGuildContacts(targetName) end
     if self:IsGuildMaster() and self.SendGuildContactMetadata then self:SendGuildContactMetadata(targetName) end
     if self:IsGuildMaster() and self.SendRankPermissions then self:SendRankPermissions(targetName) end
     self:DebugMsg(self:Text("RULES_SENT"), 3)
@@ -1599,27 +1600,30 @@ local function handleMessage(prefix, message, distribution, sender)
             sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[10]) or 1))),
             guildGroupsOnly = parts[11] == "1",
             guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(parts[12]) or 1))),
-            guildContacts = tostring(parts[13] or ""):sub(1, 140),
             guildFoundTradeExceptions = parts[17] == "1",
             guildMapEnabled = parts[20] == "1",
             raceLock = parts[22] == "1",
             guildFoundOnly = parts[24] == "1",
         }
+        local legacyContacts = tostring(parts[13] or ""):sub(1, 140)
+        if legacyContacts ~= "" then incomingRules.guildContacts = legacyContacts end
         if not incomingRules.raceLock then
             incomingRules.nativeTongueOnly = false
             incomingRules.sameRaceGroupsOnly = false
             incomingRules.allowLevel60MixedRaceGroups = false
         end
+        local incomingBackup = rulesBackupFingerprint(incomingRules, timestampHex, timestampSource)
+        local legacyIncomingBackup = rulesBackupFingerprint(incomingRules, timestampHex, timestampSource, true)
         local incomingContactCount = 0
-        for contact in incomingRules.guildContacts:gmatch("[^,]+") do
+        for contact in legacyContacts:gmatch("[^,]+") do
             if contact:gsub("%s+", "") ~= "" then incomingContactCount = incomingContactCount + 1 end
         end
-        local incomingBackup = rulesBackupFingerprint(incomingRules, timestampHex, timestampSource)
         local progressionIsExclusive = not (incomingRules.level60GuildFound and incomingRules.allowLevel60WithoutSelfFound)
             and not (incomingRules.guildFoundOnly and (incomingRules.selfFoundOnly or incomingRules.level60GuildFound))
             and (incomingRules.selfFoundOnly or not incomingRules.allowLevel60WithoutSelfFound)
         local incomingChecksum = tostring(parts[16] or ""):lower()
         local checksumValid = incomingChecksum == "" or incomingChecksum == rulesBackupChecksum(incomingBackup)
+            or incomingContactCount <= 5 and incomingChecksum == rulesBackupChecksum(legacyIncomingBackup)
         local exceptionFlagPresent = parts[17] == "0" or parts[17] == "1"
         local exceptionChecksum = tostring(parts[18] or ""):lower()
         local exceptionChecksumValid = not exceptionFlagPresent or exceptionChecksum == rulesBackupChecksum(table.concat({

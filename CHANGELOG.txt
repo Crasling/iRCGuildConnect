@@ -2,6 +2,10 @@
 iRC - Changelog
 ================================================================================
 
+Unreleased
+--------------------------------------------------------------------------------
+[FIX] Kept core guild-rule broadcasts below WoW's addon-message size limit by sending guild contacts separately
+
 v0.4.1 - Guild Connection
 --------------------------------------------------------------------------------
 [IMPORTANT] Renamed the addon folder, TOC, and Lua files from iRacelockConnection to iRC. Existing settings are not transferred; the Guild Master must configure and publish a new 0.4.1 ruleset
