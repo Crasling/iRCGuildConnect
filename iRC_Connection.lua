@@ -587,7 +587,7 @@ function iRC:SendGuildHomepageDescription(targetName, force)
     if not force and not self:IsRulesetBroadcaster() then return false end
     local data = self:GetConnection().guildHomepageDescription
     local timestamp = math.floor(tonumber(data.timestamp) or 0)
-    local editedBy = tostring(data.editedBy or ""):gsub("[%c]", ""):sub(1, 80)
+    local editedBy = tostring(data.editedBy or ""):gsub("[%c]", ""):sub(1, 40)
     if timestamp <= 0 or editedBy == "" then return false end
     local value = tostring(data.text or ""):gsub("[%c]", " "):sub(1, self.GuildHomepageDescriptionMaxLength)
     if self:ContainsProfanity(value) then return false end
@@ -991,9 +991,9 @@ end
 function iRC:SendGroupViolation(record)
     if not self:IsGuildConnectionActive() or type(record) ~= "table" then return false end
     local occurredAt = math.floor(tonumber(record.occurredAt) or time())
-    local instanceName = cleanWireText(record.instanceName, 60)
-    local players = cleanWireText(table.concat(record.players or {}, ", "), 100)
-    local violationId = record.id or (self:NormalizeName(self:GetPlayerName()) .. ":" .. occurredAt)
+    local instanceName = cleanWireText(record.instanceName, 40)
+    local players = cleanWireText(table.concat(record.players or {}, ", "), 80)
+    local violationId = cleanWireText(record.id or (self:NormalizeName(self:GetPlayerName()) .. ":" .. occurredAt), 60)
     record.id = violationId
     send(self.Prefix, table.concat({ "GROUP_VIOLATION", WIRE_VERSION, violationId, tostring(occurredAt), instanceName, players }, SEP), "GUILD")
     local locallyReported = false
@@ -1046,9 +1046,9 @@ function iRC:UploadOfficerIncidentsToGM(targetName)
         if now - (tonumber(record.occurredAt) or 0) <= 86400 then
             send(self.Prefix, table.concat({
                 "INCIDENT_UPLOAD", WIRE_VERSION,
-                cleanWireText(record.id, 70), cleanWireText(record.reporter, 60),
+                cleanWireText(record.id, 60), cleanWireText(record.reporter, 50),
                 tostring(math.floor(tonumber(record.occurredAt) or now)),
-                cleanWireText(record.instanceName, 45), cleanWireText(record.players, 60),
+                cleanWireText(record.instanceName, 40), cleanWireText(record.players, 60),
             }, SEP), "WHISPER", targetName)
             uploaded = true
         end

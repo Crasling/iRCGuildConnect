@@ -109,6 +109,11 @@ function iRC:LeaveLowTrafficMode()
 end
 
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
+    message = tostring(message or "")
+    if #message > 255 then
+        self:DebugMsg("Blocked oversized addon message (" .. tostring(#message) .. " bytes) for " .. tostring(prefix or "?"), 1)
+        return false
+    end
     local now = GetTime and GetTime() or 0
     local readyAt = tonumber(self.StartupTrafficReadyAt) or 0
     if readyAt > now and C_Timer and C_Timer.After then
@@ -158,7 +163,7 @@ iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     guildBanks = 1, notifications = 1, homepage = 0,
 }
-iRC.GuildHomepageDescriptionMaxLength = 180
+iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
     "Interface\\Icons\\INV_Misc_QuestionMark", "Interface\\Icons\\INV_BannerPVP_01", "Interface\\Icons\\INV_BannerPVP_02",
     "Interface\\Icons\\INV_Shield_05", "Interface\\Icons\\INV_Shield_06", "Interface\\Icons\\INV_Shield_09",

@@ -5,6 +5,8 @@ iRC - Changelog
 Unreleased
 --------------------------------------------------------------------------------
 [FIX] Kept core guild-rule broadcasts below WoW's addon-message size limit by sending guild contacts separately
+[FIX] Bounded homepage, incident, and group-violation sync packets and blocked oversized addon traffic before transmission
+[FIX] Allowed large public guild reports and cache snapshots to use their existing chunk transport instead of being discarded
 
 v0.4.1 - Guild Connection
 --------------------------------------------------------------------------------

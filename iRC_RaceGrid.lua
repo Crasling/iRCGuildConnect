@@ -15,6 +15,8 @@ local REPORT_MAX_AGE = 5 * 86400
 local CACHE_REQUEST_WINDOW = 5
 local CACHE_TRANSFER_TIMEOUT = 15
 local CACHE_CHUNK_SIZE = 100
+local MAX_CHANNEL_PAYLOAD = 1024
+local MAX_CACHE_PARTS = 16
 local MAX_CACHE_PACKAGES = 32
 local cacheUpdatingUntil = 0
 
@@ -52,7 +54,7 @@ end
 local function send(prefix, message, distribution, target)
     if distribution == "CHANNEL" then
         local id = GetChannelName and GetChannelName(target)
-        if type(id) ~= "number" or id <= 0 or #message > 255 then return false end
+        if type(id) ~= "number" or id <= 0 or #message > MAX_CHANNEL_PAYLOAD then return false end
         if not SendChatMessage then return false end
         local hex = bytesToHex(message)
         local single = prefix .. ":" .. hex
@@ -440,7 +442,7 @@ function RaceGrid:BroadcastReport(fromClick)
     local report = self:GetLocalReport()
     if not report.name or report.name == "" or not report.guid or report.guid == "" or not report.race then return false end
     local payload = serializeGuildReport(report)
-    if #payload > 255 then return false end
+    if #payload > MAX_CHANNEL_PAYLOAD then return false end
     self:StoreGuildReport(report)
     -- Public custom-channel sends require a hardware event on Classic. Startup
     -- and ticker refreshes update the local cache only and are not failures.
@@ -712,7 +714,7 @@ local function handleCacheMessage(parts, sender, distribution)
         local payload = snapshot.payload
         local hex = bytesToHex(payload)
         local total = math.ceil(#hex / CACHE_CHUNK_SIZE)
-        if total < 1 or total > 8 then return true end
+        if total < 1 or total > MAX_CACHE_PARTS then return true end
         for part = 1, total do
             local chunk = hex:sub((part - 1) * CACHE_CHUNK_SIZE + 1, part * CACHE_CHUNK_SIZE)
             send(PREFIX, table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName, part, total, checksum, chunk }, SEP), "WHISPER", sender)
@@ -732,7 +734,7 @@ local function handleCacheMessage(parts, sender, distribution)
         if not request or not selected or iRC:NormalizeName(selected.sender) ~= iRC:NormalizeName(sender)
             or normalizeGuildName(selected.guildName) ~= normalizeGuildName(guildName)
             or selected.checksum ~= checksum
-            or not part or not total or total < 1 or total > 8 or part < 1 or part > total
+            or not part or not total or total < 1 or total > MAX_CACHE_PARTS or part < 1 or part > total
             or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") or not chunk:match("^[0-9a-fA-F]+$") then return true end
         setCacheUpdating(true)
         local key = fullNameKey(sender) .. ":" .. requestId .. ":" .. checksum

@@ -51,6 +51,10 @@ db.active = true
 function iRC:DebugMsg(message) debugMessages[#debugMessages + 1] = message end
 function iRC:GetSelfFoundEvidence() return { status = "UNVERIFIED" } end
 
+local beforeOversizedSend = #messages
+assert(not iRC:SendAddonTraffic(iRC.Prefix, string.rep("x", 256), "GUILD"), "oversized addon traffic is rejected")
+assert(#messages == beforeOversizedSend, "oversized addon traffic never reaches the WoW API")
+
 -- A newly installed inactive client must receive a direct bootstrap response.
 player = "Aleader"
 local beforeBootstrap = #messages
