@@ -73,6 +73,12 @@ assert(ruleParts[13] == "", "core rules leave guild contacts to their dedicated 
 assert(messages[beforeBootstrap + 3][2]:match("^GUILD_CONTACTS\t9\t"), "guild contacts use their dedicated packet")
 assert(messages[beforeBootstrap + 4][2]:match("^RANK_PERMISSIONS\t9\t"), "bootstrap includes rank permissions")
 assert(messages[beforeBootstrap + 5][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
+local beforeImmediateRule = #messages
+iRC.LowTrafficMode = true
+assert(iRC:SetConnectionRule("guildMapEnabled", true), "Guild Master can change an active rule")
+iRC.LowTrafficMode = false
+assert(#messages > beforeImmediateRule and messages[beforeImmediateRule + 1][2]:match("^RULES\t9\t"),
+    "an active rule change broadcasts immediately during low-traffic mode")
 local beforeDirectHello = #messages
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t9\tREQUEST", "WHISPER", "Member-Soulseeker")
 assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t9\t"), "presence request returns HELLO")

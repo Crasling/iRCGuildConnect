@@ -228,8 +228,8 @@ local function scheduleHello(targetName, maximumDelay)
     return true
 end
 
-function iRC:SendGuildActivation(targetName)
-    if self:DeferLowTraffic("traffic:activation:" .. tostring(targetName or "guild"), function() iRC:SendGuildActivation(targetName) end) then return false end
+function iRC:SendGuildActivation(targetName, force)
+    if not force and self:DeferLowTraffic("traffic:activation:" .. tostring(targetName or "guild"), function() iRC:SendGuildActivation(targetName, force) end) then return false end
     if not self:IsInGuildConnection() then return end
     local isBroadcaster = self:IsRulesetBroadcaster()
     if not self:IsGuildMaster() and not isBroadcaster then return end
@@ -366,8 +366,8 @@ local function rankPermissionsWire(values)
     return table.concat(fields, ",")
 end
 
-function iRC:SendRankPermissions(targetName)
-    if self:DeferLowTraffic("traffic:rank-permissions:" .. tostring(targetName or "guild"), function() iRC:SendRankPermissions(targetName) end) then return false end
+function iRC:SendRankPermissions(targetName, force)
+    if not force and self:DeferLowTraffic("traffic:rank-permissions:" .. tostring(targetName or "guild"), function() iRC:SendRankPermissions(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:IsGuildMaster() then return false end
     local connection = self:GetConnection()
     local timestamp = math.floor(tonumber(connection.rankPermissionsTimestamp) or 0)
@@ -497,7 +497,7 @@ local function sendManagementConflict(target, kind, value, timestamp, source, ch
 end
 
 function iRC:SendGuildManagementSettings(targetName, force)
-    if self:DeferLowTraffic("traffic:management:" .. tostring(targetName or "guild"), function() iRC:SendGuildManagementSettings(targetName, force) end) then return false end
+    if not force and self:DeferLowTraffic("traffic:management:" .. tostring(targetName or "guild"), function() iRC:SendGuildManagementSettings(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
     if not force and not self:IsRulesetBroadcaster() then return false end
     local connection = self:GetConnection()
@@ -521,8 +521,8 @@ function iRC:SendGuildManagementSettings(targetName, force)
     return true
 end
 
-function iRC:SendGuildBankMetadata(targetName, onlyName)
-    if self:DeferLowTraffic("traffic:bank-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankMetadata(targetName, onlyName) end) then return false end
+function iRC:SendGuildBankMetadata(targetName, onlyName, force)
+    if not force and self:DeferLowTraffic("traffic:bank-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankMetadata(targetName, onlyName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
     local connection = self:GetConnection()
     local exceptions = connection and connection.guildBankExceptions
@@ -542,8 +542,8 @@ function iRC:SendGuildBankMetadata(targetName, onlyName)
     return sentAny
 end
 
-function iRC:SendGuildContactMetadata(targetName, onlyName)
-    if self:DeferLowTraffic("traffic:contact-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildContactMetadata(targetName, onlyName) end) then return false end
+function iRC:SendGuildContactMetadata(targetName, onlyName, force)
+    if not force and self:DeferLowTraffic("traffic:contact-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildContactMetadata(targetName, onlyName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
     local connection = self:GetConnection()
     local contacts = tostring(connection.rules.guildContacts or "")
@@ -564,8 +564,8 @@ function iRC:SendGuildContactMetadata(targetName, onlyName)
     return sentAny
 end
 
-function iRC:SendGuildContacts(targetName)
-    if self:DeferLowTraffic("traffic:contacts:" .. tostring(targetName or "guild"), function() iRC:SendGuildContacts(targetName) end) then return false end
+function iRC:SendGuildContacts(targetName, force)
+    if not force and self:DeferLowTraffic("traffic:contacts:" .. tostring(targetName or "guild"), function() iRC:SendGuildContacts(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
     local connection = self:GetConnection()
     local contacts = tostring(connection.rules.guildContacts or ""):gsub("[%c]", " "):sub(1, 140)
@@ -575,12 +575,12 @@ function iRC:SendGuildContacts(targetName)
     local checksum = rulesBackupChecksum(contacts .. SEP .. timestamp .. SEP .. source)
     send(self.Prefix, table.concat({ "GUILD_CONTACTS", WIRE_VERSION, contacts, tostring(timestamp), source, checksum }, SEP),
         targetName and "WHISPER" or "GUILD", targetName)
-    self:SendGuildContactMetadata(targetName)
+    self:SendGuildContactMetadata(targetName, nil, force)
     return true
 end
 
 function iRC:SendGuildHomepageDescription(targetName, force)
-    if self:DeferLowTraffic("traffic:homepage-description:" .. tostring(targetName or "guild"), function()
+    if not force and self:DeferLowTraffic("traffic:homepage-description:" .. tostring(targetName or "guild"), function()
         iRC:SendGuildHomepageDescription(targetName, force)
     end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
@@ -598,7 +598,7 @@ function iRC:SendGuildHomepageDescription(targetName, force)
 end
 
 function iRC:SendGuildHomepageIcon(targetName, force)
-    if self:DeferLowTraffic("traffic:homepage-icon:" .. tostring(targetName or "guild"), function()
+    if not force and self:DeferLowTraffic("traffic:homepage-icon:" .. tostring(targetName or "guild"), function()
         iRC:SendGuildHomepageIcon(targetName, force)
     end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
@@ -623,7 +623,7 @@ function iRC:SetGuildContactNote(name, note)
     detail.note = tostring(note or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 80)
     detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
     connection.guildContactDetails[fullName] = detail
-    self:SendGuildContactMetadata(nil, fullName)
+    self:SendGuildContactMetadata(nil, fullName, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
@@ -640,7 +640,7 @@ function iRC:SetGuildBankNote(name, note)
     detail.note = note
     detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
     exceptions.details[fullName] = detail
-    self:SendGuildBankMetadata(nil, fullName)
+    self:SendGuildBankMetadata(nil, fullName, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
@@ -716,7 +716,7 @@ function iRC:SetGuildFoundTradeExceptionItem(category, itemId, enabled)
 end
 
 function iRC:SendGuildFoundTradeExceptions(targetName, force)
-    if self:DeferLowTraffic("traffic:trade-exceptions:" .. tostring(targetName or "guild"), function() iRC:SendGuildFoundTradeExceptions(targetName, force) end) then return false end
+    if not force and self:DeferLowTraffic("traffic:trade-exceptions:" .. tostring(targetName or "guild"), function() iRC:SendGuildFoundTradeExceptions(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
     if not force and not self:IsRulesetBroadcaster() then return false end
     local settings = self:GetGuildFoundTradeExceptionSettings()
@@ -732,7 +732,7 @@ function iRC:SendGuildFoundTradeExceptions(targetName, force)
 end
 
 function iRC:SendGuildBankExceptions(targetName, force)
-    if self:DeferLowTraffic("traffic:banks:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankExceptions(targetName, force) end) then return false end
+    if not force and self:DeferLowTraffic("traffic:banks:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankExceptions(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
     if not force and not self:IsRulesetBroadcaster() then return false end
     local connection = self:GetConnection()
@@ -766,7 +766,7 @@ function iRC:SendGuildBankExceptions(targetName, force)
         end
     end
     self:DebugMsg(self:Text("GUILD_BANKS_SENT"), 3)
-    if targetName then self:SendGuildBankMetadata(targetName) end
+    if targetName then self:SendGuildBankMetadata(targetName, nil, force) end
     return true
 end
 
@@ -814,7 +814,7 @@ function iRC:SetGuildBankExceptions(value, resolutions)
     exceptions.resolutions = tostring(resolutions or ""):lower():sub(1, 17)
     exceptions.checksum = guildBanksChecksum(guildBanksWire(members), exceptions.timestamp, exceptions.source)
     self:SendGuildBankExceptions(nil, true)
-    self:SendGuildBankMetadata()
+    self:SendGuildBankMetadata(nil, nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
     self:Print(self:Text("GUILD_BANK_SAVED", count))
@@ -834,8 +834,8 @@ function iRC:IsRulesetBroadcaster()
     return isSelf, name, rank
 end
 
-function iRC:SendConnectionRules(targetName)
-    if self:DeferLowTraffic("traffic:rules:" .. tostring(targetName or "guild"), function() iRC:SendConnectionRules(targetName) end) then return false end
+function iRC:SendConnectionRules(targetName, force)
+    if not force and self:DeferLowTraffic("traffic:rules:" .. tostring(targetName or "guild"), function() iRC:SendConnectionRules(targetName, force) end) then return false end
     if self:SuppressesRuleSending() then return false end
     local isBroadcaster = self:IsRulesetBroadcaster()
     if not self:IsGuildConnectionActive() or not isBroadcaster then return end
@@ -879,9 +879,8 @@ function iRC:SendConnectionRules(targetName)
         rules.guildFoundOnly and "1" or "0",
         rulesBackupChecksum(table.concat({ rules.guildFoundOnly and "1" or "0", timestampHex, tostring(timestampSource or "") }, SEP)),
     }, SEP), distribution, targetName)
-    if self:IsGuildMaster() and self.SendGuildContacts then self:SendGuildContacts(targetName) end
-    if self:IsGuildMaster() and self.SendGuildContactMetadata then self:SendGuildContactMetadata(targetName) end
-    if self:IsGuildMaster() and self.SendRankPermissions then self:SendRankPermissions(targetName) end
+    if self:IsGuildMaster() and self.SendGuildContacts then self:SendGuildContacts(targetName, force) end
+    if self:IsGuildMaster() and self.SendRankPermissions then self:SendRankPermissions(targetName, force) end
     self:DebugMsg(self:Text("RULES_SENT"), 3)
 end
 

@@ -597,7 +597,7 @@ function iRC:SetGuildRankPermission(permission, rankIndex)
     rankIndex = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
     connection.rankPermissions[permission] = rankIndex
     connection.rankPermissionsTimestamp = math.max(time(), (tonumber(connection.rankPermissionsTimestamp) or 0) + 1)
-    if self.SendRankPermissions then self:SendRankPermissions() end
+    if self.SendRankPermissions then self:SendRankPermissions(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
@@ -784,7 +784,7 @@ function iRC:SetGuildRace(race)
     if connection.rules.raceLock ~= true then return false end
     connection.rules.guildRace = normalizedRace
     self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
@@ -811,9 +811,9 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild)
         connection.attentionSince = {}
         connection.newMemberChecks = {}
     end
-    if not receivedFromGuild and self.SendGuildActivation then self:SendGuildActivation() end
+    if not receivedFromGuild and self.SendGuildActivation then self:SendGuildActivation(nil, true) end
     if active and not receivedFromGuild then
-        if self.SendConnectionRules then self:SendConnectionRules() end
+        if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
         if self.SendHello then self:SendHello() end
         if self.Compatibility and self.Compatibility.BroadcastAll then self.Compatibility:BroadcastAll() end
     end
@@ -1010,7 +1010,7 @@ function iRC:SetProgressionMode(mode)
         connection.rules.allowLevel60WithoutSelfFound = false
     end
     self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
     return true
@@ -1024,7 +1024,7 @@ function iRC:SetMaxLevelProgressionMode(mode)
     connection.rules.allowLevel60WithoutSelfFound = mode == "UNRESTRICTED"
     if connection.rules.level60GuildFound then self:MarkGuildFoundRequired(connection) end
     self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
     return true
@@ -1050,7 +1050,7 @@ function iRC:SetConnectionRule(key, value)
     end
     if connection.rules.selfFoundOnly and connection.rules.level60GuildFound then self:MarkGuildFoundRequired(connection) end
     self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
     if self.GuildMap then
@@ -1067,7 +1067,7 @@ function iRC:SetSameRaceMinimumLevel(value)
     if not connection then return false end
     connection.rules.sameRaceMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(value) or 1)))
     self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
     return true
@@ -1079,7 +1079,7 @@ function iRC:SetGuildGroupsMinimumLevel(value)
     if not connection then return false end
     connection.rules.guildGroupsMinimumLevel = math.max(1, math.min(60, math.floor(tonumber(value) or 1)))
     self:StampConnectionRules(connection)
-    if self.SendConnectionRules then self:SendConnectionRules() end
+    if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.Enforcement then self.Enforcement:Refresh() end
     return true
@@ -1126,11 +1126,11 @@ function iRC:SetGuildContacts(value)
     connection.guildContactsSource = self:GetPlayerName()
     if self:IsGuildMaster() then
         self:StampConnectionRules(connection)
-        if self.SendConnectionRules then self:SendConnectionRules() end
+        if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
     elseif self.SendGuildContacts then
-        self:SendGuildContacts()
+        self:SendGuildContacts(nil, true)
     end
-    if self.SendGuildContactMetadata then self:SendGuildContactMetadata() end
+    if self.SendGuildContactMetadata then self:SendGuildContactMetadata(nil, nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
