@@ -2,11 +2,12 @@
 iRC - Changelog
 ================================================================================
 
-Unreleased
+v0.4.2 - Reliable Guild Sync
 --------------------------------------------------------------------------------
 [FIX] Kept core guild-rule broadcasts below WoW's addon-message size limit by sending guild contacts separately
 [FIX] Bounded homepage, incident, and group-violation sync packets and blocked oversized addon traffic before transmission
 [FIX] Allowed large public guild reports and cache snapshots to use their existing chunk transport instead of being discarded
+[FIX] Matched embedded-library paths to the packaged `libs` directory casing
 [CHANGED] Rule, activation, guild management, homepage, and Guild Found changes now broadcast immediately after saving
 
 v0.4.1 - Guild Connection

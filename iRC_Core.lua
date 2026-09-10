@@ -4,7 +4,7 @@ private.iRC = iRC
 
 iRC.Name = addonName or "iRC"
 iRC.DisplayName = "iRC"
-iRC.Version = "0.4.1"
+iRC.Version = "0.4.2"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
