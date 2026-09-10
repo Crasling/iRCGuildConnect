@@ -599,9 +599,7 @@ end
 
 function iRC:IsGuildMaster()
     if self:IsTestGuildMaster() or self:IsTestAdminGuildMaster() then return true end
-    if not GetGuildInfo then return false end
-    local _, _, rankIndex = GetGuildInfo("player")
-    return rankIndex == 0
+    return self:GetPlayerGuildRankIndex() == 0
 end
 
 function iRC:IsTestGuildMasterName(name)

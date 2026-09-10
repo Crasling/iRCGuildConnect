@@ -16,6 +16,7 @@ v0.4.1 - Guild Connection
 [FIX] Improved Guild Statistics card spacing, labels, class breakdowns, active-rule details, and tag classification
 [FIX] Corrected online contact indicators and prevented opposite-faction invite contacts from opening unavailable whispers
 [FIX] Repacked the settings sidebar when Management tabs are hidden and kept Classic settings refresh below its Lua upvalue limit
+[FIX] Guild Master rule controls now retain rank-0 authority when the direct guild-rank API is temporarily unavailable
 [CHANGED] Updated the project link to github.com/Crasling/iRCGuildConnect and disabled detected legacy installations to prevent both addons running together
 
 v0.3.2 - Combat Performance & Roleplay
