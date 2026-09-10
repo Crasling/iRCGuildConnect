@@ -612,7 +612,6 @@ end
 local function openMemberManagementMenu(frame, member)
     if not iRC:HasGuildPermission("verification") or not member or not member.name then return end
     local menu = frame.memberMenu
-    local scale = UIParent:GetEffectiveScale()
     local cursorX, cursorY = GetCursorPosition()
     menu.targetName = member.name
     menu.targetMember = member
@@ -648,7 +647,11 @@ local function openMemberManagementMenu(frame, member)
     end
     menu:SetHeight(yOffset + 12)
     menu:ClearAllPoints()
-    menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / scale, cursorY / scale)
+    -- The menu inherits the verification window's scale. Cursor coordinates
+    -- are physical pixels, so convert them using the menu's effective scale.
+    local menuScale = menu:GetEffectiveScale()
+    if not menuScale or menuScale <= 0 then menuScale = UIParent:GetEffectiveScale() or 1 end
+    menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / menuScale, cursorY / menuScale)
     menu:Show()
 end
 
@@ -772,6 +775,8 @@ local attentionReminderMembers = {}
 local attentionReminderPending = false
 local attentionReminderToken = 0
 local attentionCheckPending = false
+local attentionReminderLastAt = 0
+local ATTENTION_REMINDER_COOLDOWN = 300
 
 function Dashboard:CheckAttentionReminder(periodic)
     if iRC:GetSettings().hideAttentionReminders
@@ -796,13 +801,15 @@ function Dashboard:CheckAttentionReminder(periodic)
         end
     end
     attentionReminderMembers = current
-    if count > 0 and (periodic == true or periodic == "delayed") then
+    local reminderReady = time() - attentionReminderLastAt >= ATTENTION_REMINDER_COOLDOWN
+    if count > 0 and reminderReady and (periodic == true or periodic == "delayed") then
         if periodic == true and attentionReminderPending then
             attentionReminderPending = false
             attentionReminderToken = attentionReminderToken + 1
         end
+        attentionReminderLastAt = time()
         iRC:Print(iRC.Colors.Yellow .. iRC:Text("VERIFICATION_ATTENTION_REMINDER", count) .. iRC.Colors.Reset)
-    elseif count > 0 and added and not attentionReminderPending then
+    elseif count > 0 and reminderReady and added and not attentionReminderPending then
         attentionReminderPending = true
         attentionReminderToken = attentionReminderToken + 1
         local token = attentionReminderToken

@@ -222,7 +222,7 @@ function Sync:ValidateMoney()
         history.moneyDiscrepancyAt = time()
         history.moneyBeforeDiscrepancy = baseline
         history.moneyAfterDiscrepancy = current
-        iRC:Print(iRC:Text("RL_MONEY_DISCREPANCY"))
+        history.moneyDiscrepancyNoticeAt = nil
     end
     -- Existing installations have no sealed value yet. The first login after
     -- upgrading establishes it without treating the migration as tampering.
@@ -404,12 +404,31 @@ function Sync:ReceiveRoster(message, sender)
         local moneyBefore = number(fields[8], 1000000000000000)
         local moneyAfter = number(fields[9], 1000000000000000)
         storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC", moneyBefore, moneyAfter)
+        -- Confirm receipt only from a rank authorized to review verification.
+        -- The reporting player does not see the discrepancy notice until this
+        -- acknowledgement proves that an officer actually received the report.
+        if tamperAt > 0 and iRC:HasGuildPermission("verification") then
+            send(IRC_ROSTER, "A:" .. tostring(tamperAt), sender)
+        end
         local stamp = number(fields[7], time() + 300)
         if validBool(fields[5]) and validBool(fields[6]) and stamp and stamp > 0
             and storeOverride(name, readBool(fields[5]), readBool(fields[6]), stamp, "iRC relay", false) then
             pendingRelays[iRC:NormalizeName(name)] = nil
         else
             queueRelay(name)
+        end
+    elseif marker == "A:" then
+        local acknowledgedAt = number(fields[1], time() + 300)
+        local senderRank = iRC:GetGuildMemberRankIndex(sender)
+        local db = connection()
+        local allowedRank = db and db.rankPermissions.verification or 1
+        local history = localHistory()
+        local discrepancyAt = tonumber(history.moneyDiscrepancyAt) or 0
+        if acknowledgedAt and acknowledgedAt > 0 and acknowledgedAt == discrepancyAt
+            and senderRank ~= nil and senderRank <= allowedRank
+            and tonumber(history.moneyDiscrepancyNoticeAt) ~= discrepancyAt then
+            history.moneyDiscrepancyNoticeAt = discrepancyAt
+            iRC:Print(iRC:Text("RL_MONEY_DISCREPANCY"))
         end
     elseif marker == "G:" or marker == "O:" then
         local direct = marker == "G:"
@@ -539,7 +558,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         Sync:RecordDeath(iRC:GetPlayerName())
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, msg, channel, sender = ...
-        if channel ~= "GUILD" or type(msg) ~= "string" or #msg > 255 then return end
+        if (channel ~= "GUILD" and channel ~= "WHISPER") or type(msg) ~= "string" or #msg > 255 then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if prefix == IRC_ROSTER then Sync:ReceiveRoster(msg, sender) end
     end

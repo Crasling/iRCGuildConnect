@@ -2,6 +2,15 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.7 - Progression Rule Clarity
+--------------------------------------------------------------------------------
+[ADDED] Added a Force Guild Sync button that requests and resends the latest authorized rules, management, homepage, Guild Found, and presence data
+[FIX] Forced sync and Guild Master relays cannot replace newer local rules or guild-management data
+[FIX] Gold discrepancy notices now wait until an authorized officer confirms receipt of the report; targeted Guild Found sync whispers are accepted
+[FIX] The Verification right-click menu now opens at the cursor when the window is scaled
+[FIX] Verification attention reminders now share a five-minute cooldown so roster and login events cannot spam them
+[FIX] Corrected the active-rules explanation for Self-Found or Guild-Found so it states that either mode is allowed at every level
+
 v0.4.6 - Window Controls & Warning Settings
 --------------------------------------------------------------------------------
 [ADDED] Added aspect-locked resize handles that proportionally scale the main iRC window and Verification panel and save their scale

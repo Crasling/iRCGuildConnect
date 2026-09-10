@@ -570,7 +570,10 @@ local broadcastButton = CreateSettingsButton(connectionContent, "Broadcast my st
 end, "Send your latest progress to the guild.")
 broadcastButton:ClearAllPoints()
 broadcastButton:SetPoint("LEFT", dashboardButton, "RIGHT", 8, 0)
-y = connectionActionsY - 36
+CreateSettingsButton(connectionContent, L.FORCE_GUILD_SYNC, 210, connectionActionsY - 34, function()
+    iRC:ForceGuildSync()
+end, L.FORCE_GUILD_SYNC_DESC)
+y = connectionActionsY - 70
 local rulesEditorTopY = y - 2
 
 local guildRulesStatus

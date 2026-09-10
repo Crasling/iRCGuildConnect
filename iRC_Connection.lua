@@ -238,11 +238,11 @@ function iRC:SendGuildActivation(targetName, force)
     self:DebugMsg(self:Text("GUILD_ACTIVATION_SENT", self:IsGuildConnectionActive() and self:Text("GUILD_ACTIVE") or self:Text("GUILD_INACTIVE")), 3)
 end
 
-function iRC:RequestGuildActivation()
-    if self:DeferLowTraffic("traffic:activation-request", function() iRC:RequestGuildActivation() end) then return false end
-    if not self:IsInGuildConnection() or self:IsGuildConnectionActive() or self:IsGuildMaster() then return false end
+function iRC:RequestGuildActivation(force)
+    if self:DeferLowTraffic("traffic:activation-request", function() iRC:RequestGuildActivation(force) end) then return false end
+    if not self:IsInGuildConnection() or (not force and (self:IsGuildConnectionActive() or self:IsGuildMaster())) then return false end
     local guildKey, now = self:GetGuildKey(), GetTime()
-    if lastActivationRequestGuild == guildKey and lastActivationRequestAt
+    if not force and lastActivationRequestGuild == guildKey and lastActivationRequestAt
         and now - lastActivationRequestAt < ACTIVATION_REQUEST_COOLDOWN then return false end
     lastActivationRequestGuild, lastActivationRequestAt = guildKey, now
     send(self.Prefix, table.concat({ "GUILD_ACTIVATION_REQUEST", WIRE_VERSION }, SEP), "GUILD")
@@ -908,6 +908,31 @@ function iRC:RequestConnectionRules()
     return send(self.Prefix, table.concat({ "RULES_REQUEST", WIRE_VERSION, timestampHex }, SEP), "GUILD") and true or false
 end
 
+function iRC:ForceGuildSync()
+    if self:IsLowTrafficMode() then
+        self:Print(self.Colors.Yellow .. self:Text("FORCE_GUILD_SYNC_COMBAT") .. self.Colors.Reset)
+        return false
+    end
+    if not self:IsInGuildConnection() then return false end
+    self:RequestGuildActivation(true)
+    self:RequestConnectionRules()
+    self:SendHello()
+    if self:IsGuildConnectionActive() then self:RequestGuildPresence(false) end
+    if self:IsRulesetBroadcaster() then
+        self:SendGuildActivation(nil, true)
+        self:SendConnectionRules(nil, true)
+        self:SendGuildManagementSettings(nil, true)
+        self:SendGuildBankExceptions(nil, true)
+        self:SendGuildBankMetadata(nil, nil, true)
+        self:SendGuildFoundTradeExceptions(nil, true)
+        self:SendGuildHomepageDescription(nil, true)
+        self:SendGuildHomepageIcon(nil, true)
+    end
+    if self.RaceLockedSync then self.RaceLockedSync:Broadcast() end
+    self:Print(self.Colors.Green .. self:Text("FORCE_GUILD_SYNC_DONE") .. self.Colors.Reset)
+    return true
+end
+
 function iRC:RequestGuildPresence(isOfficerPoll)
     if self:DeferLowTraffic("traffic:presence-request", function() iRC:RequestGuildPresence(isOfficerPoll) end) then return false end
     if not self:IsGuildConnectionActive() then return false end
@@ -1144,6 +1169,7 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:SendConnectionRules(sender)
             iRC:SendGuildManagementSettings(sender)
             iRC:SendGuildBankExceptions(sender)
+            iRC:SendGuildFoundTradeExceptions(sender)
             iRC:SendGuildHomepageDescription(sender)
             iRC:SendGuildHomepageIcon(sender)
             send(iRC.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION, "REQUEST" }, SEP), "WHISPER", sender)
@@ -1269,6 +1295,7 @@ local function handleMessage(prefix, message, distribution, sender)
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
             local savedSource = tostring(settings.source or "")
             local currentEnabled = settings.welcomeNewMembers == true
+            if timestamp < savedTimestamp then return end
             local function applyWarningSettings()
                 if warningMask == nil then return end
                 settings.disableOfficerWarnings = warningMask % 2 >= 1
@@ -1414,6 +1441,7 @@ local function handleMessage(prefix, message, distribution, sender)
             and checksum == tradeExceptionsChecksum(mask, itemMasks, timestamp, source) then
             local settings = connection.guildFoundTradeExceptionSettings
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
+            if timestamp < savedTimestamp then return end
             if senderIsGuildMaster or timestamp > savedTimestamp then
                 for index, key in ipairs(TRADE_EXCEPTION_KEYS) do
                     settings[key] = math.floor(mask / (2 ^ (index - 1))) % 2 == 1
@@ -1471,6 +1499,7 @@ local function handleMessage(prefix, message, distribution, sender)
             local incomingResolvesCurrent = resolutionContains(resolutions, currentChecksum)
             local incomingIsChild = parentChecksum == currentChecksum
             local incomingIsAncestor = tostring(exceptions.parentChecksum or "root"):lower() == checksum
+            if valid and timestamp < savedTimestamp then return end
             local function applyIncoming()
                 local previousDetails = exceptions.details or {}
                 local details = {}
@@ -1497,9 +1526,8 @@ local function handleMessage(prefix, message, distribution, sender)
             if valid and checksum == currentChecksum then
                 return
             elseif valid and senderIsGuildMaster then
-                -- The actual roster Guild Master is the final authority for
-                -- Management data. Their package replaces any local officer
-                -- branch without raising a conflict, regardless of ancestry.
+                -- The actual roster Guild Master resolves same-age or newer
+                -- management branches without an ancestry conflict.
                 applyIncoming()
             elseif valid and receiverIsGuildMaster then
                 -- A valid change from a delegated rank is confirmed by the
@@ -1618,8 +1646,8 @@ local function handleMessage(prefix, message, distribution, sender)
         local savedHex = tostring(connection and connection.rulesTimestampHex or "0"):lower()
         local savedTimestamp = savedHex:match("^[0-9a-f]+$") and (tonumber(savedHex, 16) or 0) or 0
         local senderRank = getRulesRank(sender, connection)
-        -- Only the real roster rank 0 gets unconditional rules authority.
-        -- Test/Fake GM clients must never compete with or block the real GM.
+        -- Only the real roster rank 0 gets final rules authority, while the
+        -- timestamp gate below still protects a newer local ruleset.
         local senderIsGuildMaster = getRosterRank(sender) == 0
         if senderIsGuildMaster then
             timestampSource = sender
@@ -1697,13 +1725,13 @@ local function handleMessage(prefix, message, distribution, sender)
             or (senderRank == authorityRank and (not authorityName
                 or distribution == "WHISPER"
                 or iRC:NormalizeName(authorityName) == iRC:NormalizeName(sender))))
-        local timestampAccepted = senderIsGuildMaster or incomingTimestamp >= savedTimestamp
+        local timestampAccepted = validTimestamp and incomingTimestamp >= savedTimestamp
         local contentAccepted = senderIsGuildMaster or checksumValid and exceptionChecksumValid and mapChecksumValid
             and raceLockChecksumValid and guildFoundChecksumValid and sameStampMatches
-        local acceptRules = rulesSchemaSupported and (senderIsGuildMaster
+        local acceptRules = rulesSchemaSupported and timestampAccepted and (senderIsGuildMaster
             or senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5
                 and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid
-                and timestampAccepted and contentAccepted)
+                and contentAccepted)
         if connection and acceptRules then
             for key, value in pairs(incomingRules) do connection.rules[key] = value end
             connection.rulesTimestampHex = timestampHex
