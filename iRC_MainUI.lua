@@ -10,10 +10,13 @@ local guildStatsFilter = "ALL"
 local function getGuildCardTag(group)
     local rules = group and group.rulesKnown and group.rules
     if not rules then return nil end
-    if rules.raceLock == true then return "RaceLocked", { 0.25, 0.85, 1 } end
+    if rules.raceLock == true then return "Race-Locked", { 0.25, 0.85, 1 } end
     local progression = iRC:GetProgressionMode(rules)
     if progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND" then
-        return "GuildFound", { 0.30, 1, 0.35 }
+        return "Guild-Found", { 0.30, 1, 0.35 }
+    end
+    if progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND" then
+        return "Self-Found", { 1.00, 0.55, 0.55 }
     end
     return "Normal", { 0.72, 0.72, 0.72 }
 end
@@ -24,6 +27,7 @@ local function getCurrentGuildStatsFilter()
     if rules.raceLock == true then return "RACE_LOCKED" end
     local progression = iRC:GetProgressionMode(rules)
     if progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND" then return "GUILD_FOUND" end
+    if progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND" then return "SELF_FOUND" end
     return "ALL"
 end
 
@@ -444,8 +448,9 @@ function UI:Create()
     frame.guildStatsFilters = {}
     for index, filter in ipairs({
         { key = "ALL", label = "All" },
-        { key = "RACE_LOCKED", label = "RaceLocked" },
-        { key = "GUILD_FOUND", label = "GuildFound" },
+        { key = "RACE_LOCKED", label = "Race-Locked" },
+        { key = "GUILD_FOUND", label = "Guild-Found" },
+        { key = "SELF_FOUND", label = "Self-Found" },
     }) do
         local filterKey, filterLabel = filter.key, filter.label
         local button = CreateFrame("Button", nil, main, "BackdropTemplate")
@@ -795,6 +800,16 @@ local function updateRaceOverview(frame)
             if group.rulesKnown and group.rules and group.rules.raceLock == false
                 and (iRC:GetProgressionMode(group.rules) == "GUILD_FOUND"
                     or iRC:GetProgressionMode(group.rules) == "SELF_FOUND_OR_GUILD_FOUND") then
+                filtered[#filtered + 1] = group
+            end
+        end
+        allGroups = filtered
+    elseif guildStatsFilter == "SELF_FOUND" then
+        local filtered = {}
+        for _, group in ipairs(allGroups) do
+            if group.rulesKnown and group.rules and group.rules.raceLock ~= true
+                and iRC:GetProgressionMode(group.rules) == "SELF_FOUND"
+                and iRC:GetMaxLevelProgressionMode(group.rules) == "SELF_FOUND" then
                 filtered[#filtered + 1] = group
             end
         end

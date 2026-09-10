@@ -2,6 +2,10 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.3 - Guild Statistics Filters
+--------------------------------------------------------------------------------
+[CHANGED] Added Race-Locked, Guild-Found, and Self-Found Guild Statistics tags and filters; unrestricted guilds retain the Normal tag
+
 v0.4.2 - Reliable Guild Sync
 --------------------------------------------------------------------------------
 [FIX] Kept core guild-rule broadcasts below WoW's addon-message size limit by sending guild contacts separately
