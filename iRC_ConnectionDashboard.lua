@@ -25,12 +25,12 @@ end
 
 local function displayMemberName(name)
     if type(name) ~= "string" then return "Unknown" end
-    local characterName, realmName = name:match("^(.+)%-(.+)$")
-    local playerRealm = GetRealmName and GetRealmName() or nil
-    if characterName and realmName and playerRealm and string.lower(realmName) == string.lower(playerRealm) then
-        return characterName
-    end
-    return name
+    return iRC:FormatPlayerName(name)
+end
+
+local function memberGuildFoundStatus(member)
+    if member.hasParticipationSnapshot then return member.raceLockedStatus end
+    return member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
 end
 
 local function ruleViolationWhisper(member)
@@ -47,7 +47,7 @@ local function ruleViolationWhisper(member)
     local progressionMode = iRC:GetProgressionMode(rules)
     local level = tonumber(member.level) or 0
     local guildBank = iRC:IsGuildFoundRequired() and iRC:IsGuildBankException(member.name)
-    local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+    local guildFoundStatus = memberGuildFoundStatus(member)
     if member.raceMismatch and member.raceCheck then
         reasons[#reasons + 1] = iRC:Text("MEMBER_WHISPER_VIOLATION_RACE",
             iRC:Text("GUILD_RACE_" .. member.raceCheck.expected))
@@ -379,6 +379,50 @@ function Dashboard:Create()
         return iRC:Text(value and trueKey or falseKey)
     end
 
+    local function formatDuration(seconds)
+        seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+        local days, hours = math.floor(seconds / 86400), math.floor(seconds % 86400 / 3600)
+        local minutes, remainingSeconds = math.floor(seconds % 3600 / 60), math.floor(seconds % 60)
+        if days > 0 then return string.format("%dd %dh %dm %ds", days, hours, minutes, remainingSeconds) end
+        if hours > 0 then return string.format("%dh %dm %ds", hours, minutes, remainingSeconds) end
+        return string.format("%dm %ds", minutes, remainingSeconds)
+    end
+
+    local function appendGoldDiscrepancyDetails(lines, status)
+        local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
+        lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_CLIENT_INACTIVE") .. iRC.Colors.Reset
+        if status.moneyBefore == nil or status.moneyAfter == nil then
+            lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
+            return
+        end
+        local beforeAt, afterAt = tonumber(status.moneyBeforeAt) or 0, tonumber(status.moneyAfterAt) or 0
+        local moneyDifference = status.moneyAfter - status.moneyBefore
+        local moneySign = moneyDifference > 0 and "+" or moneyDifference < 0 and "-" or ""
+        local seconds = math.max(0, afterAt - beforeAt)
+        lines[#lines + 1] = iRC:Text("GF_REPORT_RECORDED_MONEY", formatMoney(status.moneyBefore))
+        lines[#lines + 1] = iRC:Text("GF_REPORT_RECORDED_TIMESTAMP",
+            beforeAt > 0 and date("%Y-%m-%d %H:%M:%S", beforeAt) or iRC:Text("RL_STATUS_UNKNOWN"))
+        lines[#lines + 1] = iRC:Text("GF_REPORT_CURRENT_MONEY", formatMoney(status.moneyAfter))
+        lines[#lines + 1] = iRC:Text("GF_REPORT_CURRENT_TIMESTAMP",
+            afterAt > 0 and date("%Y-%m-%d %H:%M:%S", afterAt) or iRC:Text("RL_STATUS_UNKNOWN"))
+        lines[#lines + 1] = iRC:Text("GF_REPORT_MONEY_DIFF", moneySign .. formatMoney(math.abs(moneyDifference)))
+        lines[#lines + 1] = iRC:Text("GF_REPORT_TIME_DIFF",
+            beforeAt > 0 and afterAt > 0 and formatDuration(seconds) or iRC:Text("RL_STATUS_UNKNOWN"))
+        local playedBefore, playedAfter = tonumber(status.playedBefore), tonumber(status.playedAfter)
+        if playedBefore and playedAfter and playedAfter >= playedBefore then
+            local playedIncrease = playedAfter - playedBefore
+            lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_INCREASE", formatDuration(playedIncrease))
+            local playedBeforeAt, playedAfterAt = tonumber(status.playedBeforeAt), tonumber(status.playedAfterAt)
+            if playedBeforeAt and playedAfterAt and playedAfterAt >= playedBeforeAt
+                and playedAfterAt - playedBeforeAt <= 1800 then
+                lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_EXACT", formatDuration(playedIncrease))
+            else
+                lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_ESTIMATE",
+                    formatDuration(math.max(0, playedIncrease - 1800)), formatDuration(playedIncrease))
+            end
+        end
+    end
+
     local function showGuildFoundReport(targetName)
         local status = iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(targetName)
         local member
@@ -407,12 +451,7 @@ function Dashboard:Create()
                 lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_EFFECTIVE", statusWord(status.clean, "RL_CLEAN", "RL_FLAGGED"))
                 if status.tamperAt and status.tamperAt > 0 then
                     lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
-                    if status.moneyBefore ~= nil and status.moneyAfter ~= nil then
-                        local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
-                        lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_GOLD_CHANGE", formatMoney(status.moneyBefore), formatMoney(status.moneyAfter)) .. iRC.Colors.Reset
-                    else
-                        lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
-                    end
+                    appendGoldDiscrepancyDetails(lines, status)
                 end
                 if status.gmClean ~= nil and status.gmTimestamp then
                     lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_DECISION",
@@ -430,7 +469,7 @@ function Dashboard:Create()
             reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
             reportBody:SetText(iRC:Text("GF_REPORT_NO_DATA", displayMemberName(targetName)))
         else
-            frame.memberReport:SetSize(640, 290)
+            frame.memberReport:SetSize(640, status.tamperAt and status.tamperAt > 0 and 405 or 290)
             reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
             local lines = {
                 iRC:Text("GF_REPORT_MEMBER", displayMemberName(targetName)),
@@ -444,12 +483,7 @@ function Dashboard:Create()
             }
             if status.tamperAt and status.tamperAt > 0 then
                 lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
-                if status.moneyBefore ~= nil and status.moneyAfter ~= nil then
-                    local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
-                    lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_GOLD_CHANGE", formatMoney(status.moneyBefore), formatMoney(status.moneyAfter)) .. iRC.Colors.Reset
-                else
-                    lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
-                end
+                appendGoldDiscrepancyDetails(lines, status)
             end
             if status.gmTimestamp then
                 lines[#lines + 1] = ""
@@ -731,17 +765,17 @@ local function classSummary(classes)
     return table.concat(list, ", ")
 end
 
-local function getEffectiveVerificationState(member, progressionMode, usesGuildFound)
+local function getEffectiveVerificationState(member, progressionMode, usesGuildFound, connection)
     if member.raceMismatch then return "attention" end
     local state = member.verification and member.verification.state or "missing"
     local hasLiveAddon = state == "verified" or state == "compatible"
-    local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+    local guildFoundStatus = memberGuildFoundStatus(member)
     -- Gold monitoring applies to every native iRC member, including
     -- Self-Found characters and configured Guild Banks.
     if state == "verified" and guildFoundStatus and guildFoundStatus.clean == false then
         return "attention"
     end
-    if hasLiveAddon and iRC:IsGuildBankException(member.name) then return state end
+    if hasLiveAddon and iRC:IsGuildBankException(member.name, connection) then return state end
     if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
         return "attention"
     end
@@ -762,8 +796,9 @@ function Dashboard:GetNeedsAttentionCount()
     local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
         or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
     local attention = 0
+    local connection = iRC:GetConnection()
     for _, member in ipairs(iRC:GetGuildRosterRows()) do
-        local state = getEffectiveVerificationState(member, progressionMode, usesGuildFound)
+        local state = getEffectiveVerificationState(member, progressionMode, usesGuildFound, connection)
         if state ~= "verified" and state ~= "compatible" and state ~= "offline" and state ~= "inactive" then
             attention = attention + 1
         end
@@ -890,14 +925,22 @@ function Dashboard:Refresh()
         local members = iRC:GetGuildRosterRows()
         local rules = iRC:GetConnectionRules() or {}
         local progressionMode = iRC:GetProgressionMode(rules)
+        local guildFoundRequired = iRC:IsGuildFoundRequired(connection)
         local usesSelfFound = progressionMode == "SELF_FOUND" or progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
         local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
             or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
+        local verificationStates = {}
         local function effectiveVerificationState(member)
-            return getEffectiveVerificationState(member, progressionMode, usesGuildFound)
+            local state = verificationStates[member]
+            if not state then
+                state = getEffectiveVerificationState(member, progressionMode, usesGuildFound, connection)
+                verificationStates[member] = state
+            end
+            return state
         end
         local progressHeader = usesGuildFound and iRC:Text("VERIFICATION_PROGRESS_SF_GF_COLUMN")
             or (usesSelfFound and iRC:Text("VERIFICATION_PROGRESS_COLUMN") or iRC:Text("VERIFICATION_ONLY_COLUMN"))
+        local canVerify = iRC:HasGuildPermission("verification")
         for _, member in ipairs(members) do
             local state = effectiveVerificationState(member)
             if state == "verified" then verified = verified + 1
@@ -926,7 +969,7 @@ function Dashboard:Refresh()
             if key == "name" then return member.name or "" end
             if key == "race" then return (member.race or "") .. (member.class or "") end
             if key == "status" then return effectiveVerificationState(member) end
-            local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+            local guildFoundStatus = memberGuildFoundStatus(member)
             if key == "progress" then
                 if progressionMode == "GUILD_FOUND" then
                     return ((member.verification and member.verification.state == "verified")
@@ -969,10 +1012,10 @@ function Dashboard:Refresh()
             local selfFound = not hasLiveAddon and "Unknown"
                 or (member.selfFound and "Active" or "Inactive")
             local selectedMember = member
-            local guildFoundStatus = member.raceLockedStatus or (iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(member.name))
+            local guildFoundStatus = memberGuildFoundStatus(member)
             local hasSelfFoundSource = hasLiveAddon
             local progressText, progressColor
-            local guildBankException = iRC:IsGuildFoundRequired() and iRC:IsGuildBankException(member.name)
+            local guildBankException = guildFoundRequired and iRC:IsGuildBankException(member.name, connection)
             if guildBankException then
                 progressText = iRC:Text("VERIFICATION_GUILD_BANK", iRC:Text(hasLiveAddon and "RL_VERIFIED" or "RL_UNVERIFIED"))
                 progressColor = hasLiveAddon and GREEN or RED
@@ -1036,7 +1079,7 @@ function Dashboard:Refresh()
                 statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus, not guildFoundVerificationApplies)
             end
             if raceWarning then statusTooltip = statusTooltip .. "\n\n" .. raceWarning end
-            if iRC:HasGuildPermission("verification") then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
+            if canVerify then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
             local effectiveState = effectiveVerificationState(member)
             local color = effectiveState == "attention" and RED
                 or (verification.state == "verified" and GREEN

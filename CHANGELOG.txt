@@ -2,6 +2,26 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.8 - Guild Bank, Professions & Client Visibility
+--------------------------------------------------------------------------------
+[NEW] Guild Bank snapshots show categorized bank and bag items plus money to all guild members. Designated Guild Banks can save and sync snapshots; Personal Banks cannot publish them
+[CHANGED] Guild Bank keeps only the newest guild-wide snapshot; older bank resends cannot replace it. Item rows now have larger text, icons, and hover tooltips
+[NEW] Guild Members shows shared profession skills and known recipes, with a five-result search that prioritizes profession matches and a right-click recipe report action
+[NEW] Connection & Rules and Management show who created and relayed synchronized settings and when they were created and received
+[NEW] Active Rules includes a readable popup for approved Guild Found trade exceptions
+[NEW] Guild-synced rules can disable death and level-60 Guild Chat announcements; iRC displays an icon beside each enabled announcement, with two clearly marked test buttons on the Testing page
+[NEW] Known guild members automatically receive chat badges for active Self-Found, verified Guild Found, or real Guild Master rank; each character can hide their own icon but cannot choose another
+[NEW] Current race, progression, gold, or confirmed unsafe-group violations show the X chat badge ahead of all earned icons
+[NEW] Hovering an iRC chat icon shows a short tooltip explaining its meaning
+[NEW] iRC clients can discover chat icons from speakers outside their guild through rate-limited addon-whisper requests in direct chat; General, Trade, and custom channels are excluded
+[NEW] Gold discrepancy reports show before/after balances, timestamps, differences, and silently measured /played time with its uncertainty range
+[CHANGED] The main navigation now groups Guild Members and Guild Bank under the current guild and calls Guild Statistics "Guild Leaderboard"
+[CHANGED] The About page uses TOC metadata, detects the game client, and includes Discord and project links
+[CHANGED] Same-realm player names omit the realm suffix across guild views
+[FIX] Group safety warnings clarify when automatic leaving is disabled; Guild Map avoids duplicate pins for party and raid members
+[FIX] Verification refresh avoids rebuilding guild connection defaults for each roster member
+[FIX] Presence confirmation probes and small activation handshakes continue during combat so active iRC clients are not falsely reported as missing
+
 v0.4.7 - Progression Rule Clarity
 --------------------------------------------------------------------------------
 [ADDED] Added a Force Guild Sync button that requests and resends the latest authorized rules, management, homepage, Guild Found, and presence data

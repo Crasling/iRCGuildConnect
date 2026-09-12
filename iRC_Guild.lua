@@ -451,6 +451,7 @@ function iRC:GetGuildRosterRows()
                 or (compatibilityGuid and compatibilityGuid ~= "" and compatibilityGuid ~= guid)) then
                 profiles[key], compatibleMembers[key] = nil, nil
                 if connection.guildFoundRoster then connection.guildFoundRoster[key] = nil end
+                if connection.professionMembers then connection.professionMembers[key] = nil end
                 if connection.attentionSince then connection.attentionSince[key] = nil end
                 reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
                 connection.newMemberChecks = connection.newMemberChecks or {}
@@ -490,6 +491,9 @@ function iRC:GetGuildRosterRows()
                 compatibility = compatibility,
                 compatibilityMember = compatibilityMember,
                 raceLockedStatus = syncedStatus or false,
+                professionData = connection and connection.professionMembers and connection.professionMembers[key]
+                    and (not guid or guid == "" or connection.professionMembers[key].guid == guid)
+                    and connection.professionMembers[key] or nil,
                 hasParticipationSnapshot = true,
                 -- A member has exactly one canonical row. iRC is preferred when
                 -- present; compatible counters only fill missing data and are

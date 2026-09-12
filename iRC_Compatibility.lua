@@ -45,7 +45,7 @@ function Compatibility:BroadcastSelfFound(messageType)
     if not iRC:IsGuildConnectionActive() then return false end
     local sent = send((messageType or "PING") .. "," .. (iRC:GetSelfFoundState() and "1" or "0"))
     self:StoreSelfFound(iRC:GetPlayerName(), iRC:GetSelfFoundState(), "iRC")
-    return sent ~= false
+    return sent ~= false and (type(sent) ~= "number" or sent == 0)
 end
 
 function Compatibility:BroadcastAll()
@@ -54,7 +54,8 @@ function Compatibility:BroadcastAll()
 end
 
 function Compatibility:RequestPresenceCheck()
-    if iRC:DeferLowTraffic("traffic:racelocked-presence", function() Compatibility:RequestPresenceCheck() end) then return false end
+    -- Keep the small compatibility confirmation probe live in combat; its
+    -- PONG response already sends without waiting for Low Traffic Mode.
     if not iRC:IsGuildConnectionActive() then return false end
     if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
     return self:BroadcastSelfFound("PING")

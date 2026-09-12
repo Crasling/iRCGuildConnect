@@ -79,6 +79,8 @@ local function profileWireParts(profile)
         "0",
         profile.shareGlobalRaceGrid and "1" or "0",
         profile.testGuildMasterOverride and "1" or "0",
+        profile.hideChatIcon and "1" or "0",
+        profile.currentGroupRuleViolation and "1" or "0",
     }
 end
 
@@ -103,6 +105,8 @@ local function profileFromWire(parts, startIndex)
         lastSeen = time(),
         shareGlobalRaceGrid = parts[startIndex + 17] == "1",
         testGuildMasterOverride = parts[startIndex + 18] == "1",
+        hideChatIcon = parts[startIndex + 19] == "1",
+        currentGroupRuleViolation = parts[startIndex + 20] == "1",
     }
 end
 
@@ -191,6 +195,9 @@ function iRC:GetLocalProfile()
         selfFound = self:GetSelfFoundState(), selfFoundEvidence = self:GetSelfFoundEvidence(),
         shareGlobalRaceGrid = true,
         testGuildMasterOverride = self:IsTestAdminGuildMaster(),
+        hideChatIcon = iRCCharDB and iRCCharDB.hideChatIcon == true,
+        currentGroupRuleViolation = self.Enforcement and self.Enforcement.IsCurrentGroupViolation
+            and self.Enforcement:IsCurrentGroupViolation() or false,
         lastSeen = time(),
     }
 end
@@ -212,6 +219,7 @@ function iRC:SendHello(targetName)
     local profile = self:GetLocalProfile()
     self:StoreMemberProfile(profile)
     send(self.Prefix, addProfileParts({ "HELLO", WIRE_VERSION }, profile), targetName and "WHISPER" or "GUILD", targetName)
+    if self.Professions then self.Professions:SendSummary(false) end
     self:DebugMsg(self:Text("PROFILE_SENT"), 3)
 end
 
@@ -239,7 +247,10 @@ function iRC:SendGuildActivation(targetName, force)
 end
 
 function iRC:RequestGuildActivation(force)
-    if self:DeferLowTraffic("traffic:activation-request", function() iRC:RequestGuildActivation(force) end) then return false end
+    -- An inactive new client must be able to bootstrap during combat; otherwise
+    -- it cannot answer presence checks until Low Traffic Mode ends.
+    if self:IsGuildConnectionActive()
+        and self:DeferLowTraffic("traffic:activation-request", function() iRC:RequestGuildActivation(force) end) then return false end
     if not self:IsInGuildConnection() or (not force and (self:IsGuildConnectionActive() or self:IsGuildMaster())) then return false end
     local guildKey, now = self:GetGuildKey(), GetTime()
     if not force and lastActivationRequestGuild == guildKey and lastActivationRequestAt
@@ -536,6 +547,7 @@ function iRC:SendGuildBankMetadata(targetName, onlyName, force)
                 tostring(math.floor(tonumber(detail.addedAt) or 0)),
                 tostring(detail.addedBy or ""):gsub("[%c]", " "):sub(1, 40),
                 tostring(math.floor(tonumber(detail.updatedAt) or detail.addedAt or 0)), note,
+                detail.bankType == "PERSONAL" and "P" or "G",
             }, SEP), targetName and "WHISPER" or "GUILD", targetName)
             sentAny = true
         end
@@ -624,6 +636,8 @@ function iRC:SetGuildContactNote(name, note)
     detail.note = tostring(note or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 80)
     detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
     connection.guildContactDetails[fullName] = detail
+    self:RecordManagementConnectionStatus("homepage", self:GetPlayerName(), detail.updatedAt,
+        self:GetPlayerName(), detail.updatedAt)
     self:SendGuildContactMetadata(nil, fullName, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -641,8 +655,29 @@ function iRC:SetGuildBankNote(name, note)
     detail.note = note
     detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
     exceptions.details[fullName] = detail
+    self:RecordManagementConnectionStatus("guildFound", self:GetPlayerName(), detail.updatedAt,
+        self:GetPlayerName(), detail.updatedAt)
     self:SendGuildBankMetadata(nil, fullName, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:SetGuildBankType(name, bankType)
+    if bankType ~= "GUILD" and bankType ~= "PERSONAL" then return false end
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
+    local connection = self:GetConnection()
+    local fullName = self:ResolveGuildMemberFullName(name)
+    local exceptions = connection and connection.guildBankExceptions
+    if not fullName or not exceptions or not exceptions.members[fullName] then return false end
+    local now = GetServerTime and GetServerTime() or time()
+    local detail = exceptions.details[fullName] or { addedAt = now, addedBy = self:GetPlayerName(), note = "" }
+    if (detail.bankType or "GUILD") == bankType then return true end
+    detail.bankType = bankType
+    detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
+    exceptions.details[fullName] = detail
+    self:SendGuildBankMetadata(nil, fullName, true)
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.MainUI then self.MainUI:RefreshIfShown() end
     return true
 end
 
@@ -654,6 +689,7 @@ function iRC:SetNewMemberWelcomeEnabled(enabled)
     settings.welcomeNewMembers = enabled and true or false
     settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
     settings.source = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("notifications", settings.source, settings.timestamp, self:GetPlayerName(), settings.timestamp)
     self:SendGuildManagementSettings(nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -668,6 +704,7 @@ function iRC:SetAutomaticWarningDisabled(channel, disabled)
     local now = GetServerTime and GetServerTime() or time()
     settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
     settings.source = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("notifications", settings.source, settings.timestamp, self:GetPlayerName(), settings.timestamp)
     self:SendGuildManagementSettings(nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -706,6 +743,7 @@ function iRC:SetGuildFoundTradeException(key, enabled)
     end
     settings.timestamp = math.max(time(), math.floor(tonumber(settings.timestamp) or 0) + 1)
     settings.source = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("guildFound", settings.source, settings.timestamp, self:GetPlayerName(), settings.timestamp)
     self:SendGuildFoundTradeExceptions(nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -725,6 +763,7 @@ function iRC:SetGuildFoundTradeExceptionItem(category, itemId, enabled)
     settings.items[category][itemId] = enabled and true or nil
     settings.timestamp = math.max(time(), math.floor(tonumber(settings.timestamp) or 0) + 1)
     settings.source = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("guildFound", settings.source, settings.timestamp, self:GetPlayerName(), settings.timestamp)
     self:SendGuildFoundTradeExceptions(nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -828,6 +867,8 @@ function iRC:SetGuildBankExceptions(value, resolutions)
     exceptions.parentChecksum = parentChecksum
     exceptions.resolutions = tostring(resolutions or ""):lower():sub(1, 17)
     exceptions.checksum = guildBanksChecksum(guildBanksWire(members), exceptions.timestamp, exceptions.source)
+    self:RecordManagementConnectionStatus("guildFound", exceptions.source, exceptions.timestamp,
+        self:GetPlayerName(), exceptions.timestamp)
     self:SendGuildBankExceptions(nil, true)
     self:SendGuildBankMetadata(nil, nil, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
@@ -893,6 +934,11 @@ function iRC:SendConnectionRules(targetName, force)
         rulesBackupChecksum(table.concat({ rules.raceLock == true and "1" or "0", timestampHex, tostring(timestampSource or "") }, SEP)),
         rules.guildFoundOnly and "1" or "0",
         rulesBackupChecksum(table.concat({ rules.guildFoundOnly and "1" or "0", timestampHex, tostring(timestampSource or "") }, SEP)),
+        (rules.disableGuildLevel60Message and "1" or "0") .. (rules.disableGuildDeathMessage and "1" or "0"),
+        rulesBackupChecksum(table.concat({
+            rules.disableGuildLevel60Message and "1" or "0", rules.disableGuildDeathMessage and "1" or "0",
+            timestampHex, tostring(timestampSource or ""),
+        }, SEP)),
     }, SEP), distribution, targetName)
     if self:IsGuildMaster() and self.SendGuildContacts then self:SendGuildContacts(targetName, force) end
     if self:IsGuildMaster() and self.SendRankPermissions then self:SendRankPermissions(targetName, force) end
@@ -934,11 +980,15 @@ function iRC:ForceGuildSync()
 end
 
 function iRC:RequestGuildPresence(isOfficerPoll)
-    if self:DeferLowTraffic("traffic:presence-request", function() iRC:RequestGuildPresence(isOfficerPoll) end) then return false end
+    -- A confirmation probe must still go out during combat. HELLO replies
+    -- already bypass Low Traffic Mode, and delaying the probe could make a
+    -- responsive client look like it has no addon.
+    if isOfficerPoll and self:DeferLowTraffic("traffic:presence-request", function() iRC:RequestGuildPresence(isOfficerPoll) end) then return false end
     if not self:IsGuildConnectionActive() then return false end
     if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
     if isOfficerPoll then lastPresencePollAt = time() end
-    send(self.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION, isOfficerPoll and "OFFICER_POLL" or "REQUEST" }, SEP), "GUILD")
+    local result = send(self.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION, isOfficerPoll and "OFFICER_POLL" or "REQUEST" }, SEP), "GUILD")
+    if result == false or type(result) == "number" and result ~= 0 then return false end
     self:DebugMsg(self:Text("PRESENCE_POLL_SENT"), 3)
     if isOfficerPoll then schedulePresenceReview() end
     return true
@@ -1115,6 +1165,16 @@ local function handleMessage(prefix, message, distribution, sender)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
+    if kind == "BANK_SNAPSHOT" then
+        if distribution == "GUILD" and iRC:IsGuildConnectionActive() and iRC.GuildBankSnapshot then
+            iRC.GuildBankSnapshot:Receive(message, sender)
+        end
+        return
+    end
+    if kind == "PROF_SUM" or kind == "PROF_REC" then
+        if distribution == "GUILD" and iRC.Professions then iRC.Professions:Receive(message, sender) end
+        return
+    end
     if (kind == "GUILD_BANKS_CHUNK" or kind == "MGMT_BANKS_CHUNK") and parts[2] == WIRE_VERSION
         and iRC:IsGuildMemberName(sender) then
         local transferId = tostring(parts[3] or "")
@@ -1164,7 +1224,7 @@ local function handleMessage(prefix, message, distribution, sender)
         -- Bootstrap the requesting client directly. A guild broadcast can be
         -- missed while its roster and addon-message state are still loading,
         -- leaving that client inactive and therefore unable to send HELLO.
-        iRC:SendGuildActivation(sender)
+        iRC:SendGuildActivation(sender, true)
         if iRC:IsGuildConnectionActive() then
             iRC:SendConnectionRules(sender)
             iRC:SendGuildManagementSettings(sender)
@@ -1273,6 +1333,7 @@ local function handleMessage(prefix, message, distribution, sender)
                     connection.rankPermissions[key] = values[index]
                 end
                 connection.rankPermissionsTimestamp = math.floor(timestamp)
+                iRC:RecordManagementConnectionStatus("notifications", sender, timestamp, sender, now)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
                 if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
             end
@@ -1307,6 +1368,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 applyWarningSettings()
                 settings.timestamp = math.floor(timestamp)
                 settings.source = source
+                iRC:RecordManagementConnectionStatus("notifications", source, timestamp, sender, now)
                 if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.WELCOME = nil end
                 iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
@@ -1329,6 +1391,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 applyWarningSettings()
                 settings.timestamp = math.floor(timestamp)
                 settings.source = source
+                iRC:RecordManagementConnectionStatus("notifications", source, timestamp, sender, now)
                 iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             end
@@ -1349,6 +1412,7 @@ local function handleMessage(prefix, message, distribution, sender)
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(value .. SEP .. timestamp .. SEP .. editedBy) then
             saved.text, saved.timestamp, saved.editedBy = value, math.floor(timestamp), editedBy
+            iRC:RecordManagementConnectionStatus("homepage", editedBy, timestamp, sender, time())
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.RaceGrid then iRC.RaceGrid:BroadcastReport(false) end
         end
@@ -1363,6 +1427,7 @@ local function handleMessage(prefix, message, distribution, sender)
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(table.concat({ icon, timestamp, editedBy }, SEP)) then
             saved.icon, saved.timestamp, saved.editedBy = icon, math.floor(timestamp), editedBy
+            iRC:RecordManagementConnectionStatus("homepage", editedBy, timestamp, sender, time())
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.RaceGrid then iRC.RaceGrid:BroadcastReport(false) end
         end
@@ -1381,6 +1446,7 @@ local function handleMessage(prefix, message, distribution, sender)
             and source ~= "" and checksum == rulesBackupChecksum(contacts .. SEP .. timestamp .. SEP .. source) then
             connection.rules.guildContacts = contacts
             connection.guildContactsTimestamp, connection.guildContactsSource = math.floor(timestamp), source
+            iRC:RecordManagementConnectionStatus("homepage", source, timestamp, sender, time())
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
         end
     elseif kind == "GUILD_CONTACT_NOTE" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
@@ -1399,6 +1465,7 @@ local function handleMessage(prefix, message, distribution, sender)
             if not current or updatedAt > math.floor(tonumber(current.updatedAt) or 0) then
                 connection.guildContactDetails[name] = { addedAt = math.floor(addedAt), addedBy = addedBy,
                     updatedAt = math.floor(updatedAt), note = note }
+                iRC:RecordManagementConnectionStatus("homepage", sender, updatedAt, sender, now)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             end
         end
@@ -1410,6 +1477,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local addedBy = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 40)
         local updatedAt = tonumber(parts[6])
         local note = tostring(parts[7] or "")
+        local bankType = parts[8] == "P" and "PERSONAL" or "GUILD"
         local fullName = iRC:ResolveGuildMemberFullName(name)
         local now = GetServerTime and GetServerTime() or time()
         if senderRank and senderRank <= (connection.rankPermissions.guildBanks or 1) and fullName == name and addedAt and addedAt > 0 and addedAt <= now + 300
@@ -1420,7 +1488,8 @@ local function handleMessage(prefix, message, distribution, sender)
             local current = exceptions.details[name]
             if not current or updatedAt > math.floor(tonumber(current.updatedAt) or 0) then
                 exceptions.details[name] = { addedAt = math.floor(addedAt), addedBy = addedBy,
-                    updatedAt = math.floor(updatedAt), note = note }
+                    updatedAt = math.floor(updatedAt), note = note, bankType = bankType }
+                iRC:RecordManagementConnectionStatus("guildFound", sender, updatedAt, sender, now)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             end
         end
@@ -1459,6 +1528,7 @@ local function handleMessage(prefix, message, distribution, sender)
                     end
                 end
                 settings.timestamp, settings.source = math.floor(timestamp), source
+                iRC:RecordManagementConnectionStatus("guildFound", source, timestamp, sender, now)
                 if receiverIsGuildMaster and not senderIsGuildMaster then
                     settings.timestamp = math.max(now, settings.timestamp + 1)
                     settings.source = iRC:GetPlayerName()
@@ -1516,6 +1586,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 exceptions.checksum = checksum
                 exceptions.parentChecksum = parentChecksum
                 exceptions.resolutions = resolutions
+                iRC:RecordManagementConnectionStatus("guildFound", source, timestamp, sender, now)
                 if (senderIsGuildMaster or incomingResolvesCurrent) and iRC.PendingManagementConflicts then
                     iRC.PendingManagementConflicts.BANKS = nil
                 end
@@ -1524,6 +1595,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 if iRC.Enforcement then iRC.Enforcement:Refresh() end
             end
             if valid and checksum == currentChecksum then
+                iRC:RecordManagementConnectionStatus("guildFound", source, timestamp, sender, now)
                 return
             elseif valid and senderIsGuildMaster then
                 -- The actual roster Guild Master resolves same-age or newer
@@ -1621,12 +1693,17 @@ local function handleMessage(prefix, message, distribution, sender)
         local expectedGuildFoundExtension = rulesBackupChecksum(table.concat({
             iRC:GetConnectionRules().guildFoundOnly and "1" or "0", timestampHex, tostring(timestampSource or ""),
         }, SEP))
+        local expectedAnnouncementExtension = rulesBackupChecksum(table.concat({
+            iRC:GetConnectionRules().disableGuildLevel60Message and "1" or "0",
+            iRC:GetConnectionRules().disableGuildDeathMessage and "1" or "0", timestampHex, tostring(timestampSource or ""),
+        }, SEP))
         if tostring(parts[3] or ""):lower() == tostring(timestampHex):lower()
             and tostring(parts[4] or ""):lower() == expected then
             if tostring(parts[5] or ""):lower() == expectedExtension
                 and tostring(parts[6] or ""):lower() == expectedMapExtension
                 and (tostring(parts[7] or "") == "" or tostring(parts[7]):lower() == expectedRaceLockExtension)
-                and (tostring(parts[8] or "") == "" or tostring(parts[8]):lower() == expectedGuildFoundExtension) then
+                and (tostring(parts[8] or "") == "" or tostring(parts[8]):lower() == expectedGuildFoundExtension)
+                and (tostring(parts[9] or "") == "" or tostring(parts[9]):lower() == expectedAnnouncementExtension) then
                 summarizeRulesAck(sender, timestampHex)
             elseif tostring(parts[5] or "") == "" or tostring(parts[6] or "") == "" then
                 summarizeLegacyRulesAck(sender, timestampHex)
@@ -1674,7 +1751,15 @@ local function handleMessage(prefix, message, distribution, sender)
             guildMapEnabled = parts[20] == "1",
             raceLock = parts[22] == "1",
             guildFoundOnly = parts[24] == "1",
+            disableGuildLevel60Message = tostring(parts[26] or ""):sub(1, 1) == "1",
+            disableGuildDeathMessage = tostring(parts[26] or ""):sub(2, 2) == "1",
         }
+        -- Older clients do not know this extension. Their relays must not
+        -- silently clear announcement preferences already received locally.
+        if not parts[26] or parts[26] == "" then
+            incomingRules.disableGuildLevel60Message = connection and connection.rules.disableGuildLevel60Message or false
+            incomingRules.disableGuildDeathMessage = connection and connection.rules.disableGuildDeathMessage or false
+        end
         local legacyContacts = tostring(parts[13] or ""):sub(1, 140)
         if legacyContacts ~= "" then incomingRules.guildContacts = legacyContacts end
         if not incomingRules.raceLock then
@@ -1714,6 +1799,14 @@ local function handleMessage(prefix, message, distribution, sender)
         local guildFoundChecksumValid = not guildFoundFlagPresent or guildFoundChecksum == rulesBackupChecksum(table.concat({
             incomingRules.guildFoundOnly and "1" or "0", timestampHex, timestampSource,
         }, SEP))
+        local announcementFlags = tostring(parts[26] or "")
+        local announcementFlagsPresent = announcementFlags:match("^[01][01]$") ~= nil
+        local announcementChecksum = tostring(parts[27] or ""):lower()
+        local announcementChecksumValid = (announcementFlags == "" or announcementFlagsPresent)
+            and (not announcementFlagsPresent or announcementChecksum == rulesBackupChecksum(table.concat({
+            incomingRules.disableGuildLevel60Message and "1" or "0",
+            incomingRules.disableGuildDeathMessage and "1" or "0", timestampHex, timestampSource,
+        }, SEP)))
         local rulesSchemaSupported = supportsCurrentRuleset(parts[19])
             and raceLockFlagPresent and guildFoundFlagPresent
             and raceLockChecksumValid and guildFoundChecksumValid
@@ -1727,7 +1820,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 or iRC:NormalizeName(authorityName) == iRC:NormalizeName(sender))))
         local timestampAccepted = validTimestamp and incomingTimestamp >= savedTimestamp
         local contentAccepted = senderIsGuildMaster or checksumValid and exceptionChecksumValid and mapChecksumValid
-            and raceLockChecksumValid and guildFoundChecksumValid and sameStampMatches
+            and raceLockChecksumValid and guildFoundChecksumValid and announcementChecksumValid and sameStampMatches
         local acceptRules = rulesSchemaSupported and timestampAccepted and (senderIsGuildMaster
             or senderIsAuthority and progressionIsExclusive and incomingContactCount <= 5
                 and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid
@@ -1736,6 +1829,8 @@ local function handleMessage(prefix, message, distribution, sender)
             for key, value in pairs(incomingRules) do connection.rules[key] = value end
             connection.rulesTimestampHex = timestampHex
             connection.rulesTimestampSource = timestampSource
+            connection.rulesRelayedBy = sender
+            connection.rulesReceivedAt = time()
             connection.receivedRulesBackup = incomingBackup
             connection.receivedRulesBackupVersion = 1
             connection.receivedRulesChecksum = rulesBackupChecksum(incomingBackup)
@@ -1760,9 +1855,13 @@ local function handleMessage(prefix, message, distribution, sender)
             local receivedGuildFoundChecksum = rulesBackupChecksum(table.concat({
                 incomingRules.guildFoundOnly and "1" or "0", timestampHex, timestampSource,
             }, SEP))
+            local receivedAnnouncementChecksum = rulesBackupChecksum(table.concat({
+                incomingRules.disableGuildLevel60Message and "1" or "0",
+                incomingRules.disableGuildDeathMessage and "1" or "0", timestampHex, timestampSource,
+            }, SEP))
             send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex,
                 connection.receivedRulesChecksum, receivedExtensionChecksum, receivedMapChecksum, receivedRaceLockChecksum,
-                receivedGuildFoundChecksum }, SEP), "WHISPER", sender)
+                receivedGuildFoundChecksum, receivedAnnouncementChecksum }, SEP), "WHISPER", sender)
         elseif connection and senderRank ~= nil then
             if senderIsAuthority and not senderIsGuildMaster and (not checksumValid or not sameStampMatches) then
                 iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_MISMATCH", sender, timestampHex), 1)

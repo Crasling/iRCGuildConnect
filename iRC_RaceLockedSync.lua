@@ -9,7 +9,45 @@ local lastBroadcast, pendingRelays = {}, {}
 local moneyReady = false
 local moneyValidationAllowedAt = 0
 local moneyWatchdog
+local playedTicker, playedRequestToken
+local playedSuppressedChatFrames = {}
 local localHistory
+
+local function hideAutomaticTimePlayed(_, event)
+    if event == "TIME_PLAYED_MSG" and playedRequestToken then return true end
+end
+
+local function restorePlayedChatFrames()
+    for chatFrame in pairs(playedSuppressedChatFrames) do
+        if chatFrame and chatFrame.RegisterEvent then chatFrame:RegisterEvent("TIME_PLAYED_MSG") end
+        playedSuppressedChatFrames[chatFrame] = nil
+    end
+end
+
+local function suppressPlayedChatFrames()
+    restorePlayedChatFrames()
+    for index = 1, tonumber(NUM_CHAT_WINDOWS) or 10 do
+        local chatFrame = _G["ChatFrame" .. index]
+        if chatFrame and chatFrame.IsEventRegistered and chatFrame:IsEventRegistered("TIME_PLAYED_MSG") then
+            playedSuppressedChatFrames[chatFrame] = true
+            chatFrame:UnregisterEvent("TIME_PLAYED_MSG")
+        end
+    end
+end
+
+function Sync:RequestHiddenTimePlayed()
+    if playedRequestToken or not RequestTimePlayed then return false end
+    local token = {}
+    playedRequestToken = token
+    suppressPlayedChatFrames()
+    RequestTimePlayed()
+    C_Timer.After(10, function()
+        if playedRequestToken ~= token then return end
+        playedRequestToken = nil
+        restorePlayedChatFrames()
+    end)
+    return true
+end
 
 local function shortName(name)
     return type(name) == "string" and name:match("^([^-]+)") or nil
@@ -88,6 +126,12 @@ function Sync:GetStatus(name, snapshot)
         if history then
             entry.moneyBefore = history.moneyBeforeDiscrepancy
             entry.moneyAfter = history.moneyAfterDiscrepancy
+            entry.moneyBeforeAt = history.moneyBeforeDiscrepancyAt
+            entry.moneyAfterAt = history.moneyAfterDiscrepancyAt
+            entry.playedBefore = history.playedBeforeDiscrepancy
+            entry.playedAfter = history.playedAfterDiscrepancy
+            entry.playedBeforeAt = history.playedBeforeDiscrepancyAt
+            entry.playedAfterAt = history.playedAfterDiscrepancyAt
         end
     end
     local effectiveVerified = entry.gmVerified
@@ -110,6 +154,9 @@ function Sync:GetStatus(name, snapshot)
         overrideSource = entry.overrideSource, directOverride = entry.directOverride,
         tamperAt = entry.tamperAt, rawVerified = entry.verified, rawClean = entry.clean,
         moneyBefore = entry.moneyBefore, moneyAfter = entry.moneyAfter,
+        moneyBeforeAt = entry.moneyBeforeAt, moneyAfterAt = entry.moneyAfterAt,
+        playedBefore = entry.playedBefore, playedAfter = entry.playedAfter,
+        playedBeforeAt = entry.playedBeforeAt, playedAfterAt = entry.playedAfterAt,
         gmVerified = entry.gmVerified, gmClean = entry.gmClean,
         cleanDecisionSuperseded = entry.gmClean ~= nil and discrepancyAt > 0 and decisionAt <= discrepancyAt,
     }
@@ -219,9 +266,12 @@ function Sync:ValidateMoney()
     local baseline = sealedSnapshot or openSnapshot
     if monitoringActive and history.moneyMonitoringActive == true and baseline ~= nil
         and (snapshotMismatch or baseline ~= current) then
-        history.moneyDiscrepancyAt = time()
+        local discrepancyAt = time()
+        history.moneyDiscrepancyAt = discrepancyAt
         history.moneyBeforeDiscrepancy = baseline
         history.moneyAfterDiscrepancy = current
+        history.moneyBeforeDiscrepancyAt = tonumber(history.moneyLastLoggedAt) or 0
+        history.moneyAfterDiscrepancyAt = discrepancyAt
         history.moneyDiscrepancyNoticeAt = nil
     end
     -- Existing installations have no sealed value yet. The first login after
@@ -242,14 +292,21 @@ function Sync:GetLocalRawStatus()
     return verified, clean, tamperAt
 end
 
-local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, moneyAfter)
+local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, moneyAfter, moneyBeforeAt, moneyAfterAt,
+    playedBefore, playedAfter, playedBeforeAt, playedAfterAt)
     local entry = entryFor(name)
     if not entry then return end
     entry.verified, entry.clean, entry.tamperAt = verified, clean, tamperAt
     if tonumber(tamperAt) and tonumber(tamperAt) > 0 then
         entry.moneyBefore, entry.moneyAfter = tonumber(moneyBefore), tonumber(moneyAfter)
+        entry.moneyBeforeAt, entry.moneyAfterAt = tonumber(moneyBeforeAt), tonumber(moneyAfterAt)
+        entry.playedBefore, entry.playedAfter = tonumber(playedBefore), tonumber(playedAfter)
+        entry.playedBeforeAt, entry.playedAfterAt = tonumber(playedBeforeAt), tonumber(playedAfterAt)
     else
         entry.moneyBefore, entry.moneyAfter = nil, nil
+        entry.moneyBeforeAt, entry.moneyAfterAt = nil, nil
+        entry.playedBefore, entry.playedAfter = nil, nil
+        entry.playedBeforeAt, entry.playedAfterAt = nil, nil
     end
     entry.source, entry.lastSeen = source, time()
 end
@@ -403,7 +460,14 @@ function Sync:ReceiveRoster(message, sender)
         if not tamperAt then return end
         local moneyBefore = number(fields[8], 1000000000000000)
         local moneyAfter = number(fields[9], 1000000000000000)
-        storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC", moneyBefore, moneyAfter)
+        local moneyBeforeAt = number(fields[10], time() + 300)
+        local moneyAfterAt = number(fields[11], time() + 300)
+        local playedBefore = number(fields[12], 1000000000)
+        local playedAfter = number(fields[13], 1000000000)
+        local playedBeforeAt = number(fields[14], time() + 300)
+        local playedAfterAt = number(fields[15], time() + 300)
+        storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC", moneyBefore, moneyAfter,
+            moneyBeforeAt, moneyAfterAt, playedBefore, playedAfter, playedBeforeAt, playedAfterAt)
         -- Confirm receipt only from a rank authorized to review verification.
         -- The reporting player does not see the discrepancy notice until this
         -- acknowledgement proves that an officer actually received the report.
@@ -489,13 +553,19 @@ function Sync:Broadcast()
     local name = shortName(iRC:GetPlayerName())
     local verified, clean, tamperAt = self:GetLocalRawStatus()
     local history = localHistory()
-    storeSelf(name, verified, clean, tamperAt, "iRC", history.moneyBeforeDiscrepancy, history.moneyAfterDiscrepancy)
+    storeSelf(name, verified, clean, tamperAt, "iRC", history.moneyBeforeDiscrepancy, history.moneyAfterDiscrepancy,
+        history.moneyBeforeDiscrepancyAt, history.moneyAfterDiscrepancyAt,
+        history.playedBeforeDiscrepancy, history.playedAfterDiscrepancy,
+        history.playedBeforeDiscrepancyAt, history.playedAfterDiscrepancyAt)
     if self:IsMoneyMonitoringActive() then
         local entry = entryFor(name)
         local msg = "S:" .. name .. "," .. wireBool(verified) .. "," .. wireBool(clean) .. "," .. tostring(tamperAt)
         if entry.gmTimestamp or entry.moneyBefore ~= nil or entry.moneyAfter ~= nil then
             msg = msg .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. tostring(entry.gmTimestamp or 0)
                 .. "," .. tostring(entry.moneyBefore or "") .. "," .. tostring(entry.moneyAfter or "")
+                .. "," .. tostring(entry.moneyBeforeAt or "") .. "," .. tostring(entry.moneyAfterAt or "")
+                .. "," .. tostring(entry.playedBefore or "") .. "," .. tostring(entry.playedAfter or "")
+                .. "," .. tostring(entry.playedBeforeAt or "") .. "," .. tostring(entry.playedAfterAt or "")
         end
         send(IRC_ROSTER, msg)
     end
@@ -519,11 +589,15 @@ frame:RegisterEvent("TRADE_CLOSED")
 frame:RegisterEvent("LOOT_OPENED")
 frame:RegisterEvent("LOOT_CLOSED")
 frame:RegisterEvent("QUEST_TURNED_IN")
+frame:RegisterEvent("TIME_PLAYED_MSG")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
         local register = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix or RegisterAddonMessagePrefix
         if register then register(IRC_ROSTER) end
+        if ChatFrame_AddMessageEventFilter then
+            ChatFrame_AddMessageEventFilter("TIME_PLAYED_MSG", hideAutomaticTimePlayed)
+        end
     elseif event == "PLAYER_LOGIN" then
         -- GetMoney can briefly expose an incomplete value while the character
         -- enters the world. Comparing at PLAYER_LOGIN produced a false gold
@@ -532,6 +606,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
         C_Timer.After(5, function() Sync:ValidateMoney() end)
         if not moneyWatchdog and C_Timer.NewTicker then
             moneyWatchdog = C_Timer.NewTicker(15, function() Sync:CheckLocalMoneySnapshot() end)
+        end
+        C_Timer.After(6, function() Sync:RequestHiddenTimePlayed() end)
+        if not playedTicker and C_Timer.NewTicker then
+            playedTicker = C_Timer.NewTicker(1800, function() Sync:RequestHiddenTimePlayed() end)
         end
         C_Timer.After(iRC:GetStartupTrafficDelay(), function() Sync:Broadcast() end)
     elseif event == "PLAYER_MONEY" then
@@ -550,6 +628,25 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "QUEST_TURNED_IN" then
         Sync:SaveCurrentMoney(event)
         C_Timer.After(1, function() Sync:SaveCurrentMoney("QUEST_TURNED_IN_SETTLED") end)
+    elseif event == "TIME_PLAYED_MSG" then
+        if not playedRequestToken then return end
+        local totalPlayed, levelPlayed = ...
+        local history, now = localHistory(), time()
+        history.playedTotal = math.max(0, math.floor(tonumber(totalPlayed) or 0))
+        history.playedLevel = math.max(0, math.floor(tonumber(levelPlayed) or 0))
+        history.playedRecordedAt = now
+        if tonumber(history.moneyDiscrepancyAt) and history.moneyDiscrepancyAt > 0
+            and tonumber(history.playedDiscrepancyAt) ~= history.moneyDiscrepancyAt then
+            history.playedBeforeDiscrepancy = tonumber(history.playedPreviousTotal)
+            history.playedAfterDiscrepancy = history.playedTotal
+            history.playedBeforeDiscrepancyAt = tonumber(history.playedPreviousRecordedAt)
+            history.playedAfterDiscrepancyAt = now
+            history.playedDiscrepancyAt = history.moneyDiscrepancyAt
+        end
+        history.playedPreviousTotal = history.playedTotal
+        history.playedPreviousRecordedAt = now
+        playedRequestToken = nil
+        C_Timer.After(0, restorePlayedChatFrames)
     elseif event == "UNIT_AURA" or event == "PLAYER_LEVEL_UP" then
         if event == "UNIT_AURA" and ... ~= "player" then return end
         Sync:ObserveSelfFound()

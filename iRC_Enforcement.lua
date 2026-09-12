@@ -390,10 +390,16 @@ local function canSafelyLeaveGroup()
 end
 
 local function clearUnsafeGroupWarning()
+    local wasActive = pendingUnsafeGroupReason ~= nil
     pendingUnsafeGroupReason = nil
     pendingGroupViolationKey = nil
     pendingGroupLeaveConfirmation = nil
     groupWarningFrame:Hide()
+    if wasActive and iRC.SendHello then iRC:SendHello() end
+end
+
+function Enforcement:IsCurrentGroupViolation()
+    return pendingUnsafeGroupReason ~= nil
 end
 
 local function reportPendingGroupViolation()
@@ -491,9 +497,11 @@ local function handleInvalidGroup(reason, players)
     if pendingUnsafeGroupReason ~= reason then
         iRC:Print(iRC.Colors.Red .. iRC:Text("GROUP_UNSAFE_DEFERRED") .. iRC.Colors.Reset)
     end
+    local becameActive = pendingUnsafeGroupReason == nil
     pendingUnsafeGroupReason = reason
     groupWarningFrame.text:SetText(iRC:Text("GROUP_UNSAFE_WARNING"))
     groupWarningFrame:Show()
+    if becameActive and iRC.SendHello then iRC:SendHello() end
 end
 
 local function getCurrentGroupSize()

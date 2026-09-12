@@ -3,8 +3,21 @@ local iRC = LibStub("AceAddon-3.0"):NewAddon("iRCGuildConnect")
 private.iRC = iRC
 
 iRC.Name = addonName or "iRC"
+iRC.LDBroker = LibStub("LibDataBroker-1.1", true)
+iRC.LDBIcon = LibStub("LibDBIcon-1.0", true)
+
+local getAddOnInfo = C_AddOns and C_AddOns.GetAddOnInfo or GetAddOnInfo
+local getAddOnMetadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+local addOnTitle
+if getAddOnInfo then
+    local ok, _, title = pcall(getAddOnInfo, iRC.Name)
+    if ok then addOnTitle = title end
+end
+iRC.Title = tostring(addOnTitle or "iRC: Guild Connect")
+    :gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("%s*v?[%d%.]+$", "")
+iRC.Version = getAddOnMetadata and getAddOnMetadata(iRC.Name, "Version") or "Unknown"
+iRC.Author = getAddOnMetadata and getAddOnMetadata(iRC.Name, "Author") or "Crasling"
 iRC.DisplayName = "iRC"
-iRC.Version = "0.4.7"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
@@ -32,6 +45,24 @@ function iRC:DisableLegacyAddon()
     return true
 end
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
+local gameTocNumber = tonumber(iRC.GameTocVersion) or 0
+if gameTocNumber >= 120000 then
+    iRC.GameVersionName = "Retail WoW"
+elseif gameTocNumber > 50000 and gameTocNumber < 59999 then
+    iRC.GameVersionName = "Classic MoP"
+elseif gameTocNumber > 40000 and gameTocNumber < 49999 then
+    iRC.GameVersionName = "Classic Cata"
+elseif gameTocNumber > 30000 and gameTocNumber < 39999 then
+    iRC.GameVersionName = "Classic WotLK"
+elseif gameTocNumber >= 20500 and gameTocNumber < 30000 then
+    iRC.GameVersionName = "Anniversary TBC"
+elseif gameTocNumber >= 20000 and gameTocNumber < 20500 then
+    iRC.GameVersionName = "Classic TBC"
+elseif gameTocNumber > 10000 and gameTocNumber < 19999 then
+    iRC.GameVersionName = "Classic Era"
+else
+    iRC.GameVersionName = "Unknown Version"
+end
 iRC.Colors = {
     iRC = "|cffff9716",
     White = "|cFFFFFFFF",
@@ -188,6 +219,8 @@ iRC.DefaultConnectionRules = {
     guildGroupsMinimumLevel = 1,
     guildFoundTradeExceptions = false,
     guildMapEnabled = false,
+    disableGuildLevel60Message = false,
+    disableGuildDeathMessage = false,
     guildContacts = "",
 }
 
@@ -245,14 +278,6 @@ iRC.GuildRaceTBCOrder = { "DRAENEI", "BLOODELF" }
 local GuildRaceLookup = {}
 for _, race in ipairs(iRC.GuildRaceOrder) do GuildRaceLookup[race] = true end
 for _, race in ipairs(iRC.GuildRaceTBCOrder) do GuildRaceLookup[race] = true end
-
-iRC.LDBroker = LibStub and LibStub("LibDataBroker-1.1", true)
-iRC.LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
-
-local getMetadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
-if getMetadata then
-    iRC.Version = getMetadata(iRC.Name, "Version") or iRC.Version
-end
 
 function iRC:Print(message)
     print(self.Colors.iRC .. "[iRC]: " .. self.Colors.Reset .. tostring(message))
@@ -491,6 +516,8 @@ function iRC:StampConnectionRules(connection)
     local stamp = math.max(time(), decodeRulesTimestamp(connection.rulesTimestampHex) + 1)
     connection.rulesTimestampHex = string.format("%x", stamp)
     connection.rulesTimestampSource = self:GetPlayerName()
+    connection.rulesRelayedBy = self:GetPlayerName()
+    connection.rulesReceivedAt = stamp
     return true
 end
 
@@ -503,6 +530,8 @@ function iRC:EnsureConnectionRulesTimestamp(connection)
     return connection.rulesTimestampHex or "0", connection.rulesTimestampSource or ""
 end
 
+local initializedConnections = setmetatable({}, { __mode = "k" })
+
 function iRC:GetConnection()
     local key = self:GetGuildKey()
     -- Dropdown initialization can read rules before ADDON_LOADED restores the DB.
@@ -514,6 +543,7 @@ function iRC:GetConnection()
         connection = { key = key, guildName = GetGuildInfo("player"), rulesVersion = 1, active = false, members = {} }
         iRCDB.connections[key] = connection
     end
+    if initializedConnections[connection] then return connection end
     if connection.active == nil then connection.active = false end
     connection.guildNotifications = connection.guildNotifications or { welcomeNewMembers = false }
     if connection.guildNotifications.welcomeNewMembers == nil then
@@ -559,7 +589,21 @@ function iRC:GetConnection()
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
         self:StampConnectionRules(connection)
     end
+    initializedConnections[connection] = true
     return connection
+end
+
+function iRC:RecordManagementConnectionStatus(category, createdBy, createdAt, relayedBy, receivedAt)
+    local connection = self:GetConnection()
+    if not connection or type(category) ~= "string" then return end
+    connection.managementConnectionStatus = connection.managementConnectionStatus or {}
+    local current = connection.managementConnectionStatus[category]
+    createdAt = math.floor(tonumber(createdAt) or 0)
+    if current and createdAt < math.floor(tonumber(current.createdAt) or 0) then return end
+    connection.managementConnectionStatus[category] = {
+        createdBy = tostring(createdBy or ""), createdAt = createdAt,
+        relayedBy = tostring(relayedBy or ""), receivedAt = math.floor(tonumber(receivedAt) or time()),
+    }
 end
 
 function iRC:IsGuildAdmin()
@@ -632,6 +676,8 @@ function iRC:SetGuildRankPermission(permission, rankIndex)
     rankIndex = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
     connection.rankPermissions[permission] = rankIndex
     connection.rankPermissionsTimestamp = math.max(time(), (tonumber(connection.rankPermissionsTimestamp) or 0) + 1)
+    self:RecordManagementConnectionStatus("notifications", self:GetPlayerName(), connection.rankPermissionsTimestamp,
+        self:GetPlayerName(), connection.rankPermissionsTimestamp)
     if self.SendRankPermissions then self:SendRankPermissions(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
@@ -875,6 +921,7 @@ function iRC:SetGuildHomepageDescription(value)
     data.text = value
     data.timestamp = math.max(now, math.floor(tonumber(data.timestamp) or 0) + 1)
     data.editedBy = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("homepage", data.editedBy, data.timestamp, self:GetPlayerName(), data.timestamp)
     if self.SendGuildHomepageDescription then self:SendGuildHomepageDescription(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
@@ -891,6 +938,7 @@ function iRC:SetGuildHomepageIcon(icon)
     data.icon = icon
     data.timestamp = math.max(now, math.floor(tonumber(data.timestamp) or 0) + 1)
     data.editedBy = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("homepage", data.editedBy, data.timestamp, self:GetPlayerName(), data.timestamp)
     if self.SendGuildHomepageIcon then self:SendGuildHomepageIcon(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
@@ -945,8 +993,8 @@ function iRC:ResolveGuildMemberFullName(name)
     return match
 end
 
-function iRC:IsGuildBankException(name)
-    local connection = self:GetConnection()
+function iRC:IsGuildBankException(name, connection)
+    connection = connection or self:GetConnection()
     local exceptions = connection and connection.guildBankExceptions
     local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
     return key ~= "" and exceptions and exceptions.members and exceptions.members[key] == true or false
@@ -959,20 +1007,31 @@ function iRC:GetGuildBankExceptionDetails(name)
     return exceptions and exceptions.details and exceptions.details[key] or nil
 end
 
+function iRC:GetGuildBankType(name, connection)
+    connection = connection or self:GetConnection()
+    if not self:IsGuildBankException(name, connection) then return nil end
+    local exceptions = connection.guildBankExceptions
+    local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
+    local detail = exceptions.details and exceptions.details[key]
+    return detail and detail.bankType == "PERSONAL" and "PERSONAL" or "GUILD"
+end
+
+function iRC:IsGuildBankSnapshotPublisher(name, connection)
+    return self:GetGuildBankType(name, connection) == "GUILD"
+end
+
 function iRC:FormatPlayerName(name)
     name = tostring(name or "")
     local character, realm = name:match("^([^-]+)%-(.+)$")
-    local function capitalize(value)
-        return value ~= "" and (value:sub(1, 1):upper() .. value:sub(2):lower()) or value
-    end
     if character then
-        local currentRealm = GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName() or ""
+        local currentRealm = GetNormalizedRealmName and GetNormalizedRealmName() or ""
+        if currentRealm == "" then currentRealm = GetRealmName and GetRealmName() or "" end
         local normalizedRealm = tostring(realm):gsub("%s+", ""):lower()
         local normalizedCurrent = tostring(currentRealm):gsub("%s+", ""):lower()
-        if normalizedRealm == normalizedCurrent then return capitalize(character) end
-        return capitalize(character) .. "-" .. capitalize(realm)
+        if normalizedRealm == normalizedCurrent then return character end
+        return name
     end
-    return capitalize(name)
+    return name
 end
 
 function iRC:GetGuildBankExceptionText()
@@ -996,9 +1055,9 @@ function iRC:MarkGuildFoundRequired(connection)
     return true
 end
 
-function iRC:IsGuildFoundRequired()
-    local connection = self:GetConnection()
-    local guildKey = self:GetGuildKey()
+function iRC:IsGuildFoundRequired(connection)
+    connection = connection or self:GetConnection()
+    local guildKey = connection and connection.key
     if not connection or not guildKey then return false end
     local rules = connection.rules or self.DefaultConnectionRules
     if rules.guildFoundOnly == true or rules.level60GuildFound == true then
@@ -1169,6 +1228,8 @@ function iRC:SetGuildContacts(value)
     connection.rules.guildContacts = value
     connection.guildContactsTimestamp = math.max(time(), connection.guildContactsTimestamp + 1)
     connection.guildContactsSource = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("homepage", connection.guildContactsSource, connection.guildContactsTimestamp,
+        self:GetPlayerName(), connection.guildContactsTimestamp)
     if self:IsGuildMaster() then
         self:StampConnectionRules(connection)
         if self.SendConnectionRules then self:SendConnectionRules(nil, true) end

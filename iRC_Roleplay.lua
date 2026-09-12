@@ -219,7 +219,6 @@ local undeadWordReplacements = {
     { "hello", "well met" },
     { "friends", "allies" },
     { "friend", "ally" },
-    { "home", "the Undercity" },
     { "enemy", "foe" },
     { "enemies", "foes" },
     { "danger", "peril" },
@@ -228,7 +227,6 @@ local undeadWordReplacements = {
     { "kill", "dispatch" },
     { "protect", "guard" },
     { "wait", "linger" },
-    { "look", "behold" },
 }
 
 local function caseInsensitivePattern(phrase)

@@ -67,7 +67,7 @@ local function acquirePin(parent)
         pin:EnableMouse(true)
         pin:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            local shortName = tostring(self.playerName or "Unknown"):match("^[^-]+") or "Unknown"
+            local shortName = iRC:FormatPlayerName(self.playerName or "Unknown")
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[self.classFile or ""]
             if color then GameTooltip:AddLine(shortName, color.r, color.g, color.b) else GameTooltip:AddLine(shortName) end
             GameTooltip:AddLine("Level " .. tostring(self.level or 0) .. " " .. tostring(self.className or self.classFile or "Unknown"), 0.65, 0.65, 0.65)
@@ -96,6 +96,16 @@ local function mapPosition(mapId, x, y, displayedMapId)
     return convertedX, convertedY
 end
 
+local function groupedMembers()
+    local members = {}
+    local prefix, count = IsInRaid() and "raid" or "party", IsInRaid() and GetNumGroupMembers() or GetNumSubgroupMembers()
+    for index = 1, count do
+        local name = GetUnitName(prefix .. index, true)
+        if name then members[iRC:NormalizeName(name)] = true end
+    end
+    return members
+end
+
 function GuildMap:UpdatePins()
     if iRC:DeferLowTraffic("ui:guild-map", function() GuildMap:UpdatePins() end) then return end
     self:Cleanup()
@@ -107,8 +117,12 @@ function GuildMap:UpdatePins()
     local child = WorldMapFrame.ScrollContainer and WorldMapFrame.ScrollContainer.Child
     if not mapId or not child or child:GetWidth() <= 0 or child:GetHeight() <= 0 then return end
     local shown = {}
+    local grouped = groupedMembers()
     for name, position in pairs(self.positions) do
-        local x, y = mapPosition(position.mapId, position.x, position.y, mapId)
+        -- Blizzard already draws party and raid members. Suppress our guild
+        -- pin so one character cannot appear at both a cached and live spot.
+        local x, y
+        if not grouped[name] then x, y = mapPosition(position.mapId, position.x, position.y, mapId) end
         if x and y then
             shown[name] = true
             local pin = self.pins[name] or acquirePin(child)
@@ -237,6 +251,7 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -249,6 +264,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         initializeMap()
     elseif event == "ZONE_CHANGED_NEW_AREA" then
         GuildMap:SchedulePosition(3)
+    elseif event == "GROUP_ROSTER_UPDATE" then
+        -- Remove newly grouped members immediately, even if the full map
+        -- refresh is deferred by combat low-traffic mode.
+        for name in pairs(groupedMembers()) do clearPin(name) end
+        GuildMap:UpdatePins()
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, _, sender = ...
         if prefix ~= iRC.Prefix or not enabled() or not iRC:IsGuildMemberName(sender)
