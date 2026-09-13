@@ -388,6 +388,30 @@ end
 
 local applyMemberSearch
 
+local function updateBankSuggestions(frame)
+    local search, dropdown = frame.bankSearch, frame.bankSuggestions
+    if not search or not dropdown then return end
+    local query = search:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "")
+    local matches = {}
+    if query ~= "" then
+        for _, name in ipairs(frame.bankSearchItems or {}) do
+            local position = name:lower():find(query, 1, true)
+            if position then matches[#matches + 1] = { name = name, starts = position == 1 } end
+        end
+        table.sort(matches, function(a, b)
+            if a.starts ~= b.starts then return a.starts end
+            return a.name:lower() < b.name:lower()
+        end)
+    end
+    for index, button in ipairs(dropdown.buttons) do
+        local match = matches[index]
+        button.itemName = match and match.name or nil
+        button:SetShown(match ~= nil)
+        if match then button.text:SetText(match.name) end
+    end
+    dropdown:SetShown(frame.category == "Guild Bank" and search:HasFocus() and matches[1] ~= nil)
+end
+
 local function updateMemberSuggestions(frame)
     local search = frame.memberProfessionSearch
     if not search then return end
@@ -744,15 +768,49 @@ function UI:Create()
     frame.bankSearch.hint = main:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.bankSearch.hint:SetPoint("LEFT", frame.bankSearch, "LEFT", 7, 0)
     frame.bankSearch.hint:SetText("Search bank items")
+    frame.bankSuggestions = CreateFrame("Frame", nil, main, "BackdropTemplate")
+    frame.bankSuggestions:SetSize(260, 128)
+    frame.bankSuggestions:SetPoint("TOPLEFT", frame.bankSearch, "BOTTOMLEFT", 0, -2)
+    frame.bankSuggestions:SetFrameStrata("DIALOG")
+    frame.bankSuggestions:SetFrameLevel(main:GetFrameLevel() + 20)
+    frame.bankSuggestions:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    frame.bankSuggestions:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
+    frame.bankSuggestions:SetBackdropBorderColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.85)
+    frame.bankSuggestions.buttons = {}
+    for index = 1, 5 do
+        local button = CreateFrame("Button", nil, frame.bankSuggestions)
+        button:SetSize(242, 23)
+        button:SetPoint("TOPLEFT", frame.bankSuggestions, "TOPLEFT", 7, -6 - (index - 1) * 23)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.18)
+        button:SetScript("OnClick", function(self)
+            if not self.itemName then return end
+            frame.bankSearch:SetText(self.itemName)
+            frame.bankSearch:ClearFocus()
+            frame.bankSuggestions:Hide()
+        end)
+        frame.bankSuggestions.buttons[index] = button
+    end
+    frame.bankSuggestions:Hide()
     frame.bankSearch:SetScript("OnTextChanged", function(self)
         self.hint:SetShown(self:GetText() == "")
         if frame.category == "Guild Bank" then
             frame.scroll:SetVerticalScroll(0)
             UI:Refresh()
         end
+        updateBankSuggestions(frame)
     end)
+    frame.bankSearch:SetScript("OnEditFocusGained", function() updateBankSuggestions(frame) end)
+    frame.bankSearch:SetScript("OnEditFocusLost", function() frame.bankSuggestions:Hide() end)
     frame.bankSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    frame.bankSearch:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    frame.bankSearch:SetScript("OnEnterPressed", function(self)
+        local first = frame.bankSuggestions.buttons[1]
+        if frame.bankSuggestions:IsShown() and first.itemName then first:Click() else self:ClearFocus() end
+    end)
     frame.bankSearch:Hide()
     frame.bankItemInfoEvents = CreateFrame("Frame")
     frame.bankItemInfoEvents:SetScript("OnEvent", function()
@@ -847,6 +905,10 @@ function UI:Create()
         if frame:IsShown() and frame.category == "Guild Members" and professionSearch.edit:HasFocus()
             and not MouseIsOver(professionSearch.edit) and not MouseIsOver(professionSearch.suggestions) then
             professionSearch.edit:ClearFocus()
+        end
+        if frame:IsShown() and frame.category == "Guild Bank" and frame.bankSearch:HasFocus()
+            and not MouseIsOver(frame.bankSearch) and not MouseIsOver(frame.bankSuggestions) then
+            frame.bankSearch:ClearFocus()
         end
         if memberMenu:IsShown() and not MouseIsOver(memberMenu) then memberMenu:Hide() end
         if professionReport:IsShown() and not MouseIsOver(professionReport) then professionReport:Hide() end
@@ -1074,6 +1136,7 @@ local function updateGuildBankSnapshot(frame)
         latest = ownSnapshot
     end
     if latest then snapshots[1] = latest end
+    frame.bankSearchItems = {}
     local rows = frame.bankSnapshotRows
     for _, row in ipairs(rows) do row:Hide() end
     frame.bankSnapshotText:Hide()
@@ -1116,6 +1179,16 @@ local function updateGuildBankSnapshot(frame)
         addLine(iRC:FormatPlayerName(snapshot.owner or "Guild Bank") .. " - saved " .. (date and date("%Y-%m-%d %H:%M", snapshot.savedAt or 0) or tostring(snapshot.savedAt or 0)), 26)
         addLine("Money: " .. (GetCoinTextureString and GetCoinTextureString(snapshot.money or 0) or tostring(snapshot.money or 0) .. " copper"), 24)
         local groups, totalCount = groupedBankItems(snapshot)
+        local seenNames = {}
+        for _, items in pairs(groups) do
+            for _, item in ipairs(items) do
+                local name = item.name
+                if name and not seenNames[name] then
+                    seenNames[name] = true
+                    frame.bankSearchItems[#frame.bankSearchItems + 1] = name
+                end
+            end
+        end
         addLine("Items: " .. totalCount .. " total", 24)
         local shown = {}
         local matchCount = 0
@@ -1162,6 +1235,7 @@ local function updateGuildBankSnapshot(frame)
     frame.scrollContent:SetHeight(math.max(1, yOffset + 12))
     local maxScroll = math.max(0, frame.scrollContent:GetHeight() - frame.scroll:GetHeight())
     frame.scroll:SetVerticalScroll(math.min(previousScroll, maxScroll))
+    updateBankSuggestions(frame)
 end
 
 local function formatNumber(value)
@@ -1522,6 +1596,7 @@ function UI:Refresh()
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     frame.bankSave:SetShown(frame.category == "Guild Bank" and bankAccess)
     frame.bankSearch:SetShown(frame.category == "Guild Bank")
+    if frame.category ~= "Guild Bank" then frame.bankSuggestions:Hide() end
     if frame.category == "Guild Bank" then
         frame.bankItemInfoEvents:RegisterEvent("GET_ITEM_INFO_RECEIVED")
     else

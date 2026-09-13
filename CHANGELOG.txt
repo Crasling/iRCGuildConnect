@@ -7,6 +7,7 @@ v0.4.13 - Guild Map, Chat Icons & Performance
 [ADDED] Guild Map pins show color-coded Same layer, Different layer, or Layer unknown when both updated clients have recent layer data; older clients still receive positions
 [ADDED] The Death chat badge persists for the character's GUID, including after reload and profile refreshes; a new character with the same name starts clean
 [CHANGED] Gold discrepancy reports and warnings use light red instead of hard red
+[ADDED] Guild Bank item search offers up to five matching item-name suggestions; clicking outside clears typing focus without changing the filter
 [FIX] Guild-member updates reuse cached data and refresh only affected rows, reducing roster scans, allocations, and idle CPU usage
 
 v0.4.12 - Guild Connection Polish
