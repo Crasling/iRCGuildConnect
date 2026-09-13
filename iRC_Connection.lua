@@ -215,7 +215,15 @@ function iRC:StoreMemberProfile(profile)
     self:CheckForNewVersion(profile.addonVersion)
     local connection = self:GetConnection()
     if not connection then return end
-    connection.members[self:NormalizeName(profile.name)] = profile
+    local key = self:NormalizeName(profile.name)
+    local stored = connection.members[key]
+    if stored and stored ~= profile then
+        for field in pairs(stored) do stored[field] = nil end
+        for field, value in pairs(profile) do stored[field] = value end
+    else
+        connection.members[key] = profile
+    end
+    if self.InvalidateGuildMemberRow then self:InvalidateGuildMemberRow(profile.name) end
     if self.ConnectionDashboard and self.ConnectionDashboard.ScheduleAttentionReminderCheck then
         self.ConnectionDashboard:ScheduleAttentionReminderCheck()
     end
@@ -1865,6 +1873,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 and contentAccepted)
         if connection and acceptRules then
             for key, value in pairs(incomingRules) do connection.rules[key] = value end
+            if iRC.InvalidateGuildMemberRows then iRC:InvalidateGuildMemberRows() end
             connection.rulesTimestampHex = timestampHex
             connection.rulesTimestampSource = timestampSource
             connection.rulesRelayedBy = sender

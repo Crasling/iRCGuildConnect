@@ -29,9 +29,11 @@ function Compatibility:StoreSelfFound(name, selfFound, source)
     member.name = member.name or name
     member.selfFound = selfFound == true
     member.selfFoundLastSeen = time()
-    member.presence = { source = source or SOURCE, lastSeen = member.selfFoundLastSeen }
+    member.presence = member.presence or {}
+    member.presence.source, member.presence.lastSeen = source or SOURCE, member.selfFoundLastSeen
     member.guildFound = nil
     connection.compatibilityMembers[key] = member
+    if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(name) end
     if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
 end
 

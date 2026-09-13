@@ -18,6 +18,7 @@ Announcements.Icons = {
     selfFound = "Interface\\AddOns\\iRC\\Images\\Icons\\SF_Icon.blp",
     guildFound = "Interface\\AddOns\\iRC\\Images\\Icons\\GF_Icon.blp",
     guildMaster = "Interface\\AddOns\\iRC\\Images\\Icons\\GM_Icon.blp",
+    creator = "Interface\\AddOns\\iRC\\Images\\Icons\\The_Creator_Quill_256.blp",
     officer1 = "Interface\\AddOns\\iRC\\Images\\Icons\\Officer1_Icon.blp",
     violation = "Interface\\AddOns\\iRC\\Images\\Icons\\X_Icon.blp",
 }
@@ -50,8 +51,13 @@ end
 function Announcements:GetUnlockedIcons(name)
     local unlocked = {}
     if type(name) ~= "string" or name == "" then return unlocked end
+    if iRC:IsTestAdminName(name) then unlocked.creator = true end
     local rank = getRosterRank(name)
-    if rank == nil then return unlocked end
+    if rank == nil then
+        local isSelf = iRC:NormalizeName(name) == iRC:NormalizeName(iRC:GetPlayerName())
+        if isSelf and iRCCharDB and iRCCharDB.hideChatIcon == true then return {} end
+        return unlocked
+    end
     local key = iRC:NormalizeName(name)
     if rank == 0 then
         unlocked.guildMaster = true
@@ -111,6 +117,7 @@ end
 function Announcements:GetDefaultChatIcon(name)
     local unlocked = self:GetUnlockedIcons(name)
     if unlocked.violation then return self.Icons.violation, "violation" end
+    if unlocked.creator then return self.Icons.creator, "creator" end
     if unlocked.guildMaster then return self.Icons.guildMaster, "guildMaster" end
     if unlocked.officer1 then return self.Icons.officer1, "officer1" end
     if unlocked.selfFound then return self.Icons.selfFound, "selfFound" end
@@ -176,6 +183,10 @@ function Announcements:GetPublicChatIcon(name)
     local key = publicNameKey(name)
     local entry = key and publicIcons[key]
     if entry and entry.expiresAt > time() then
+        if entry.kind == "creator" and not iRC:IsTestAdminName(name) then
+            publicIcons[key] = nil
+            return nil
+        end
         return self.Icons[entry.kind], entry.kind
     end
     requestPublicIcon(name)
@@ -195,12 +206,15 @@ function Announcements:ReceiveIconWire(message, distribution, sender)
         sendIconWire("ICON_STATUS\t" .. ICON_WIRE_VERSION .. "\t" .. (ownKind or "none"), sender)
     elseif kind == "ICON_STATUS" and pendingRequests[key] and pendingRequests[key] > time() then
         if value ~= "none" and not self.Icons[value] then return end
+        -- The sender controls its packet, but not this client's admin list.
+        if value == "creator" and not iRC:IsTestAdminName(sender) then return end
         pendingRequests[key] = nil
         publicIcons[key] = { kind = value, expiresAt = time() + PUBLIC_ICON_TTL }
     end
 end
 
 local ICON_HELP = {
+    creator = { "CHAT_ICON_CREATOR_TITLE", "CHAT_ICON_CREATOR_DESC" },
     death = { "CHAT_ICON_DEATH_TITLE", "CHAT_ICON_DEATH_DESC" },
     level60 = { "CHAT_ICON_LEVEL60_TITLE", "CHAT_ICON_LEVEL60_DESC" },
     selfFound = { "CHAT_ICON_SELF_FOUND_TITLE", "CHAT_ICON_SELF_FOUND_DESC" },

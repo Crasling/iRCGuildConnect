@@ -14,6 +14,17 @@ local presenceConnection, reviewTicket, reviewAt, selectedOfficer
 local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 45, 60
 local sessionStartedAt = time()
 local guildRosterSnapshot, guildRosterSnapshotValid = {}, false
+local memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries
+local memberRowsDirty = {}
+
+function iRC:InvalidateGuildMemberRows()
+    memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries = nil, nil, nil, nil, nil
+    memberRowsDirty = {}
+end
+
+function iRC:InvalidateGuildMemberRow(name)
+    if memberRows and name then memberRowsDirty[self:NormalizeName(name)] = true end
+end
 
 local function isFreshCompatibility(entry, profile)
     if type(entry) ~= "table" then return false end
@@ -66,6 +77,7 @@ end
 
 function iRC:InvalidateGuildRosterSnapshot()
     guildRosterSnapshotValid = false
+    self:InvalidateGuildMemberRows()
 end
 
 function iRC:GetGuildRosterSnapshot()
@@ -437,12 +449,12 @@ function iRC:GetGuildMemberRaceCheck(race, connection)
     }
 end
 
-function iRC:GetGuildRosterRows()
-    local rows, roster = {}, self:GetGuildRosterSnapshot()
+local function buildGuildRosterRows(self, roster, connection)
+    local now = time()
+    local rows, expiries = {}, {}
     local selfName = self:GetPlayerName()
-    -- Static roster data is event-cached. Live addon and verification state is
-    -- still derived on every call so incoming profiles apply immediately.
-    local connection = self:GetConnection()
+    -- Roster rows are rebuilt on roster/member updates and at the next live
+    -- presence expiry; UI refreshes between those transitions reuse them.
     local active = connection and connection.active == true
     local profiles = connection and connection.members or {}
     local compatibleMembers = active and connection.compatibilityMembers or {}
@@ -456,6 +468,21 @@ function iRC:GetGuildRosterRows()
             local key = self:NormalizeName(name)
             local profile = profiles[key]
             local compatibilityMember = compatibleMembers[key]
+            local profileSeen = profile and tonumber(profile.lastSeen)
+            local compatibleSeen = compatibilityMember and compatibilityMember.presence
+                and tonumber(compatibilityMember.presence.lastSeen)
+            local nextExpiry
+            if online then
+                if profileSeen and profileSeen <= now and now - profileSeen <= IRC_PRESENCE_TIMEOUT then
+                    local expiry = profileSeen + IRC_PRESENCE_TIMEOUT + 1
+                    nextExpiry = not nextExpiry and expiry or math.min(nextExpiry, expiry)
+                end
+                if compatibleSeen and compatibleSeen <= now and now - compatibleSeen <= COMPATIBILITY_TIMEOUT then
+                    local expiry = compatibleSeen + COMPATIBILITY_TIMEOUT + 1
+                    nextExpiry = not nextExpiry and expiry or math.min(nextExpiry, expiry)
+                end
+            end
+            expiries[key] = nextExpiry
             local profileGuid = profile and profile.guid
             local compatibilityGuid = compatibilityMember and compatibilityMember.guid
             if guid and guid ~= "" and ((profileGuid and profileGuid ~= "" and profileGuid ~= guid)
@@ -525,6 +552,39 @@ function iRC:GetGuildRosterRows()
         rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, selfFound = profile.selfFound, addonVersion = profile.addonVersion, verification = self:GetMemberVerification(profile.name, true, profile), raceCheck = raceCheck, raceMismatch = raceCheck.mismatch }
     end
     table.sort(rows, function(a, b) return string.lower(a.name) < string.lower(b.name) end)
+    return rows, expiries
+end
+
+function iRC:GetGuildRosterRows()
+    local roster = self:GetGuildRosterSnapshot()
+    local connection = self:GetConnection()
+    if memberRows and memberRowsConnection == connection and guildRosterSnapshotValid then
+        local now = time()
+        for key, expiresAt in pairs(memberRowsExpiries) do
+            if expiresAt and now >= expiresAt then memberRowsDirty[key] = true end
+        end
+        for key in pairs(memberRowsDirty) do
+            local index, rosterMember = memberRowsIndex[key], memberRowsRoster[key]
+            if index and rosterMember then
+                local updated, expiries = buildGuildRosterRows(self, { rosterMember }, connection)
+                if updated[1] then
+                    local row = memberRows[index]
+                    for field in pairs(row) do row[field] = nil end
+                    for field, value in pairs(updated[1]) do row[field] = value end
+                end
+                memberRowsExpiries[key] = expiries[key]
+            end
+            memberRowsDirty[key] = nil
+        end
+        return memberRows
+    end
+    local rows, expiries = buildGuildRosterRows(self, roster, connection)
+    if guildRosterSnapshotValid then
+        memberRows, memberRowsConnection, memberRowsExpiries = rows, connection, expiries
+        memberRowsIndex, memberRowsRoster, memberRowsDirty = {}, {}, {}
+        for index, row in ipairs(rows) do memberRowsIndex[self:NormalizeName(row.name)] = index end
+        for _, rosterMember in ipairs(roster) do memberRowsRoster[self:NormalizeName(rosterMember.name)] = rosterMember end
+    end
     return rows
 end
 

@@ -141,6 +141,7 @@ function Professions:SendSummary(force)
         if connection then
             connection.professionMembers = connection.professionMembers or {}
             connection.professionMembers[iRC:NormalizeName(iRC:GetPlayerName())] = data
+            if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(iRC:GetPlayerName()) end
         end
         if not sentCachedRecipes then
             sentCachedRecipes = true
@@ -249,9 +250,12 @@ function Professions:Receive(message, sender)
         connection.professionMembers = connection.professionMembers or {}
         local previous = connection.professionMembers[key]
         if previous and previous.guid == guid and (tonumber(previous.updatedAt) or 0) > stamp then return end
-        connection.professionMembers[key] = { guid = guid, skills = skills, recipes = previous and previous.guid == guid and previous.recipes or {},
-            recipeUpdatedAt = previous and previous.guid == guid and previous.recipeUpdatedAt or {},
-            fishingRodID = skills[356] and rodID > 0 and rodID or nil, updatedAt = stamp }
+        local member = previous and previous.guid == guid and previous or { recipes = {}, recipeUpdatedAt = {} }
+        member.guid, member.skills, member.updatedAt = guid, skills, stamp
+        member.recipes, member.recipeUpdatedAt = member.recipes or {}, member.recipeUpdatedAt or {}
+        member.fishingRodID = skills[356] and rodID > 0 and rodID or nil
+        connection.professionMembers[key] = member
+        if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(sender) end
         if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then iRC.MainUI:RefreshIfShown() end
     elseif kind == "PROF_REC" then
         local version, guid, id, stamp, index, total, hash, chunk = message:match("^PROF_REC\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
@@ -290,6 +294,7 @@ function Professions:Receive(message, sender)
         member.recipes[id] = recipes
         member.recipeUpdatedAt[id] = stamp
         connection.professionMembers[key] = member
+        if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(sender) end
         if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then iRC.MainUI:RefreshIfShown() end
     end
 end

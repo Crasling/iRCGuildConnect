@@ -205,6 +205,7 @@ for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" t
 assert(sourced and sourced.profile and not sourced.compatibility and sourced.source == "iRC", "fresh iRC suppresses the compatible source for the same character")
 db.members.member.lastSeen = now - 136
 db.compatibilityMembers.member.presence.lastSeen = now - 100
+iRC:InvalidateGuildMemberRows()
 sourceRows = iRC:GetGuildRosterRows()
 for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
 assert(sourced and not sourced.profile and sourced.compatibility and sourced.source == "RaceLockedForkEU", "newer compatible presence replaces and clears an expired iRC profile")
@@ -214,6 +215,7 @@ assert(iRC:GetMemberVerification("Member", true).state == "missing", "RaceLocked
 db.members.member = { name = "Member", guid = "Player-OLD-Member", race = "Troll", lastSeen = now }
 db.compatibilityMembers.member = { guid = "Player-OLD-Member", presence = { source = "RaceLockedForkEU", lastSeen = now } }
 db.guildFoundRoster = { member = { source = "RaceLocked", lastSeen = now } }
+iRC:InvalidateGuildMemberRows()
 local identityRows = iRC:GetGuildRosterRows()
 local recreated
 for _, row in ipairs(identityRows) do if iRC:NormalizeName(row.name) == "member" then recreated = row break end end
@@ -224,9 +226,10 @@ print("Race Overview population tests passed: verified + compatible, offline/unk
 print("Presence leader tests passed: iRC-only officers, test overrides, fresh/session/offline checks, deterministic election and profile wire round trip.")
 
 -- Large-guild regression: one roster read per member, constant connection
--- lookups, and no persistent cache hiding changes from subsequent passes.
+-- lookups, and explicit invalidation when incoming member data changes.
 assert(loadfile("iRC_RaceLockedSync.lua"))("iRC", private)
 roster, db.members, db.compatibilityMembers, db.guildFoundRoster = {}, {}, {}, {}
+iRC:InvalidateGuildRosterSnapshot()
 for index = 1, 1000 do
     local name = index == 1 and "Crasjin" or string.format("Member%04d", index)
     local key = iRC:NormalizeName(name)
@@ -241,9 +244,22 @@ function iRC:GetConnection() connectionReads = connectionReads + 1; return getCo
 function GetGuildRosterInfo(index) rosterReads = rosterReads + 1; return getRoster(index) end
 local rosterRows = iRC:GetGuildRosterRows()
 assert(#rosterRows == 1000 and rosterReads == 1000 and connectionReads <= 3, "large roster must use constant connection lookups")
+assert(iRC:GetGuildRosterRows() == rosterRows and rosterReads == 1000, "unchanged guild rows are reused without another roster pass")
+local priorChangedRow, priorUntouchedRow = rosterRows[2], rosterRows[3]
 db.compatibilityMembers.member0002 = { presence = { source = "RaceLockedForkEU", lastSeen = now } }
+iRC:InvalidateGuildMemberRow("Member0002")
 local refreshed = iRC:GetGuildRosterRows()
 assert(refreshed[2].verification.state == "compatible", "next pass sees newly received presence immediately")
+assert(refreshed == rosterRows and refreshed[2] == priorChangedRow and refreshed[3] == priorUntouchedRow,
+    "a member update overwrites its existing row without replacing other rows")
+local expiringRow = refreshed[6]
+assert(expiringRow.verification.state == "verified", "fresh iRC member starts verified")
+now = now + 91
+local expiredRows = iRC:GetGuildRosterRows()
+assert(expiredRows == rosterRows and expiredRows[6] == expiringRow and expiredRows[6].verification.state == "stale",
+    "presence expiry updates the affected row in place")
+assert(rosterReads == 1000 and expiredRows[3] == priorUntouchedRow,
+    "presence expiry does not rebuild the roster or unrelated offline rows")
 print("Large-guild test passed: 1000 members, " .. (connectionReads / 2) .. " connection lookup(s) per pass.")
 
 -- Test the real visible-row renderer with lightweight WoW frame mocks.
@@ -290,7 +306,8 @@ local connectionBefore, rowsBefore = connectionReads, rosterReads
 offset = 0
 dashboard:Refresh()
 assert(#view.rowData == 1000 and #view.rows == 7, "full verification refresh retains all data with bounded UI frames")
-assert(rosterReads - rowsBefore == 1000 and connectionReads - connectionBefore <= 5, "full refresh avoids per-row connection lookups")
+assert(rosterReads == rowsBefore and connectionReads - connectionBefore <= 5,
+    "verification refresh reuses the cached roster without per-row connection lookups")
 assert(view.rows[1].OnClick == view.rowData[1].onClick, "pooled row receives current click handler")
 view.filters.Verification = "attention"
 dashboard:Refresh()

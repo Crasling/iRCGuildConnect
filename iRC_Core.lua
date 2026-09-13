@@ -1036,6 +1036,7 @@ function iRC:SetGuildRace(race)
     if not connection then return false end
     if connection.rules.raceLock ~= true then return false end
     connection.rules.guildRace = normalizedRace
+    if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     self:StampConnectionRules(connection)
     if self.ScheduleConnectionRulesBroadcast then self:ScheduleConnectionRulesBroadcast() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
@@ -1054,6 +1055,7 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild)
     active = active and true or false
     if connection.active == active then return false end
     connection.active = active
+    if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     if active and not receivedFromGuild and self:GetGuildRace() == "" then
         local _, raceFile = UnitRace("player")
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
@@ -1294,6 +1296,7 @@ function iRC:SetProgressionMode(mode)
     if mode == "SELF_FOUND" or mode == "GUILD_FOUND" or mode == "SELF_FOUND_OR_GUILD_FOUND" then
         self:GetSettings().hideAttentionReminders = true
     end
+    if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     self:StampConnectionRules(connection)
     if self.ScheduleConnectionRulesBroadcast then self:ScheduleConnectionRulesBroadcast() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
@@ -1307,6 +1310,7 @@ function iRC:SetMaxLevelProgressionMode(mode)
     if not connection then return false end
     connection.rules.level60GuildFound = mode == "GUILD_FOUND"
     connection.rules.allowLevel60WithoutSelfFound = mode == "UNRESTRICTED"
+    if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     if connection.rules.level60GuildFound then self:MarkGuildFoundRequired(connection) end
     self:StampConnectionRules(connection)
     if self.ScheduleConnectionRulesBroadcast then self:ScheduleConnectionRulesBroadcast() end
@@ -1323,6 +1327,7 @@ function iRC:SetConnectionRule(key, value)
     if value and (key == "nativeTongueOnly" or key == "sameRaceGroupsOnly" or key == "allowLevel60MixedRaceGroups")
         and connection.rules.raceLock ~= true then return false end
     connection.rules[key] = value
+    if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     if key == "raceLock" and not value then
         connection.rules.nativeTongueOnly = false
         connection.rules.sameRaceGroupsOnly = false

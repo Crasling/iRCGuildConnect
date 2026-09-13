@@ -322,6 +322,7 @@ local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, m
         entry.playedBeforeAt, entry.playedAfterAt = nil, nil
     end
     entry.source, entry.lastSeen = source, time()
+    if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(name) end
 end
 
 local function storeOverride(name, verified, clean, stamp, source, direct)
@@ -332,10 +333,12 @@ local function storeOverride(name, verified, clean, stamp, source, direct)
     if stamp == previous then
         if entry.gmVerified ~= verified or entry.gmClean ~= clean then return false end
         if direct then entry.directOverride, entry.overrideSource = true, source end
+        if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(name) end
         return true
     end
     entry.gmVerified, entry.gmClean, entry.gmTimestamp = verified, clean, stamp
     entry.overrideSource, entry.directOverride = source, direct == true
+    if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(name) end
     return true
 end
 
