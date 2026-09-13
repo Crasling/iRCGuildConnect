@@ -89,6 +89,7 @@ local function profileWireParts(profile)
         profile.testGuildMasterOverride and "1" or "0",
         profile.hideChatIcon and "1" or "0",
         profile.currentGroupRuleViolation and "1" or "0",
+        profile.deadGuid or "",
     }
 end
 
@@ -115,6 +116,7 @@ local function profileFromWire(parts, startIndex)
         testGuildMasterOverride = parts[startIndex + 18] == "1",
         hideChatIcon = parts[startIndex + 19] == "1",
         currentGroupRuleViolation = parts[startIndex + 20] == "1",
+        deadGuid = parts[startIndex + 21] or "",
     }
 end
 
@@ -204,6 +206,7 @@ function iRC:GetLocalProfile()
         shareGlobalRaceGrid = true,
         testGuildMasterOverride = self:IsTestAdminGuildMaster(),
         hideChatIcon = iRCCharDB and iRCCharDB.hideChatIcon == true,
+        deadGuid = iRCCharDB and iRCCharDB.deadGuid == UnitGUID("player") and iRCCharDB.deadGuid or "",
         currentGroupRuleViolation = self.Enforcement and self.Enforcement.IsCurrentGroupViolation
             and self.Enforcement:IsCurrentGroupViolation() or false,
         lastSeen = time(),
@@ -217,6 +220,15 @@ function iRC:StoreMemberProfile(profile)
     if not connection then return end
     local key = self:NormalizeName(profile.name)
     local stored = connection.members[key]
+    -- Death belongs to the character GUID, not to a particular profile
+    -- packet. Older clients do not send deadGuid, so their refreshes must not
+    -- resurrect a known-dead character with the same GUID. A replacement
+    -- character using the same name has a new GUID and starts clean.
+    if stored and type(profile.guid) == "string" and profile.guid ~= ""
+        and stored.guid == profile.guid and stored.deadGuid == profile.guid
+        and profile.deadGuid ~= profile.guid then
+        profile.deadGuid = profile.guid
+    end
     if stored and stored ~= profile then
         for field in pairs(stored) do stored[field] = nil end
         for field, value in pairs(profile) do stored[field] = value end

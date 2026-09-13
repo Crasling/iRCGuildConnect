@@ -52,17 +52,19 @@ function Announcements:GetUnlockedIcons(name)
     local unlocked = {}
     if type(name) ~= "string" or name == "" then return unlocked end
     if iRC:IsTestAdminName(name) then unlocked.creator = true end
+    local key = iRC:NormalizeName(name)
+    local isSelf = key == iRC:NormalizeName(iRC:GetPlayerName())
     local rank = getRosterRank(name)
+    local connection = rank ~= nil and iRC:GetConnection() or nil
+    local profile = isSelf and iRC:GetLocalProfile() or connection and connection.members and connection.members[key]
+    if profile and type(profile.guid) == "string" and profile.guid ~= "" and profile.deadGuid == profile.guid then unlocked.death = true end
     if rank == nil then
-        local isSelf = iRC:NormalizeName(name) == iRC:NormalizeName(iRC:GetPlayerName())
-        if isSelf and iRCCharDB and iRCCharDB.hideChatIcon == true then return {} end
+        if isSelf and iRCCharDB and iRCCharDB.hideChatIcon == true and not unlocked.death then return {} end
         return unlocked
     end
-    local key = iRC:NormalizeName(name)
     if rank == 0 then
         unlocked.guildMaster = true
     else
-        local connection = iRC:GetConnection()
         if connection and connection.active == true then
             for permission, defaultRank in pairs(iRC.DefaultRankPermissions) do
                 local delegatedRank = tonumber(connection.rankPermissions and connection.rankPermissions[permission]) or defaultRank
@@ -73,12 +75,9 @@ function Announcements:GetUnlockedIcons(name)
             end
         end
     end
-    local connection = iRC:GetConnection()
-    local isSelf = key == iRC:NormalizeName(iRC:GetPlayerName())
-    local profile = isSelf and iRC:GetLocalProfile() or connection and connection.members and connection.members[key]
     if isSelf and profile and profile.selfFound == true and profile.hideChatIcon ~= true then unlocked.selfFound = true end
     if not connection or connection.active ~= true then
-        return profile and profile.hideChatIcon == true and {} or unlocked
+        return profile and profile.hideChatIcon == true and not unlocked.death and {} or unlocked
     end
     local fresh = profile and (isSelf or time() - (tonumber(profile.lastSeen) or 0) <= 180)
     local status = iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(name, connection)
@@ -100,7 +99,10 @@ function Announcements:GetUnlockedIcons(name)
         end
     end
     -- A rule-violation badge is not an optional earned icon.
-    if profile and profile.hideChatIcon == true then return unlocked.violation and { violation = true } or {} end
+    if profile and profile.hideChatIcon == true then
+        if unlocked.death then return { death = true } end
+        return unlocked.violation and { violation = true } or {}
+    end
     if profile and profile.selfFound == true and fresh then
         unlocked.selfFound = true
     end
@@ -116,6 +118,7 @@ end
 
 function Announcements:GetDefaultChatIcon(name)
     local unlocked = self:GetUnlockedIcons(name)
+    if unlocked.death then return self.Icons.death, "death" end
     if unlocked.violation then return self.Icons.violation, "violation" end
     if unlocked.creator then return self.Icons.creator, "creator" end
     if unlocked.guildMaster then return self.Icons.guildMaster, "guildMaster" end
@@ -306,11 +309,11 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
         local _, fontSize = chatFrame:GetFont()
         size = math.max(12, math.floor((tonumber(fontSize) or 14) * 1.2))
     end
-    if icon then message = message .. " " .. iconLink(iconKind, icon, size) end
     local badge, badgeKind = Announcements:GetDefaultChatIcon(author)
     if not badge and getRosterRank(author) == nil then
         badge, badgeKind = Announcements:GetPublicChatIcon(author)
     end
+    if icon and iconKind ~= badgeKind then message = message .. " " .. iconLink(iconKind, icon, size) end
     if badge then message = iconLink(badgeKind, badge, size) .. " " .. message end
     if not icon and not badge then return false end
     hookChatTooltip(chatFrame)
@@ -339,6 +342,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
             end
         end
     elseif event == "PLAYER_DEAD" then
+        local guid = UnitGUID("player")
+        if guid and guid ~= "" then
+            iRCCharDB = iRCCharDB or {}
+            iRCCharDB.deadGuid = guid
+            if iRC:IsGuildConnectionActive() then iRC:SendHello() end
+        end
         Announcements:AnnounceDeath()
     elseif event == "PLAYER_LEVEL_UP" then
         Announcements:AnnounceLevel60(...)

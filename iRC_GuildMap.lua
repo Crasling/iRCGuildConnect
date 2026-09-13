@@ -7,6 +7,8 @@ iRC.GuildMap = GuildMap
 
 local POSITION_VERSION = "1"
 local POSITION_LIFETIME = 90
+local LAYER_LIFETIME = 60
+local localLayer
 local initialized, mapInitialized, positionSendPending
 local mapTicker
 local pinMenu
@@ -96,6 +98,22 @@ function GuildMap:Clear()
     wipe(self.positions)
 end
 
+local function observeLayer(unit)
+    if not unit or not C_Map then return end
+    local guid = UnitGUID(unit)
+    local zoneId = guid and guid:match("^Creature%-%d+%-%d+%-%d+%-%d+%-(%d+)%-")
+    local mapId = C_Map.GetBestMapForUnit("player")
+    if zoneId and mapId then
+        localLayer = { signature = tonumber(zoneId), mapId = mapId, seenAt = GetTime() }
+    end
+end
+
+local function currentLayerSignature(mapId)
+    if localLayer and localLayer.mapId == mapId and GetTime() - localLayer.seenAt <= LAYER_LIFETIME then
+        return localLayer.signature
+    end
+end
+
 function GuildMap:Cleanup()
     if not enabled() then self:Clear(); return end
     local now = GetTime()
@@ -135,6 +153,20 @@ local function acquirePin(parent)
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[self.classFile or ""]
             if color then GameTooltip:AddLine(shortName, color.r, color.g, color.b) else GameTooltip:AddLine(shortName) end
             GameTooltip:AddLine("Level " .. tostring(self.level or 0) .. " " .. tostring(self.className or self.classFile or "Unknown"), 0.65, 0.65, 0.65)
+            local ownMapId = C_Map and C_Map.GetBestMapForUnit("player")
+            local ownLayer = ownMapId and currentLayerSignature(ownMapId)
+            local layerText = iRC:Text("GUILD_MAP_LAYER_UNKNOWN")
+            local layerRed, layerGreen, layerBlue = 0.65, 0.65, 0.65
+            if ownLayer and self.layerSignature and ownMapId == self.sourceMapId then
+                if ownLayer == self.layerSignature then
+                    layerText = iRC:Text("GUILD_MAP_SAME_LAYER")
+                    layerRed, layerGreen, layerBlue = 0.2, 1, 0.2
+                else
+                    layerText = iRC:Text("GUILD_MAP_DIFFERENT_LAYER")
+                    layerRed, layerGreen, layerBlue = 1, 0.5, 0.5
+                end
+            end
+            GameTooltip:AddLine(layerText, layerRed, layerGreen, layerBlue)
             GameTooltip:Show()
         end)
         pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -204,6 +236,7 @@ function GuildMap:UpdatePins()
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
             pin.center:SetVertexColor(color and color.r or 1, color and color.g or 1, color and color.b or 1, 1)
             pin.playerName, pin.classFile, pin.level = position.name or name, classFile, profile and profile.level or 0
+            pin.layerSignature, pin.sourceMapId = position.layerSignature, position.mapId
             pin.className = classFile ~= "" and classFile:sub(1, 1) .. classFile:sub(2):lower() or "Unknown"
         end
     end
@@ -220,8 +253,15 @@ function GuildMap:BroadcastPosition()
     local x, y = position:GetXY()
     if not x or not y or (x == 0 and y == 0) then return false end
     local xWire, yWire = math.floor(x * 10000 + 0.5), math.floor(y * 10000 + 0.5)
+    observeLayer("target")
+    observeLayer("mouseover")
     local message = table.concat({ "MAP_POS", POSITION_VERSION, tostring(mapId), tostring(xWire), tostring(yWire) }, "\t")
-    return iRC:SendAddonTraffic(iRC.Prefix, message, "GUILD")
+    local sent = iRC:SendAddonTraffic(iRC.Prefix, message, "GUILD")
+    local signature = currentLayerSignature(mapId)
+    if sent and signature then
+        iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "MAP_LAYER", "1", tostring(mapId), tostring(signature) }, "\t"), "GUILD")
+    end
+    return sent
 end
 
 function GuildMap:SchedulePosition(maximumDelay, minimumDelay)
@@ -323,6 +363,9 @@ frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
+frame:RegisterEvent("PLAYER_TARGET_CHANGED")
+frame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -334,8 +377,16 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "ADDON_LOADED" then
         initializeMap()
     elseif event == "ZONE_CHANGED_NEW_AREA" then
+        localLayer = nil
         GuildMap:SchedulePosition(3)
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        observeLayer("target")
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        observeLayer("mouseover")
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        observeLayer(...)
     elseif event == "GROUP_ROSTER_UPDATE" then
+        localLayer = nil
         -- Remove newly grouped members immediately, even if the full map
         -- refresh is deferred by combat low-traffic mode.
         for name in pairs(groupedMembers()) do clearPin(name) end
@@ -344,6 +395,17 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local prefix, message, _, sender = ...
         if prefix ~= iRC.Prefix or not enabled() or not iRC:IsGuildMemberName(sender)
             or iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
+        local layerVersion, layerMapId, layerSignature = tostring(message or ""):match("^MAP_LAYER\t([^\t]+)\t(%d+)\t(%d+)$")
+        if layerVersion then
+            local existing = GuildMap.positions[iRC:NormalizeName(sender)]
+            layerMapId, layerSignature = tonumber(layerMapId), tonumber(layerSignature)
+            if layerVersion == "1" and existing and existing.mapId == layerMapId
+                and layerSignature and layerSignature > 0 and GetTime() - existing.receivedAt <= 5 then
+                existing.layerSignature = layerSignature
+                GuildMap:UpdatePins()
+            end
+            return
+        end
         local version, mapId, xWire, yWire = tostring(message or ""):match("^MAP_POS\t([^\t]+)\t(%d+)\t(%d+)\t(%d+)$")
         mapId, xWire, yWire = tonumber(mapId), tonumber(xWire), tonumber(yWire)
         if version ~= POSITION_VERSION or not mapId or not xWire or not yWire or xWire > 10000 or yWire > 10000 then return end

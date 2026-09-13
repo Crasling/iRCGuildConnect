@@ -391,7 +391,7 @@ function Dashboard:Create()
 
     local function appendGoldDiscrepancyDetails(lines, status)
         local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
-        lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_CLIENT_INACTIVE") .. iRC.Colors.Reset
+        lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_CLIENT_INACTIVE") .. iRC.Colors.Reset
         if status.moneyBefore == nil or status.moneyAfter == nil then
             lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
             return
@@ -451,7 +451,7 @@ function Dashboard:Create()
                 lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_REPORTED", statusWord(status.rawClean, "GF_GOLD_CLEAN", "GF_GOLD_FLAGGED"))
                 lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_EFFECTIVE", statusWord(status.clean, "RL_CLEAN", "RL_FLAGGED"))
                 if status.tamperAt and status.tamperAt > 0 then
-                    lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
+                    lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
                     appendGoldDiscrepancyDetails(lines, status)
                 end
                 if status.gmClean ~= nil and status.gmTimestamp then
@@ -460,7 +460,7 @@ function Dashboard:Create()
                         status.overrideSource or iRC:Text("RL_STATUS_UNKNOWN"),
                         date("%Y-%m-%d %H:%M", status.gmTimestamp))
                     if status.cleanDecisionSuperseded then
-                        lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
+                        lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
                     end
                 end
             end
@@ -483,7 +483,7 @@ function Dashboard:Create()
                 iRC:Text("GF_REPORT_EFFECTIVE_CLEAN", statusWord(status.clean, "RL_CLEAN", "RL_FLAGGED")),
             }
             if status.tamperAt and status.tamperAt > 0 then
-                lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
+                lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
                 appendGoldDiscrepancyDetails(lines, status)
             end
             if status.gmTimestamp then
@@ -495,7 +495,7 @@ function Dashboard:Create()
                 lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_VALUES", gmVerified, gmClean)
                 lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_SOURCE", status.overrideSource or iRC:Text("RL_STATUS_UNKNOWN"), date("%Y-%m-%d %H:%M", status.gmTimestamp))
                 if status.cleanDecisionSuperseded then
-                    lines[#lines + 1] = iRC.Colors.Red .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
+                    lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
                 end
             end
             reportBody:SetText(table.concat(lines, "\n"))

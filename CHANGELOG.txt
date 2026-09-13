@@ -2,13 +2,12 @@
 iRC - Changelog
 ================================================================================
 
-v0.4.13 - Creator Icons & Roster Performance
+v0.4.13 - Guild Map, Chat Icons & Performance
 --------------------------------------------------------------------------------
-[ADDED] Named iRC creator/test-admin characters use the Creator chat icon, including outside their guild; active rule violations still show X
-[FIX] Public Creator badges are accepted only when the sender matches this client's built-in test-admin name list
-[FIX] Profile, profession, Guild Found, and presence-expiry updates refresh only the affected guild-member row; roster and rule changes still rebuild the full list
-[CHANGED] Live member, compatible-addon, and profession updates reuse existing cached records where possible, reducing repeated allocations
-[CHANGED] In the reported idle test, average iRC CPU fell from about 2% to 0.7% after the row-cache change; full-roster status scans dropped out of the top hotspots
+[ADDED] Guild Map pins show color-coded Same layer, Different layer, or Layer unknown when both updated clients have recent layer data; older clients still receive positions
+[ADDED] The Death chat badge persists for the character's GUID, including after reload and profile refreshes; a new character with the same name starts clean
+[CHANGED] Gold discrepancy reports and warnings use light red instead of hard red
+[FIX] Guild-member updates reuse cached data and refresh only affected rows, reducing roster scans, allocations, and idle CPU usage
 
 v0.4.12 - Guild Connection Polish
 --------------------------------------------------------------------------------

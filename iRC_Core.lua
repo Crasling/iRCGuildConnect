@@ -67,6 +67,7 @@ iRC.Colors = {
     iRC = "|cffff9716",
     White = "|cFFFFFFFF",
     Red = "|cFFFF0000",
+    LightRed = "|cFFFF8080",
     Green = "|cFF00FF00",
     Yellow = "|cFFFFFF00",
     Orange = "|cFFFFA500",
