@@ -2,6 +2,15 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.14 - Smoother Guild Sync
+--------------------------------------------------------------------------------
+[ADDED] Performance Mode in General settings spreads non-urgent guild sync and incoming Leaderboard reports over time to reduce brief freezes. Players who enabled the old Low CPU Mode keep the setting enabled
+[CHANGED] Rules, addon-presence replies, group safety, map positions, and public report sending stay immediate even with Performance Mode on
+[FIX] Performance Mode no longer causes a protected-action error when a public guild report is sent
+[FIX] Guild Leaderboard skips public reports from your own guild because that guild's data is already shared directly
+[FIX] Routine guild settings are sent in smaller, spaced bursts; unchanged updates no longer cause unnecessary work or repeated settings refreshes
+[ADDED] Test admins can clear locally cached Guild Leaderboard reports without changing guild rules or other connection data
+
 v0.4.13 - Guild Map, Chat Icons & Performance
 --------------------------------------------------------------------------------
 [ADDED] Guild Map pins show color-coded Same layer, Different layer, or Layer unknown when both updated clients have recent layer data; older clients still receive positions

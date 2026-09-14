@@ -296,6 +296,9 @@ iRC.L = {
     GUILD_MAP_LAYER_UNKNOWN = "Layer unknown",
     GUILD_MAP_RULE = "Guild Map",
     GUILD_MAP_RULE_DESC = "Allow iRC guild members to share temporary outdoor positions on the World Map. Positions are never saved and are not shared inside instances.",
+    LOW_CPU_MODE_HEADER = "Performance",
+    LOW_CPU_MODE = "Performance Mode",
+    LOW_CPU_MODE_DESC = "Spread non-urgent addon sync and incoming Guild Leaderboard reports over time to reduce CPU spikes. Public chat-channel sends and time-sensitive rules, presence, group safety, and map positions remain immediate.",
 
     -- Chat Icons & Announcements
     CHAT_ANNOUNCE_DEATH = "has perished.",
@@ -615,6 +618,9 @@ iRC.L = {
     -- Testing
     TEST_ADMIN_ACTIVATE_GUILD = "Make guild active",
     TEST_ADMIN_ACTIVATE_GUILD_DESC = "Temporarily grants iRC Guild Master authority and activates iRC for the current guild.",
+    TEST_ADMIN_CLEAR_REPORTS = "Clear cached guild reports",
+    TEST_ADMIN_CLEAR_REPORTS_DESC = "Remove locally saved Guild Leaderboard reports and activity samples on all realms. Does not change guild rules, profiles, or bank data; new reports may sync again.",
+    TEST_ADMIN_CLEAR_REPORTS_DONE = "Cleared %d locally cached guild report(s).",
     TEST_ADMIN_ANNOUNCEMENTS = "Guild announcement tests",
     TEST_ADMIN_ANNOUNCEMENTS_DESC = "Sends clearly marked test messages to Guild Chat. These do not change your level, death state, or announcement history and can preview messages even when the guild has disabled them.",
     TEST_ADMIN_ANNOUNCEMENT_UNAVAILABLE = "The test announcement could not be sent. Join an active iRC guild first.",

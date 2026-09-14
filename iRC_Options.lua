@@ -546,6 +546,13 @@ end
 
 local y = -12
 local debugModeCheck
+_, y = CreateSectionHeader(generalContent, L.LOW_CPU_MODE_HEADER, y - 4)
+_, y = CreateSettingsCheckbox(generalContent, L.LOW_CPU_MODE, L.LOW_CPU_MODE_DESC, y,
+    function() return iRC:IsPerformanceMode() end,
+    function(value)
+        iRC:GetSettings().performanceMode = value and true or false
+        iRC:GetSettings().lowCpuLeaderboard = false
+    end)
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
 minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
@@ -553,6 +560,36 @@ minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", 
     function(value)
         iRC:GetSettings().minimapButton.hide = not value
         if iRC.Minimap then iRC.Minimap:UpdateVisibility() end
+    end)
+_, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
+local pinSizeLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+pinSizeLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
+pinSizeLabel:SetText(L.GUILD_MAP_PIN_SIZE)
+local pinSizeValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+pinSizeValue:SetPoint("LEFT", pinSizeLabel, "RIGHT", 10, 0)
+pinSizeValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+local pinSizeSlider = CreateFrame("Slider", "iRCGuildMapPinSizeSlider", generalContent, "OptionsSliderTemplate")
+pinSizeSlider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
+pinSizeSlider:SetWidth(240)
+pinSizeSlider:SetMinMaxValues(5, 15)
+pinSizeSlider:SetValueStep(1)
+_G[pinSizeSlider:GetName() .. "Low"]:SetText("5")
+_G[pinSizeSlider:GetName() .. "High"]:SetText("15")
+_G[pinSizeSlider:GetName() .. "Text"]:SetText("")
+SetSimpleTooltip(pinSizeSlider, L.GUILD_MAP_PIN_SIZE, L.GUILD_MAP_PIN_SIZE_DESC)
+pinSizeSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value + 0.5)
+    pinSizeValue:SetText(tostring(value))
+    if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
+end)
+pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12))))
+y = y - 74
+_, y = CreateSectionHeader(generalContent, L.CHAT_ICON_HEADER, y - 4)
+local hideChatIconCheck
+hideChatIconCheck, y = CreateSettingsCheckbox(generalContent, L.HIDE_MY_CHAT_ICON, L.HIDE_MY_CHAT_ICON_DESC, y,
+    function() return iRCCharDB and iRCCharDB.hideChatIcon == true end,
+    function(value)
+        if iRC.GuildAnnouncements then iRC.GuildAnnouncements:SetHidden(value) end
     end)
 _, y = CreateSectionHeader(generalContent, L.IRC_MAIN_WINDOW_SETTINGS, y - 4)
 local scaleLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -613,36 +650,6 @@ _, y = CreateSettingsButton(generalContent, L.VERIFICATION_WINDOW_RESET, 240, y,
     verificationFrame:SetPoint("CENTER")
     iRC:Print(L.VERIFICATION_WINDOW_RESET_DONE)
 end, L.VERIFICATION_WINDOW_RESET_DESC)
-_, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
-local pinSizeLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-pinSizeLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
-pinSizeLabel:SetText(L.GUILD_MAP_PIN_SIZE)
-local pinSizeValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-pinSizeValue:SetPoint("LEFT", pinSizeLabel, "RIGHT", 10, 0)
-pinSizeValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-local pinSizeSlider = CreateFrame("Slider", "iRCGuildMapPinSizeSlider", generalContent, "OptionsSliderTemplate")
-pinSizeSlider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
-pinSizeSlider:SetWidth(240)
-pinSizeSlider:SetMinMaxValues(5, 15)
-pinSizeSlider:SetValueStep(1)
-_G[pinSizeSlider:GetName() .. "Low"]:SetText("5")
-_G[pinSizeSlider:GetName() .. "High"]:SetText("15")
-_G[pinSizeSlider:GetName() .. "Text"]:SetText("")
-SetSimpleTooltip(pinSizeSlider, L.GUILD_MAP_PIN_SIZE, L.GUILD_MAP_PIN_SIZE_DESC)
-pinSizeSlider:SetScript("OnValueChanged", function(_, value)
-    value = math.floor(value + 0.5)
-    pinSizeValue:SetText(tostring(value))
-    if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
-end)
-pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12))))
-y = y - 74
-_, y = CreateSectionHeader(generalContent, L.CHAT_ICON_HEADER, y - 4)
-local hideChatIconCheck
-hideChatIconCheck, y = CreateSettingsCheckbox(generalContent, L.HIDE_MY_CHAT_ICON, L.HIDE_MY_CHAT_ICON_DESC, y,
-    function() return iRCCharDB and iRCCharDB.hideChatIcon == true end,
-    function(value)
-        if iRC.GuildAnnouncements then iRC.GuildAnnouncements:SetHidden(value) end
-    end)
 generalContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -1823,6 +1830,10 @@ if iRC:IsTestAdmin() then
     testActivateGuildButton, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ACTIVATE_GUILD, 190, y - 4, function()
         iRC:ActivateGuildForTesting()
     end, L.TEST_ADMIN_ACTIVATE_GUILD_DESC)
+    _, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_CLEAR_REPORTS, 220, y, function()
+        local removed = iRC.RaceGrid and iRC.RaceGrid:ClearCachedReportsForTesting()
+        if removed then iRC:Print(iRC:Text("TEST_ADMIN_CLEAR_REPORTS_DONE", removed)) end
+    end, L.TEST_ADMIN_CLEAR_REPORTS_DESC)
     _, y = CreateSubcategoryHeader(adminContent, L.TEST_ADMIN_ANNOUNCEMENTS, y - 6)
     _, y = CreateInfoText(adminContent, L.TEST_ADMIN_ANNOUNCEMENTS_DESC, y, "GameFontDisableSmall")
     _, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_DEATH_MESSAGE, 190, y - 4, function()

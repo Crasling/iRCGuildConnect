@@ -1204,11 +1204,71 @@ local function senderIsKnown(sender)
     return connection and connection.members[iRC:NormalizeName(sender)] ~= nil
 end
 
+local function isUnchangedManagementPacket(parts)
+    if parts[2] ~= WIRE_VERSION then return false end
+    local kind = parts[1]
+    if kind ~= "GUILD_SETTINGS" and kind ~= "GUILD_BANKS" and kind ~= "GUILD_BANKS_CHUNK" and kind ~= "GF_TRADE_EXCEPTIONS"
+        and kind ~= "GUILD_HOMEPAGE_DESC" then return false end
+    local connection = iRC:GetConnection()
+    if not connection then return false end
+    if kind == "GUILD_SETTINGS" then
+        local saved = connection.guildNotifications
+        local timestamp, source = tonumber(parts[4]), tostring(parts[5] or "")
+        if not saved or not timestamp or timestamp <= 0 then return false end
+        local enabled = parts[3] == "1"
+        local mask = (saved.disableOfficerWarnings and 1 or 0) + (saved.disableWhisperWarnings and 2 or 0)
+            + (saved.disableGuildWarnings and 4 or 0)
+        return saved and timestamp == tonumber(saved.timestamp) and source == saved.source
+            and enabled == (saved.welcomeNewMembers == true) and tonumber(parts[7]) == mask
+            and tostring(parts[6] or ""):lower() == guildSettingsChecksum(enabled, timestamp, source)
+    elseif kind == "GUILD_BANKS_CHUNK" then
+        local saved = connection.guildBankExceptions
+        return saved and tonumber(parts[6]) == tonumber(saved.timestamp)
+            and tostring(parts[7] or "") == tostring(saved.source or "")
+            and tostring(parts[8] or ""):lower() == tostring(saved.checksum or ""):lower()
+            and tostring(parts[9] or "root"):lower() == tostring(saved.parentChecksum or "root"):lower()
+            and tostring(parts[10] or ""):lower() == tostring(saved.resolutions or ""):lower()
+    elseif kind == "GUILD_BANKS" then
+        local saved = connection.guildBankExceptions
+        return saved and tonumber(parts[4]) == tonumber(saved.timestamp)
+            and tostring(parts[5] or "") == tostring(saved.source or "")
+            and tostring(parts[6] or ""):lower() == tostring(saved.checksum or ""):lower()
+            and tostring(parts[3] or "") == guildBanksWire(saved.members)
+            and tostring(parts[7] or "root"):lower() == tostring(saved.parentChecksum or "root"):lower()
+            and tostring(parts[8] or ""):lower() == tostring(saved.resolutions or ""):lower()
+    elseif kind == "GF_TRADE_EXCEPTIONS" then
+        local saved = connection.guildFoundTradeExceptionSettings
+        if not saved or tonumber(parts[4]) ~= tonumber(saved.timestamp)
+            or tostring(parts[5] or "") ~= tostring(saved.source or "") then return false end
+        local mask, itemMasks = tradeExceptionsMask(saved), tradeItemMasks(saved)
+        return tonumber(parts[3]) == mask and tostring(parts[7] or "") == itemMasks
+            and tostring(parts[6] or ""):lower() == tradeExceptionsChecksum(mask, itemMasks, saved.timestamp, saved.source)
+    else
+        local saved = connection.guildHomepageDescription
+        return saved and tonumber(parts[4]) and tonumber(parts[4]) <= tonumber(saved.timestamp or 0)
+    end
+end
+
+local managementUIRefreshPending
+local function scheduleReceivedManagementUIRefresh()
+    if managementUIRefreshPending then return end
+    if not C_Timer or not C_Timer.After then
+        if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+        return
+    end
+    managementUIRefreshPending = true
+    C_Timer.After(0.4, function()
+        managementUIRefreshPending = nil
+        if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+    end)
+end
+
 local function handleMessage(prefix, message, distribution, sender)
     if prefix ~= iRC.Prefix or not iRC:IsInGuildConnection() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
+    if isUnchangedManagementPacket(parts) then return end
     if kind == "BANK_SNAPSHOT" then
         if distribution == "GUILD" and iRC:IsGuildConnectionActive() and iRC.GuildBankSnapshot then
             iRC.GuildBankSnapshot:Receive(message, sender)
@@ -1421,7 +1481,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 iRC:RecordManagementConnectionStatus("notifications", source, timestamp, sender, now)
                 if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.WELCOME = nil end
                 iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)
-                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+                scheduleReceivedManagementUIRefresh()
             elseif receiverIsGuildMaster and (timestamp > savedTimestamp or enabled ~= currentEnabled) then
                 -- The Guild Master confirms a delegated change by saving and
                 -- broadcasting a fresh GM-authored package.
@@ -1443,7 +1503,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 settings.source = source
                 iRC:RecordManagementConnectionStatus("notifications", source, timestamp, sender, now)
                 iRC:DebugMsg(iRC:Text("GUILD_SETTINGS_RECEIVED", sender), 3)
-                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+                scheduleReceivedManagementUIRefresh()
             end
         end
     elseif kind == "GUILD_HOMEPAGE_DESC" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
@@ -1463,7 +1523,7 @@ local function handleMessage(prefix, message, distribution, sender)
             and editedBy ~= "" and checksum == rulesBackupChecksum(value .. SEP .. timestamp .. SEP .. editedBy) then
             saved.text, saved.timestamp, saved.editedBy = value, math.floor(timestamp), editedBy
             iRC:RecordManagementConnectionStatus("homepage", editedBy, timestamp, sender, time())
-            if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            scheduleReceivedManagementUIRefresh()
             if iRC.RaceGrid then iRC.RaceGrid:BroadcastReport(false) end
         end
     elseif kind == "GUILD_HOMEPAGE_ICON" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
@@ -1584,7 +1644,7 @@ local function handleMessage(prefix, message, distribution, sender)
                     settings.source = iRC:GetPlayerName()
                     iRC:SendGuildFoundTradeExceptions(nil, true)
                 end
-                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+                scheduleReceivedManagementUIRefresh()
             end
         end
     elseif kind == "GUILD_BANKS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
@@ -1641,7 +1701,7 @@ local function handleMessage(prefix, message, distribution, sender)
                     iRC.PendingManagementConflicts.BANKS = nil
                 end
                 iRC:DebugMsg(iRC:Text("GUILD_BANKS_RECEIVED", sender), 3)
-                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+                scheduleReceivedManagementUIRefresh()
                 if iRC.Enforcement then iRC.Enforcement:Refresh() end
             end
             if valid and checksum == currentChecksum then
@@ -1960,6 +2020,23 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("PLAYER_GUILD_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 local startupSyncScheduled = false
+local routineManagementRelayUntil = 0
+local routineManagementRelayGuildKey
+local function scheduleRoutineManagementRelays()
+    local guildKey = iRC:GetGuildKey()
+    if not guildKey or (guildKey == routineManagementRelayGuildKey and GetTime() < routineManagementRelayUntil) then return end
+    routineManagementRelayGuildKey = guildKey
+    routineManagementRelayUntil = GetTime() + 18
+    local sends = {
+        function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildManagementSettings() end end,
+        function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildBankExceptions() end end,
+        function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildFoundTradeExceptions() end end,
+        function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildHomepageDescription() end end,
+    }
+    for index, sendUpdate in ipairs(sends) do
+        C_Timer.After((index - 1) * 5 + math.random() * 2, sendUpdate)
+    end
+end
 local function scheduleStartupSync()
     if startupSyncScheduled then return end
     startupSyncScheduled = true
@@ -1978,10 +2055,7 @@ local function scheduleStartupSync()
                 iRC:RequestGuildPresence(false, true)
             end
             iRC:RequestConnectionRules()
-            iRC:SendGuildManagementSettings()
-            iRC:SendGuildBankExceptions()
-            iRC:SendGuildFoundTradeExceptions()
-            iRC:SendGuildHomepageDescription()
+            scheduleRoutineManagementRelays()
         end
         sendStartupSync(1)
     end)
@@ -2001,10 +2075,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 iRC:SendConnectionRules()
             end)
             C_Timer.NewTicker(300, function()
-                iRC:SendGuildManagementSettings()
-                iRC:SendGuildBankExceptions()
-                iRC:SendGuildFoundTradeExceptions()
-                iRC:SendGuildHomepageDescription()
+                scheduleRoutineManagementRelays()
             end)
             C_Timer.NewTicker(60, function()
                 iRC:PollGuildPresence()
@@ -2024,13 +2095,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
             scheduleHello(nil, 5)
             if iRC:HasGuildPermission("presence") then iRC:PollGuildPresence() else iRC:RequestGuildPresence() end
             iRC:SendConnectionRules()
-            iRC:SendGuildManagementSettings()
-            iRC:SendGuildBankExceptions()
-            iRC:SendGuildFoundTradeExceptions()
-            iRC:SendGuildHomepageDescription()
+            scheduleRoutineManagementRelays()
         end)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
+        if prefix == iRC.Prefix and iRC:QueuePerformanceIncoming(message, function()
+            handleMessage(prefix, message, distribution, sender)
+        end) then return end
         handleMessage(prefix, message, distribution, sender)
     end
 end)

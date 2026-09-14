@@ -169,6 +169,70 @@ function iRC:LeaveLowTrafficMode()
     end)
 end
 
+function iRC:IsPerformanceMode()
+    local settings = self:GetSettings()
+    return settings.performanceMode == true or settings.lowCpuLeaderboard == true
+end
+
+local incomingPerformanceQueue = {}
+local incomingPerformanceScheduled = false
+local function drainIncomingPerformanceQueue()
+    local callback = table.remove(incomingPerformanceQueue, 1)
+    if callback then
+        local ok, err = pcall(callback)
+        if not ok and geterrorhandler then geterrorhandler()(err) end
+    end
+    if #incomingPerformanceQueue > 0 then
+        C_Timer.After(0.05, drainIncomingPerformanceQueue)
+    else
+        incomingPerformanceScheduled = false
+    end
+end
+
+function iRC:QueuePerformanceIncoming(message, callback)
+    if not self:IsPerformanceMode() or not C_Timer or not C_Timer.After then return false end
+    local kind = type(message) == "string" and message:match("^([A-Z][A-Z0-9_]*)") or ""
+    if kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
+        or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
+        or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
+        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" or kind == "MAP_LAYER" then return false end
+    if #incomingPerformanceQueue >= 256 then return false end
+    incomingPerformanceQueue[#incomingPerformanceQueue + 1] = callback
+    if not incomingPerformanceScheduled then
+        incomingPerformanceScheduled = true
+        C_Timer.After(0.05, drainIncomingPerformanceQueue)
+    end
+    return true
+end
+
+local outgoingPerformanceQueue = {}
+local outgoingPerformanceScheduled = false
+local function sendAddonTrafficNow(prefix, message, distribution, target)
+    local sent
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
+    elseif SendAddonMessage then
+        sent = SendAddonMessage(prefix, message, distribution, target)
+    end
+    if sent and iRC.TrafficMonitorEnabled then iRC:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
+    return sent or false
+end
+
+local function drainOutgoingPerformanceQueue()
+    local packet = table.remove(outgoingPerformanceQueue, 1)
+    if packet then
+        local ok, err
+        if type(packet) == "function" then ok, err = pcall(packet)
+        else ok, err = pcall(sendAddonTrafficNow, packet[1], packet[2], packet[3], packet[4]) end
+        if not ok and geterrorhandler then geterrorhandler()(err) end
+    end
+    if #outgoingPerformanceQueue > 0 then
+        C_Timer.After(0.08, drainOutgoingPerformanceQueue)
+    else
+        outgoingPerformanceScheduled = false
+    end
+end
+
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
     message = tostring(message or "")
     if #message > 255 then
@@ -183,14 +247,21 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         end)
         return true
     end
-    local sent
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-        sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
-    elseif SendAddonMessage then
-        sent = SendAddonMessage(prefix, message, distribution, target)
+    local kind = message:match("^([A-Z][A-Z0-9_]*)") or ""
+    local urgent = kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
+        or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
+        or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
+        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" or kind == "MAP_LAYER"
+    if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After
+        and #outgoingPerformanceQueue < 256 then
+        outgoingPerformanceQueue[#outgoingPerformanceQueue + 1] = { prefix, message, distribution, target }
+        if not outgoingPerformanceScheduled then
+            outgoingPerformanceScheduled = true
+            C_Timer.After(0.08, drainOutgoingPerformanceQueue)
+        end
+        return true
     end
-    if sent and self.TrafficMonitorEnabled then self:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
-    return sent or false
+    return sendAddonTrafficNow(prefix, message, distribution, target)
 end
 
 local trafficBuckets = { incoming = {}, outgoing = {} }
@@ -375,6 +446,8 @@ local DEFAULT_SETTINGS = {
     showGuildMap = true,
     guildMapPinSize = 12,
     shareGuildMapPosition = true,
+    lowCpuLeaderboard = false,
+    performanceMode = false,
 }
 
 iRC.DefaultConnectionRules = {

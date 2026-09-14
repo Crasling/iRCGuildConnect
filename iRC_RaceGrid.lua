@@ -92,6 +92,21 @@ local function fullNameKey(name)
     return string.lower(tostring(name or ""))
 end
 
+local ownGuildRoster, ownGuildKey, ownGuildSenders = nil, nil, {}
+local function isOwnGuildSender(sender)
+    if not iRC.GetGuildRosterSnapshot or not iRC.GetGuildKey then return false end
+    local guildKey = iRC:GetGuildKey()
+    if not guildKey then return false end
+    local roster = iRC:GetGuildRosterSnapshot()
+    if roster ~= ownGuildRoster or guildKey ~= ownGuildKey then
+        ownGuildRoster, ownGuildKey, ownGuildSenders = roster, guildKey, {}
+        for _, member in ipairs(roster) do
+            if member.name then ownGuildSenders[iRC:NormalizeName(member.name)] = true end
+        end
+    end
+    return ownGuildSenders[iRC:NormalizeName(sender)] == true
+end
+
 local function validNumber(value, minimum, maximum, preserveFraction)
     value = tonumber(value)
     if not value or value ~= value or value < minimum or value > maximum then return nil end
@@ -576,6 +591,112 @@ end
 
 local cacheRequests, observedCacheOffers, offeredCachePayloads, incomingCacheTransfers = {}, {}, {}, {}
 
+local reportWorkQueue, reportWorkByKey = {}, {}
+local reportWorkScheduled, reportWorkDirty = false, false
+local REPORT_WORK_SPACING = 0.2
+local MAX_REPORT_WORK = 64
+local handleMessage
+local cacheChunkWorkQueue = {}
+local cacheChunkWorkScheduled = false
+local MAX_CACHE_CHUNK_WORK = MAX_CACHE_PACKAGES * MAX_CACHE_PARTS
+
+local function processNextCacheChunks()
+    for _ = 1, 2 do
+        local work = table.remove(cacheChunkWorkQueue, 1)
+        if not work then break end
+        handleMessage(work.prefix, work.message, work.sender, work.distribution, true)
+    end
+    cacheChunkWorkScheduled = false
+    if #cacheChunkWorkQueue > 0 then
+        cacheChunkWorkScheduled = true
+        C_Timer.After(0.03, processNextCacheChunks)
+    end
+end
+
+local function queueCacheChunk(prefix, message, sender, distribution)
+    if #cacheChunkWorkQueue >= MAX_CACHE_CHUNK_WORK then return end
+    cacheChunkWorkQueue[#cacheChunkWorkQueue + 1] = {
+        prefix = prefix, message = message, sender = sender, distribution = distribution,
+    }
+    if not cacheChunkWorkScheduled then
+        cacheChunkWorkScheduled = true
+        C_Timer.After(0.03, processNextCacheChunks)
+    end
+end
+
+local function processNextReportWork()
+    local work = table.remove(reportWorkQueue, 1)
+    if work then
+        reportWorkByKey[work.key] = nil
+        work.run()
+    end
+    reportWorkScheduled = false
+    if #reportWorkQueue > 0 and C_Timer and C_Timer.After then
+        reportWorkScheduled = true
+        C_Timer.After(REPORT_WORK_SPACING, processNextReportWork)
+    elseif reportWorkDirty then
+        reportWorkDirty = false
+        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    end
+end
+
+local function queueReportWork(key, callback)
+    if not iRC:IsPerformanceMode() or not C_Timer or not C_Timer.After then
+        callback()
+        return
+    end
+    local existing = reportWorkByKey[key]
+    if existing then
+        existing.run = callback
+        return
+    end
+    if #reportWorkQueue >= MAX_REPORT_WORK then
+        local dropped = table.remove(reportWorkQueue, 1)
+        if dropped then reportWorkByKey[dropped.key] = nil end
+    end
+    local work = { key = key, run = callback }
+    reportWorkQueue[#reportWorkQueue + 1] = work
+    reportWorkByKey[key] = work
+    if not reportWorkScheduled then
+        reportWorkScheduled = true
+        C_Timer.After(REPORT_WORK_SPACING, processNextReportWork)
+    end
+end
+
+local function storeIncomingReport(report)
+    local lowCpu = iRC:IsPerformanceMode() and C_Timer and C_Timer.After
+    local stored = RaceGrid:StoreGuildReport(report, lowCpu)
+    if stored and lowCpu then reportWorkDirty = true end
+    return stored
+end
+
+function RaceGrid:ClearCachedReportsForTesting()
+    if not iRC:IsTestAdmin() then return nil end
+    local servers = iRCDB and iRCDB.globalRaceGrid and iRCDB.globalRaceGrid.servers
+    local removed = 0
+    if type(servers) == "table" then
+        for _, serverStore in pairs(servers) do
+            if type(serverStore) == "table" then
+                if type(serverStore.guildReports) == "table" then
+                    for _ in pairs(serverStore.guildReports) do removed = removed + 1 end
+                end
+                serverStore.guildReports = {}
+                serverStore.guildActivity = {}
+            end
+        end
+    end
+    wipe(reportWorkQueue)
+    wipe(reportWorkByKey)
+    reportWorkDirty = false
+    wipe(cacheChunkWorkQueue)
+    wipe(incomingChunks)
+    wipe(incomingCacheTransfers)
+    wipe(cacheRequests)
+    setCacheUpdating(false)
+    if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    return removed
+end
+
 local function cleanCacheState()
     local now = GetTime()
     for requestId, request in pairs(cacheRequests) do
@@ -751,15 +872,17 @@ local function handleCacheMessage(parts, sender, distribution)
         incomingCacheTransfers[key] = nil
         local payload = hexToBytes(table.concat(transfer.parts))
         if not payload or payloadChecksum(payload) ~= checksum then return true end
-        local report = parseGuildReport(split(payload))
-        if not report or normalizeGuildName(report.guildName) ~= normalizeGuildName(guildName)
-            or tonumber(report.timestamp) ~= selected.timestamp
-            or time() - (tonumber(report.timestamp) or 0) > REPORT_MAX_AGE then return true end
-        report.cacheHop, report.relayedBy = 1, sender
-        if RaceGrid:StoreGuildReport(report) then
-            iRC:CheckForNewVersion(report.addonVersion)
-            iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REPORT_RECEIVED", report.guildName, sender), 3)
-        end
+        queueReportWork("cache:" .. normalizeGuildName(guildName), function()
+            local report = parseGuildReport(split(payload))
+            if not report or normalizeGuildName(report.guildName) ~= normalizeGuildName(guildName)
+                or tonumber(report.timestamp) ~= selected.timestamp
+                or time() - (tonumber(report.timestamp) or 0) > REPORT_MAX_AGE then return end
+            report.cacheHop, report.relayedBy = 1, sender
+            if storeIncomingReport(report) then
+                iRC:CheckForNewVersion(report.addonVersion)
+                iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REPORT_RECEIVED", report.guildName, sender), 3)
+            end
+        end)
         request.selected[normalizeGuildName(guildName)] = nil
         local pending
         for _ in pairs(request.selected) do pending = true; break end
@@ -772,9 +895,22 @@ local function handleCacheMessage(parts, sender, distribution)
     return false
 end
 
-local function handleMessage(prefix, message, sender, distribution)
+handleMessage = function(prefix, message, sender, distribution, queued)
     if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
+    if distribution == "CHANNEL" and isOwnGuildSender(sender) then return end
+    if not queued and distribution == "WHISPER" and message:match("^CACHE_DATA\t")
+        and iRC:IsPerformanceMode() and C_Timer and C_Timer.After then
+        queueCacheChunk(prefix, message, sender, distribution)
+        return
+    end
+    if not queued and distribution == "CHANNEL" and message:match("^GUILD_REPORT\t")
+        and iRC:IsPerformanceMode() and C_Timer and C_Timer.After then
+        queueReportWork("public:" .. iRC:NormalizeName(sender), function()
+            handleMessage(prefix, message, sender, distribution, true)
+        end)
+        return
+    end
     if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC"))
         and iRC:DeferLowTraffic("traffic:racegrid-report:" .. iRC:NormalizeName(sender), function()
             handleMessage(prefix, message, sender, distribution)
@@ -802,8 +938,12 @@ local function handleMessage(prefix, message, sender, distribution)
     -- the payload uses the character's short name. Compare them using iRC's
     -- canonical character-name form without weakening the sender check.
     if not report or iRC:NormalizeName(report.name) ~= iRC:NormalizeName(sender) then return end
+    if distribution == "CHANNEL" then
+        local ownGuildName = GetGuildInfo and GetGuildInfo("player")
+        if ownGuildName and normalizeGuildName(report.guildName) == normalizeGuildName(ownGuildName) then return end
+    end
     iRC:CheckForNewVersion(report.addonVersion)
-    RaceGrid:StoreGuildReport(report)
+    storeIncomingReport(report)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel60 or 0,
         report.activeMembers or 0, report.activePlayers, report.members), 3)
 end
@@ -887,6 +1027,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local channelName = select(9, ...)
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
+            -- Same-guild reports are already assembled locally; skip their
+            -- public chunks before hex decoding or debug logging.
+            if isOwnGuildSender(sender) then return end
             local decoded = decodeChannelWire(message, sender)
             if decoded then handleMessage(PREFIX, decoded, sender, "CHANNEL") end
         end
