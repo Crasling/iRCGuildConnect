@@ -6,6 +6,7 @@ local GuildMap = { positions = {}, pins = {}, pool = {} }
 iRC.GuildMap = GuildMap
 
 local POSITION_VERSION = "1"
+local LAYER_VERSION = "1"
 local POSITION_LIFETIME = 90
 local LAYER_LIFETIME = 60
 local localLayer
@@ -101,11 +102,15 @@ end
 local function observeLayer(unit)
     if not unit or not C_Map then return end
     local guid = UnitGUID(unit)
-    local zoneId = guid and guid:match("^Creature%-%d+%-%d+%-%d+%-%d+%-(%d+)%-")
+    -- Creature GUID: Creature-0-server-instance-zoneUID-npcID-spawnUID.
+    -- The zone UID identifies the layer; the following number is only the NPC type.
+    local zoneId = guid and guid:match("^Creature%-%d+%-%d+%-%d+%-(%d+)%-%d+%-")
     local mapId = C_Map.GetBestMapForUnit("player")
     if zoneId and mapId then
         localLayer = { signature = tonumber(zoneId), mapId = mapId, seenAt = GetTime() }
+        return true
     end
+    return false
 end
 
 local function currentLayerSignature(mapId)
@@ -135,7 +140,7 @@ local function acquirePin(parent)
     local pin = table.remove(GuildMap.pool)
     if not pin then
         pin = CreateFrame("Frame", nil, parent)
-        local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12)))
+        local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 8)))
         pin:SetSize(size, size)
         pin:SetFrameStrata("HIGH")
         pin.border = pin:CreateTexture(nil, "BACKGROUND")
@@ -178,7 +183,7 @@ local function acquirePin(parent)
         end)
     end
     pin:SetParent(parent)
-    local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12)))
+    local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 8)))
     pin:SetSize(size, size)
     pin:Show()
     return pin
@@ -253,13 +258,18 @@ function GuildMap:BroadcastPosition()
     local x, y = position:GetXY()
     if not x or not y or (x == 0 and y == 0) then return false end
     local xWire, yWire = math.floor(x * 10000 + 0.5), math.floor(y * 10000 + 0.5)
-    observeLayer("target")
-    observeLayer("mouseover")
+    local foundLayer = observeLayer("target") or observeLayer("mouseover") or observeLayer("npc")
+    if not foundLayer and C_NamePlate and C_NamePlate.GetNamePlates then
+        local plates = C_NamePlate.GetNamePlates() or {}
+        for index = 1, math.min(#plates, 10) do
+            if observeLayer(plates[index].namePlateUnitToken) then break end
+        end
+    end
     local message = table.concat({ "MAP_POS", POSITION_VERSION, tostring(mapId), tostring(xWire), tostring(yWire) }, "\t")
     local sent = iRC:SendAddonTraffic(iRC.Prefix, message, "GUILD")
     local signature = currentLayerSignature(mapId)
     if sent and signature then
-        iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "MAP_LAYER", "1", tostring(mapId), tostring(signature) }, "\t"), "GUILD")
+        iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "MAP_LAYER", LAYER_VERSION, tostring(mapId), tostring(signature) }, "\t"), "GUILD")
     end
     return sent
 end
@@ -352,7 +362,7 @@ function GuildMap:SetShown(enabledValue)
 end
 
 function GuildMap:SetPinSize(value)
-    value = math.max(5, math.min(15, math.floor(tonumber(value) or 12)))
+    value = math.max(5, math.min(15, math.floor(tonumber(value) or 8)))
     iRC:GetSettings().guildMapPinSize = value
     for _, pin in pairs(self.pins) do pin:SetSize(value, value) end
     self:UpdatePins()
@@ -399,7 +409,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if layerVersion then
             local existing = GuildMap.positions[iRC:NormalizeName(sender)]
             layerMapId, layerSignature = tonumber(layerMapId), tonumber(layerSignature)
-            if layerVersion == "1" and existing and existing.mapId == layerMapId
+            if layerVersion == LAYER_VERSION and existing and existing.mapId == layerMapId
                 and layerSignature and layerSignature > 0 and GetTime() - existing.receivedAt <= 5 then
                 existing.layerSignature = layerSignature
                 GuildMap:UpdatePins()

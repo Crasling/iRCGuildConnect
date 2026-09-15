@@ -5,13 +5,10 @@ local L = iRC.L
 
 SLASH_IRC1 = "/irc"
 SlashCmdList.IRC = function(message)
-    local command, argument = (message or ""):match("^(%S*)%s*(.-)$")
+    local command = (message or ""):match("^(%S*)")
     command = string.lower(command or "")
     if command == "" or command == "main" then
         iRC.MainUI:Open(nil, true)
-    elseif command == "inspect" and argument ~= "" then
-        iRC.MainUI:Open(argument, true)
-        iRC:RequestInspection(argument)
     elseif command == "options" or command == "settings" then
         iRC:OpenOptions()
     elseif command == "guild" or command == "dashboard" or command == "overview" then

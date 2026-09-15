@@ -5,7 +5,6 @@ if not iRC then return end
 local SEP = "\t"
 local WIRE_VERSION = "9"
 local MINIMUM_RULESET_VERSION = { 0, 4, 1 }
-local requestNumber = 0
 local SECONDS_PER_DAY = 86400
 local lastPresencePollAt = 0
 local ACTIVATION_REQUEST_COOLDOWN = 10
@@ -90,6 +89,7 @@ local function profileWireParts(profile)
         profile.hideChatIcon and "1" or "0",
         profile.currentGroupRuleViolation and "1" or "0",
         profile.deadGuid or "",
+        "1", -- Current death/ghost state is authoritative; older clients omit this field.
     }
 end
 
@@ -117,6 +117,7 @@ local function profileFromWire(parts, startIndex)
         hideChatIcon = parts[startIndex + 19] == "1",
         currentGroupRuleViolation = parts[startIndex + 20] == "1",
         deadGuid = parts[startIndex + 21] or "",
+        deathStateKnown = parts[startIndex + 22] == "1",
     }
 end
 
@@ -206,7 +207,8 @@ function iRC:GetLocalProfile()
         shareGlobalRaceGrid = true,
         testGuildMasterOverride = self:IsTestAdminGuildMaster(),
         hideChatIcon = iRCCharDB and iRCCharDB.hideChatIcon == true,
-        deadGuid = iRCCharDB and iRCCharDB.deadGuid == UnitGUID("player") and iRCCharDB.deadGuid or "",
+        deadGuid = UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") and (UnitGUID("player") or "") or "",
+        deathStateKnown = true,
         currentGroupRuleViolation = self.Enforcement and self.Enforcement.IsCurrentGroupViolation
             and self.Enforcement:IsCurrentGroupViolation() or false,
         lastSeen = time(),
@@ -220,13 +222,11 @@ function iRC:StoreMemberProfile(profile)
     if not connection then return end
     local key = self:NormalizeName(profile.name)
     local stored = connection.members[key]
-    -- Death belongs to the character GUID, not to a particular profile
-    -- packet. Older clients do not send deadGuid, so their refreshes must not
-    -- resurrect a known-dead character with the same GUID. A replacement
-    -- character using the same name has a new GUID and starts clean.
+    -- Older clients do not report current resurrection state. Preserve their
+    -- known death badge, but let updated clients explicitly clear it.
     if stored and type(profile.guid) == "string" and profile.guid ~= ""
         and stored.guid == profile.guid and stored.deadGuid == profile.guid
-        and profile.deadGuid ~= profile.guid then
+        and profile.deadGuid ~= profile.guid and not profile.deathStateKnown then
         profile.deadGuid = profile.guid
     end
     if stored and stored ~= profile then
@@ -1043,14 +1043,8 @@ function iRC:PollGuildPresence()
     return self:RequestGuildPresence(true)
 end
 
-function iRC:RequestInspection(targetName)
-    if not self:IsGuildConnectionActive() or type(targetName) ~= "string" or targetName == "" then return false end
-    requestNumber = requestNumber + 1
-    send(self.Prefix, table.concat({ "INSPECT_REQUEST", WIRE_VERSION, tostring(time()) .. "-" .. tostring(requestNumber) }, SEP), "WHISPER", targetName)
-    return true
-end
-
 function iRC:SendInspection(targetName, requestId)
+    -- Reply to older iRC clients that still use manual inspection.
     if not self:IsGuildConnectionActive() or not requestId then return end
     send(self.Prefix, addProfileParts({ "INSPECT_DATA", WIRE_VERSION, requestId }, self:GetLocalProfile()), "WHISPER", targetName)
 end
@@ -1332,6 +1326,7 @@ local function handleMessage(prefix, message, distribution, sender)
         if iRC:IsGuildConnectionActive() then
             iRC:SendConnectionRules(sender)
             iRC:SendGuildManagementSettings(sender)
+            iRC:SendGuildContacts(sender)
             iRC:SendGuildBankExceptions(sender)
             iRC:SendGuildFoundTradeExceptions(sender)
             iRC:SendGuildHomepageDescription(sender)
@@ -1558,6 +1553,7 @@ local function handleMessage(prefix, message, distribution, sender)
             connection.guildContactsTimestamp, connection.guildContactsSource = math.floor(timestamp), source
             iRC:RecordManagementConnectionStatus("homepage", source, timestamp, sender, time())
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            if iRC.RaceGrid then iRC.RaceGrid:BroadcastReport(false) end
         end
     elseif kind == "GUILD_CONTACT_NOTE" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
@@ -2032,6 +2028,7 @@ local function scheduleRoutineManagementRelays()
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildBankExceptions() end end,
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildFoundTradeExceptions() end end,
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildHomepageDescription() end end,
+        function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildContacts() end end,
     }
     for index, sendUpdate in ipairs(sends) do
         C_Timer.After((index - 1) * 5 + math.random() * 2, sendUpdate)

@@ -6,7 +6,7 @@ local Announcements = {}
 iRC.GuildAnnouncements = Announcements
 local ICON_PREFIX = "iRCIconV1"
 local ICON_WIRE_VERSION = "1"
-local PUBLIC_ICON_TTL = 300
+local PUBLIC_ICON_TTL = 30
 local PUBLIC_REQUEST_COOLDOWN = 300
 local publicIcons, pendingRequests, queuedRequests, queuedNames = {}, {}, {}, {}
 local lastReplyAt = {}
@@ -275,7 +275,7 @@ local function canAnnounce(ruleKey)
 end
 
 function Announcements:AnnounceDeath()
-    if not canAnnounce("disableGuildDeathMessage") then return false end
+    if not iRC:IsOfficialHardcoreRealm() or not canAnnounce("disableGuildDeathMessage") then return false end
     iRCCharDB = iRCCharDB or {}
     local now = time()
     if now - (tonumber(iRCCharDB.lastGuildDeathAnnouncementAt) or 0) < 30 then return false end
@@ -304,14 +304,19 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
     local icon, iconKind
     if message == iRC:Text("CHAT_ANNOUNCE_DEATH") or message == iRC:Text("CHAT_ANNOUNCE_TEST_DEATH") then icon, iconKind = Announcements.Icons.death, "death"
     elseif message == iRC:Text("CHAT_ANNOUNCE_LEVEL60") or message == iRC:Text("CHAT_ANNOUNCE_TEST_LEVEL60") then icon, iconKind = Announcements.Icons.level60, "level60" end
+    local hideAll = iRCCharDB and iRCCharDB.hideAllChatIcons == true
+    if hideAll and not icon then return false end
     local size = 16
     if chatFrame and chatFrame.GetFont then
         local _, fontSize = chatFrame:GetFont()
         size = math.max(12, math.floor((tonumber(fontSize) or 14) * 1.2))
     end
-    local badge, badgeKind = Announcements:GetDefaultChatIcon(author)
-    if not badge and getRosterRank(author) == nil then
-        badge, badgeKind = Announcements:GetPublicChatIcon(author)
+    local badge, badgeKind
+    if not hideAll then
+        badge, badgeKind = Announcements:GetDefaultChatIcon(author)
+        if not badge and getRosterRank(author) == nil then
+            badge, badgeKind = Announcements:GetPublicChatIcon(author)
+        end
     end
     if icon and iconKind ~= badgeKind then message = message .. " " .. iconLink(iconKind, icon, size) end
     if badge then message = iconLink(badgeKind, badge, size) .. " " .. message end
@@ -323,8 +328,24 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_DEAD")
+frame:RegisterEvent("PLAYER_ALIVE")
+frame:RegisterEvent("PLAYER_UNGHOST")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:RegisterEvent("CHAT_MSG_ADDON")
+local deathStateSharePending = false
+local function shareCurrentDeathState()
+    if deathStateSharePending then return end
+    local function sendProfile()
+        deathStateSharePending = false
+        if iRC:IsGuildConnectionActive() then iRC:SendHello() end
+    end
+    if C_Timer and C_Timer.After then
+        deathStateSharePending = true
+        C_Timer.After(0.2, sendProfile)
+    else
+        sendProfile()
+    end
+end
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
@@ -342,13 +363,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
             end
         end
     elseif event == "PLAYER_DEAD" then
-        local guid = UnitGUID("player")
-        if guid and guid ~= "" then
-            iRCCharDB = iRCCharDB or {}
-            iRCCharDB.deadGuid = guid
-            if iRC:IsGuildConnectionActive() then iRC:SendHello() end
-        end
+        shareCurrentDeathState()
         Announcements:AnnounceDeath()
+    elseif event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
+        shareCurrentDeathState()
     elseif event == "PLAYER_LEVEL_UP" then
         Announcements:AnnounceLevel60(...)
     elseif event == "CHAT_MSG_ADDON" then

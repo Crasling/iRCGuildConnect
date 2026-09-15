@@ -510,12 +510,6 @@ function Dashboard:Create()
             local message = ruleViolationWhisper(member)
             if message and SendChatMessage then SendChatMessage(message, "WHISPER", nil, displayMemberName(targetName)) end
         end },
-        { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_REQUEST_IRC", run = function(targetName)
-            if iRC:IsGuildConnectionActive() then
-                iRC:RequestInspection(targetName)
-                iRC:Print(iRC:Text("MEMBER_REQUEST_SENT", displayMemberName(targetName)))
-            end
-        end },
         { group = "MEMBER_MENU_GROUP_DECISIONS", label = "MEMBER_MENU_APPROVE", gmOnly = true, maxLevelOnly = true, tone = "approve", run = function(targetName)
             iRC.RaceLockedSync:SetOverride(targetName, true, true)
         end },
@@ -1171,20 +1165,22 @@ function Dashboard:Refresh()
 end
 
 function Dashboard:Open()
+    if not iRC:CanOpenPanel() then return false end
     local frame = self:Create()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     iRC:RefreshGuildRoster()
     self:Refresh()
     frame:Show()
     self:RequestStalePresenceIfShown()
+    return true
 end
 
 function Dashboard:Toggle()
-    local frame = self:Create()
-    if frame:IsShown() then
+    local frame = self.frame
+    if frame and frame:IsShown() then
         frame:Hide()
     else
-        self:Open()
+        return self:Open()
     end
 end
 

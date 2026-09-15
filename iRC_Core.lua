@@ -45,6 +45,11 @@ function iRC:DisableLegacyAddon()
     return true
 end
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
+function iRC:IsOfficialHardcoreRealm()
+    local hardcoreRule = Enum and Enum.GameRule and Enum.GameRule.HardcoreRuleset
+    return hardcoreRule ~= nil and C_GameRules and C_GameRules.IsGameRuleActive
+        and C_GameRules.IsGameRuleActive(hardcoreRule) == true or false
+end
 local gameTocNumber = tonumber(iRC.GameTocVersion) or 0
 if gameTocNumber >= 120000 then
     iRC.GameVersionName = "Retail WoW"
@@ -118,6 +123,15 @@ function iRC:IsLowTrafficMode()
         or (InCombatLockdown and InCombatLockdown())
 end
 
+function iRC:CanOpenPanel()
+    if (UnitAffectingCombat and UnitAffectingCombat("player"))
+        or (InCombatLockdown and InCombatLockdown()) then
+        self:Print(self:Text("PANEL_CANNOT_USE_IN_COMBAT"))
+        return false
+    end
+    return true
+end
+
 function iRC:DeferLowTraffic(key, callback)
     if not self:IsLowTrafficMode() then return false end
     if type(key) == "string" and type(callback) == "function" then
@@ -170,8 +184,7 @@ function iRC:LeaveLowTrafficMode()
 end
 
 function iRC:IsPerformanceMode()
-    local settings = self:GetSettings()
-    return settings.performanceMode == true or settings.lowCpuLeaderboard == true
+    return true
 end
 
 local incomingPerformanceQueue = {}
@@ -444,10 +457,8 @@ local DEFAULT_SETTINGS = {
     showOfficerSettingsForTesting = false,
     hideAttentionReminders = true,
     showGuildMap = true,
-    guildMapPinSize = 12,
+    guildMapPinSize = 8,
     shareGuildMapPosition = true,
-    lowCpuLeaderboard = false,
-    performanceMode = false,
 }
 
 iRC.DefaultConnectionRules = {
@@ -595,7 +606,8 @@ function iRC:CheckForNewVersion(version)
 end
 
 function iRC:PrintLoaded()
-    print(self:Text("ADDON_PREFIX") .. self:Text("LOADED", self.DisplayName, self:GetDisplayVersion()))
+    print(self:Text("ADDON_PREFIX") .. self:Text("LOADED", self.Title,
+        self.GameVersionName, self:GetDisplayVersion()))
 end
 
 function iRC:CloseWindowsExcept(keptFrame)
@@ -1291,6 +1303,10 @@ function iRC:FormatPlayerName(name)
     return name
 end
 
+function iRC:FormatInviteContactName(name)
+    return (self:FormatPlayerName(name):gsub("^%l", string.upper))
+end
+
 function iRC:GetGuildBankExceptionText()
     local connection = self:GetConnection()
     local names = {}
@@ -1498,6 +1514,7 @@ function iRC:SetGuildContacts(value)
     end
     if self.SendGuildContactMetadata then self:SendGuildContactMetadata(nil, nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
     return true
 end
 

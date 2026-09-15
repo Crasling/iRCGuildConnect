@@ -54,7 +54,9 @@ local function BuildActiveRulesExplanation()
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_GROUPS", rules.guildGroupsMinimumLevel or 1) end
     if rules.guildMapEnabled then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_MAP") end
     if rules.disableGuildLevel60Message then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_NO_LEVEL60_MESSAGE") end
-    if rules.disableGuildDeathMessage then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_NO_DEATH_MESSAGE") end
+    if iRC:IsOfficialHardcoreRealm() and rules.disableGuildDeathMessage then
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_NO_DEATH_MESSAGE")
+    end
     if #lines == 0 then return iRC:Text("RULES_READ_ONLY_NONE") end
     for index, line in ipairs(lines) do lines[index] = "|cffffa31a•|r " .. line end
     return table.concat(lines, "\n\n")
@@ -546,13 +548,6 @@ end
 
 local y = -12
 local debugModeCheck
-_, y = CreateSectionHeader(generalContent, L.LOW_CPU_MODE_HEADER, y - 4)
-_, y = CreateSettingsCheckbox(generalContent, L.LOW_CPU_MODE, L.LOW_CPU_MODE_DESC, y,
-    function() return iRC:IsPerformanceMode() end,
-    function(value)
-        iRC:GetSettings().performanceMode = value and true or false
-        iRC:GetSettings().lowCpuLeaderboard = false
-    end)
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
 minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
@@ -582,7 +577,7 @@ pinSizeSlider:SetScript("OnValueChanged", function(_, value)
     pinSizeValue:SetText(tostring(value))
     if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
 end)
-pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12))))
+pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 8))))
 y = y - 74
 _, y = CreateSectionHeader(generalContent, L.CHAT_ICON_HEADER, y - 4)
 local hideChatIconCheck
@@ -590,6 +585,13 @@ hideChatIconCheck, y = CreateSettingsCheckbox(generalContent, L.HIDE_MY_CHAT_ICO
     function() return iRCCharDB and iRCCharDB.hideChatIcon == true end,
     function(value)
         if iRC.GuildAnnouncements then iRC.GuildAnnouncements:SetHidden(value) end
+    end)
+local hideAllChatIconsCheck
+hideAllChatIconsCheck, y = CreateSettingsCheckbox(generalContent, L.HIDE_ALL_CHAT_ICONS, L.HIDE_ALL_CHAT_ICONS_DESC, y,
+    function() return iRCCharDB and iRCCharDB.hideAllChatIcons == true end,
+    function(value)
+        iRCCharDB = iRCCharDB or {}
+        iRCCharDB.hideAllChatIcons = value and true or false
     end)
 _, y = CreateSectionHeader(generalContent, L.IRC_MAIN_WINDOW_SETTINGS, y - 4)
 local scaleLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -788,10 +790,12 @@ raceRuleUI.level60Message, y = CreateSettingsCheckbox(connectionContent,
     L.DISABLE_GUILD_LEVEL60_MESSAGE, L.DISABLE_GUILD_LEVEL60_MESSAGE_DESC, y,
     function() return iRC:GetConnectionRules().disableGuildLevel60Message end,
     function(value) iRC:SetConnectionRule("disableGuildLevel60Message", value) end, nil, true)
+local deathMessageTopY = y
 raceRuleUI.deathMessage, y = CreateSettingsCheckbox(connectionContent,
     L.DISABLE_GUILD_DEATH_MESSAGE, L.DISABLE_GUILD_DEATH_MESSAGE_DESC, y,
     function() return iRC:GetConnectionRules().disableGuildDeathMessage end,
     function(value) iRC:SetConnectionRule("disableGuildDeathMessage", value) end, nil, true)
+local deathMessageBottomY = y
 connectionContent:SetHeight(math.abs(y) + 20)
 
 raceRuleUI.readOnly = CreateFrame("Frame", nil, connectionContent, "BackdropTemplate")
@@ -1084,7 +1088,7 @@ for index = 1, 5 do
     button.highlight:SetAllPoints()
     button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
     button:SetScript("OnClick", function(self)
-        guildContactsEdit:SetText(iRC:FormatPlayerName(self.fullName or ""))
+        guildContactsEdit:SetText(iRC:FormatInviteContactName(self.fullName or ""))
         guildContactsEdit:SetCursorPosition(#guildContactsEdit:GetText())
         guildContactSuggestionFrame:Hide()
         guildContactsEdit:SetFocus()
@@ -1097,7 +1101,7 @@ local function updateGuildContactSuggestions(text)
     if text ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
         for rosterIndex = 1, GetNumGuildMembers(true) do
             local rosterName = GetGuildRosterInfo(rosterIndex)
-            local displayName = rosterName and iRC:FormatPlayerName(rosterName)
+            local displayName = rosterName and iRC:FormatInviteContactName(rosterName)
             if displayName and not current:find(rosterName, 1, true) and displayName:lower():find(text, 1, true) then
                 matches[#matches + 1] = { fullName = rosterName, displayName = displayName }
             end
@@ -1134,11 +1138,21 @@ local function addGuildContact()
     end
 end
 guildContactsEdit:SetScript("OnEnterPressed", addGuildContact)
-guildContactsEdit:SetScript("OnTextChanged", function(self) updateGuildContactSuggestions(self:GetText()) end)
+guildContactsEdit:SetScript("OnTextChanged", function(self)
+    local value = self:GetText()
+    local display = value:gsub("^%l", string.upper)
+    if display ~= value then
+        local cursor = self:GetCursorPosition()
+        self:SetText(display)
+        self:SetCursorPosition(cursor)
+        return
+    end
+    updateGuildContactSuggestions(value)
+end)
 guildContactsEdit:SetScript("OnTabPressed", function(self)
     local first = guildContactSuggestionButtons[1]
     if first and first:IsShown() and first.fullName then
-        self:SetText(iRC:FormatPlayerName(first.fullName)); self:SetCursorPosition(#self:GetText()); guildContactSuggestionFrame:Hide()
+        self:SetText(iRC:FormatInviteContactName(first.fullName)); self:SetCursorPosition(#self:GetText()); guildContactSuggestionFrame:Hide()
     end
 end)
 guildContactsEdit:SetScript("OnEscapePressed", function(self) guildContactSuggestionFrame:Hide(); self:ClearFocus() end)
@@ -2008,6 +2022,7 @@ end
 
 local function RefreshGeneralNotificationAndAdminOptions()
     hideChatIconCheck:Refresh()
+    hideAllChatIconsCheck:Refresh()
     if debugModeCheck then debugModeCheck:Refresh() end
     if testGuildMasterCheck then
         testGuildMasterCheck:Refresh()
@@ -2166,7 +2181,7 @@ local function Refresh()
             guildContactRows[index] = row
         end
         row:SetPoint("TOPLEFT", guildContactsListContent, "TOPLEFT", 0, -(index - 1) * 29)
-        row.name:SetText(iRC:FormatPlayerName(rowName))
+        row.name:SetText(iRC:FormatInviteContactName(rowName))
         local detail = iRC:GetGuildContactDetails(rowName) or {}
         local note = detail.note or ""
         row.noteText:SetText(note ~= "" and (#note > 18 and note:sub(1, 15) .. "..." or note) or iRC:Text("GUILD_BANK_NO_NOTE"))
@@ -2175,7 +2190,7 @@ local function Refresh()
             row.highlight:Show()
             local metadata = iRC:GetGuildContactDetails(rowName) or {}
             GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-            GameTooltip:SetText(iRC:FormatPlayerName(rowName), 1, 0.82, 0)
+            GameTooltip:SetText(iRC:FormatInviteContactName(rowName), 1, 0.82, 0)
             GameTooltip:AddLine(iRC:Text("GUILD_BANK_ADDED_BY", iRC:FormatPlayerName(metadata.addedBy or "Unknown")), 1, 1, 1)
             GameTooltip:AddLine(iRC:Text("GUILD_BANK_ADDED_AT", metadata.addedAt and date("%Y-%m-%d %H:%M", metadata.addedAt) or "Unknown"), 1, 1, 1)
             GameTooltip:AddLine(iRC:Text("GUILD_BANK_NOTE_TOOLTIP", metadata.note and metadata.note ~= "" and metadata.note or iRC:Text("GUILD_BANK_NO_NOTE")), 1, 1, 1, true)
@@ -2244,7 +2259,11 @@ local function Refresh()
     guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
     guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     raceRuleUI.level60Message:SetEnabled(isGuildMaster and guildActive and true or false)
-    raceRuleUI.deathMessage:SetEnabled(isGuildMaster and guildActive and true or false)
+    local showDeathMessageRule = iRC:IsOfficialHardcoreRealm()
+    raceRuleUI.deathMessage:SetShown(showDeathMessageRule)
+    connectionContent:SetHeight(math.abs(showDeathMessageRule and deathMessageBottomY or deathMessageTopY) + 20)
+    readOnlyRules:SetHeight(math.abs((showDeathMessageRule and deathMessageBottomY or deathMessageTopY) - rulesEditorTopY) + 24)
+    raceRuleUI.deathMessage:SetEnabled(showDeathMessageRule and isGuildMaster and guildActive and true or false)
     raceRuleUI.groups:SetEnabled(isGuildMaster and raceLockEnabled and true or false)
     local sameRaceExceptionEnabled = isGuildMaster and raceLockEnabled and iRC:GetConnectionRules().sameRaceGroupsOnly
     sameRaceLevelSlider:SetEnabled(sameRaceExceptionEnabled and true or false)
@@ -2337,10 +2356,12 @@ elseif Settings and Settings.RegisterCanvasLayoutCategory then
 end
 
 function iRC:OpenOptions()
+    if not self:CanOpenPanel() then return false end
     if self.CloseWindowsExcept then
         self:CloseWindowsExcept(settingsFrame)
     end
     settingsFrame:Show()
+    return true
 end
 
 function iRC:ToggleOptions()

@@ -1427,7 +1427,7 @@ local function setRaceCard(card, group, rank)
                 card.contactButtons[index] = button
             end
             local contactName = contact.name
-            local displayName = iRC:FormatPlayerName(contact.name)
+            local displayName = iRC:FormatInviteContactName(contact.name)
             button:ClearAllPoints()
             if previousButton then button:SetPoint("LEFT", previousButton, "RIGHT", 6, 0)
             else button:SetPoint("LEFT", card.contactsLabel, "RIGHT", 8, 0) end
@@ -1640,6 +1640,7 @@ function UI:Refresh()
 end
 
 function UI:Open(subjectName, publishFromClick)
+    if not iRC:CanOpenPanel() then return false end
     local frame = self:Create()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     frame.subjectName = subjectName or iRC:GetPlayerName()
@@ -1654,14 +1655,15 @@ function UI:Open(subjectName, publishFromClick)
     frame:Show()
     frame:Raise()
     if publishFromClick and iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
+    return true
 end
 
 function UI:Toggle(publishFromClick)
-    local frame = self:Create()
-    if frame:IsShown() then
+    local frame = self.frame
+    if frame and frame:IsShown() then
         frame:Hide()
     else
-        self:Open(nil, publishFromClick)
+        return self:Open(nil, publishFromClick)
     end
 end
 

@@ -2,6 +2,16 @@
 iRC - Changelog
 ================================================================================
 
+v0.4.15 - Smoother Guild Updates and Chat Improvements
+--------------------------------------------------------------------------------
+[ADDED] A new option hides iRC icons in the chat messages you see without hiding your own icon from others. Death and level-60 announcement icons remain visible
+[FIX] The Death icon now appears while a character is dead or a ghost and clears after resurrection. Icons from players outside your guild also update sooner
+[CHANGED] Guild death announcements are available only on official Hardcore realms. The setting is hidden elsewhere
+[FIX] Guild Map does a better job of showing whether guildmates are on the same layer.
+[CHANGED] Guild reports and routine updates are now spread out automatically to reduce brief freezes. Important rules and safety messages still arrive immediately, and the Performance Mode setting has been removed
+[FIX] Guild Leaderboard skips repeat reports from the same guild for one minute, reducing extra work during busy refreshes
+[CHANGED] The main iRC window, Guild Verification, and Settings cannot be opened during combat. You will see a short explanation, but can still close a window that is already open
+
 v0.4.14 - Smoother Guild Sync
 --------------------------------------------------------------------------------
 [ADDED] Performance Mode in General settings spreads non-urgent guild sync and incoming Leaderboard reports over time to reduce brief freezes. Players who enabled the old Low CPU Mode keep the setting enabled

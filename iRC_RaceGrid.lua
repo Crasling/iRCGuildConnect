@@ -12,6 +12,7 @@ local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
 local REPORT_MAX_AGE = 5 * 86400
+local RECENT_REPORT_WINDOW = 60
 local CACHE_REQUEST_WINDOW = 5
 local CACHE_TRANSFER_TIMEOUT = 15
 local CACHE_CHUNK_SIZE = 100
@@ -640,21 +641,23 @@ local function processNextReportWork()
     end
 end
 
-local function queueReportWork(key, callback)
+local function queueReportWork(key, callback, timestamp)
     if not iRC:IsPerformanceMode() or not C_Timer or not C_Timer.After then
         callback()
         return
     end
     local existing = reportWorkByKey[key]
     if existing then
-        existing.run = callback
+        if not timestamp or not existing.timestamp or timestamp >= existing.timestamp then
+            existing.run, existing.timestamp = callback, timestamp
+        end
         return
     end
     if #reportWorkQueue >= MAX_REPORT_WORK then
         local dropped = table.remove(reportWorkQueue, 1)
         if dropped then reportWorkByKey[dropped.key] = nil end
     end
-    local work = { key = key, run = callback }
+    local work = { key = key, run = callback, timestamp = timestamp }
     reportWorkQueue[#reportWorkQueue + 1] = work
     reportWorkByKey[key] = work
     if not reportWorkScheduled then
@@ -764,8 +767,10 @@ local function requestBestCacheOffers(requestId)
     for guildKey, offer in pairs(request.offers) do
         local localReport = getServerStore().guildReports[guildKey]
         local localTimestamp = localReport and (tonumber(localReport.timestamp) or 0) or 0
-        local shouldRequest = offer.timestamp > localTimestamp
+        local recentlyReceived = localReport and (tonumber(localReport.lastSeen) or 0) > time() - RECENT_REPORT_WINDOW
+        local shouldRequest = not recentlyReceived and (offer.timestamp > localTimestamp
             or (offer.timestamp == localTimestamp and localReport and (tonumber(localReport.cacheHop) or 0) > 0)
+        )
         if shouldRequest then
             request.selected[guildKey] = offer
             requested = requested + 1
@@ -904,18 +909,26 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         queueCacheChunk(prefix, message, sender, distribution)
         return
     end
-    if not queued and distribution == "CHANNEL" and message:match("^GUILD_REPORT\t")
-        and iRC:IsPerformanceMode() and C_Timer and C_Timer.After then
-        queueReportWork("public:" .. iRC:NormalizeName(sender), function()
-            handleMessage(prefix, message, sender, distribution, true)
-        end)
-        return
+    local publicParts
+    if distribution == "CHANNEL" and message:match("^GUILD_REPORT\t") then
+        publicParts = split(message)
+        local guildKey = normalizeGuildName(publicParts[5])
+        if guildKey ~= "" then
+            local existing = getServerStore().guildReports[guildKey]
+            if existing and (tonumber(existing.lastSeen) or 0) > time() - RECENT_REPORT_WINDOW then return end
+            if not queued and iRC:IsPerformanceMode() and C_Timer and C_Timer.After then
+                queueReportWork("public:" .. guildKey, function()
+                    handleMessage(prefix, message, sender, distribution, true)
+                end, tonumber(publicParts[11]) or 0)
+                return
+            end
+        end
     end
     if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC"))
         and iRC:DeferLowTraffic("traffic:racegrid-report:" .. iRC:NormalizeName(sender), function()
             handleMessage(prefix, message, sender, distribution)
         end) then return end
-    local parts = split(message)
+    local parts = publicParts or split(message)
     if parts[1] and parts[1]:match("^CACHE_") and handleCacheMessage(parts, sender, distribution) then return end
     if parts[1] == "GUILD_DESC" and parts[2] == WIRE_VERSION then
         local timestamp, editedBy, value = tonumber(parts[3]), tostring(parts[4] or ""), tostring(parts[5] or "")
