@@ -2,6 +2,11 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.2 - Forever Self-Found Hotfix
+--------------------------------------------------------------------------------
+[FIX] Self-Found detection no longer accesses protected aura lists on WoW Forever, preventing aura taint errors during combat
+[FIX] iRC remembers the last safely detected Self-Found state while aura information is protected, avoiding false rule warnings and history changes
+
 v0.5.1 - WoW Forever 
 --------------------------------------------------------------------------------
 [IMPORTANT] iRC now targets WoW Forever build 16001 only. Public guild reports use the new iRCCommsV1 channel and report format, so older iRC releases cannot exchange Leaderboard data with 0.5.1

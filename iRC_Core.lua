@@ -645,13 +645,59 @@ function iRC:SupportsTBCPlayableRaces()
 end
 
 function iRC:GetSelfFoundState()
-    if not (C_UnitAuras and C_UnitAuras.GetBuffDataByIndex) then return false end
-    for index = 1, 40 do
-        local aura = C_UnitAuras.GetBuffDataByIndex("player", index, "HELPFUL")
-        if not aura then break end
-        if aura.spellId == 431567 then return true end
+    iRCCharDB = iRCCharDB or {}
+    local history = iRCCharDB.selfFoundHistory
+    local cached = iRCCharDB.selfFoundLastKnown
+    if cached == nil and type(history) == "table" and history.currentlyActive ~= nil then
+        cached = history.currentlyActive and true or false
     end
-    return false
+
+    -- Forever makes aura data secret while combat restrictions are active.
+    -- Calling any aura enumeration API from tainted addon code can raise an
+    -- error, so retain the last safe out-of-combat observation instead.
+    if self:IsForeverClient() and ((InCombatLockdown and InCombatLockdown())
+        or (UnitAffectingCombat and UnitAffectingCombat("player"))) then
+        return cached == true
+    end
+
+    if not C_UnitAuras then return cached == true end
+
+    local ok, aura
+    if type(C_UnitAuras.GetPlayerAuraBySpellID) == "function" then
+        ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, 431567)
+        if ok then
+            local active = aura ~= nil
+            iRCCharDB.selfFoundLastKnown = active
+            return active
+        end
+    end
+
+    -- Never fall back to aura enumeration on Forever. Its aura indices may be
+    -- secret even when the caller cannot determine that ahead of time.
+    if self:IsForeverClient() then return cached == true end
+
+    -- Older clients do not provide the direct spell lookup. Only enumerate
+    -- outside restricted combat, and protect against a restriction changing
+    -- between the combat check above and the API call.
+    if type(C_UnitAuras.GetBuffDataByIndex) == "function" then
+        for index = 1, 40 do
+            ok, aura = pcall(C_UnitAuras.GetBuffDataByIndex, "player", index, "HELPFUL")
+            if not ok then return cached == true end
+            if not aura then
+                iRCCharDB.selfFoundLastKnown = false
+                return false
+            end
+            local spellId = aura.spellId
+            if (not issecretvalue or not issecretvalue(spellId)) and spellId == 431567 then
+                iRCCharDB.selfFoundLastKnown = true
+                return true
+            end
+        end
+        iRCCharDB.selfFoundLastKnown = false
+        return false
+    end
+
+    return cached == true
 end
 
 function iRC:GetSelfFoundHistory()
