@@ -22,21 +22,15 @@ local function createDataObject()
         text = iRC.DisplayName,
         icon = iRC.IconPath,
         OnClick = function(_, button)
-            if button == "RightButton" then
-                iRC:ToggleOptions()
-            elseif IsShiftKeyDown and IsShiftKeyDown() then
-                iRC.ConnectionDashboard:Toggle()
-            else
-                iRC.MainUI:Toggle(true)
-            end
+            if button == "LeftButton" then iRC.MainUI:Toggle(true) end
+            if button == "RightButton" then iRC:OpenOptions() end
         end,
         OnTooltipShow = function(tooltip)
             local colors = iRC.Colors
             tooltip:SetText(colors.iRC .. iRC.DisplayName .. colors.Green .. " v" .. iRC:GetDisplayVersion(), 1, 1, 1)
             tooltip:AddLine(" ")
             tooltip:AddLine(colors.Yellow .. "Left Click: " .. colors.Orange .. iRC:Text("IRC_MAIN_MINIMAP_TOGGLE"), 1, 1, 1)
-            tooltip:AddLine(colors.Yellow .. "Shift-Left Click: " .. colors.Orange .. "Toggle connection dashboard", 1, 1, 1)
-            tooltip:AddLine(colors.Yellow .. "Right Click: " .. colors.Orange .. "Toggle settings", 1, 1, 1)
+            tooltip:AddLine(colors.Yellow .. "Right Click: " .. colors.Orange .. iRC:Text("IRC_MINIMAP_SETTINGS"), 1, 1, 1)
         end,
     })
 end

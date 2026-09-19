@@ -275,11 +275,11 @@ end
 local function canAnnounce(ruleKey)
     if not SendChatMessage or not iRC:IsGuildConnectionActive() then return false end
     local rules = iRC:GetConnectionRules()
-    return rules and rules[ruleKey] ~= true
+    return rules and rules[ruleKey] == true
 end
 
 function Announcements:AnnounceDeath()
-    if not iRC:IsOfficialHardcoreRealm() or not canAnnounce("disableGuildDeathMessage") then return false end
+    if not iRC:IsOfficialHardcoreRealm() or not canAnnounce("enableGuildDeathMessage") then return false end
     iRCCharDB = iRCCharDB or {}
     local now = time()
     if now - (tonumber(iRCCharDB.lastGuildDeathAnnouncementAt) or 0) < 30 then return false end
@@ -288,7 +288,7 @@ function Announcements:AnnounceDeath()
 end
 
 function Announcements:AnnounceLevel60(level)
-    if tonumber(level) ~= 60 or not canAnnounce("disableGuildLevel60Message") then return false end
+    if tonumber(level) ~= 60 or not canAnnounce("enableGuildLevel60Message") then return false end
     iRCCharDB = iRCCharDB or {}
     if iRCCharDB.guildLevel60AnnouncementSent then return false end
     local sent = pcall(SendChatMessage, iRC:Text("CHAT_ANNOUNCE_LEVEL60"), "GUILD")

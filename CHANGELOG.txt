@@ -2,6 +2,15 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.3 - Guild Management & Forever Stability
+--------------------------------------------------------------------------------
+[ADDED] The main iRC panel now includes Guild Rules and authorized Management pages for verification, incidents, guild settings, homepage, Guild-Found tools, and guild banks
+[CHANGED] Guild Rules use clearer grouped cards, show dependencies, support a Guild Master member preview, and keep mutually exclusive progression choices consistent
+[CHANGED] Guild Settings now use the full iRC panel width with clearer notification and delegated-permission cards
+[FIX] Guild Verification menus appear above the panel, invite contacts open a normal whisper, and the Guild Bank search is shown only on its own tab
+[FIX] Enabling iRC for a guild also enables Guild Member Map, while disabling iRC keeps configured rules saved but inactive
+[CHANGED] The compact panel header now shows connection status, and the left navigation starts directly with the current server and guild
+
 v0.5.2 - Forever Self-Found Hotfix
 --------------------------------------------------------------------------------
 [FIX] Self-Found detection no longer accesses protected aura lists on WoW Forever, preventing aura taint errors during combat

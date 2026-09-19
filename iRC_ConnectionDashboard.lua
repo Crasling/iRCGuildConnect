@@ -319,7 +319,8 @@ function Dashboard:Create()
     frame.rowData = {}
     frame.memberMenu = CreateFrame("Frame", "iRCMemberManagementMenu", frame, "BackdropTemplate")
     frame.memberMenu:SetSize(336, 160)
-    frame.memberMenu:SetFrameStrata("DIALOG")
+    frame.memberMenu:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame.memberMenu:SetToplevel(true)
     frame.memberMenu:SetClampedToScreen(true)
     setBackdrop(frame.memberMenu, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
     frame.memberMenu:Hide()
@@ -352,7 +353,8 @@ function Dashboard:Create()
     frame.memberReport = CreateFrame("Frame", "iRCGuildFoundReportFrame", frame, "BackdropTemplate")
     frame.memberReport:SetSize(640, 290)
     frame.memberReport:SetPoint("CENTER", frame, "CENTER", 85, 0)
-    frame.memberReport:SetFrameStrata("DIALOG")
+    frame.memberReport:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame.memberReport:SetToplevel(true)
     setBackdrop(frame.memberReport, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
     local reportShade = frame.memberReport:CreateTexture(nil, "BACKGROUND", nil, -8)
     reportShade:SetPoint("TOPLEFT", 4, -4)
@@ -501,6 +503,7 @@ function Dashboard:Create()
             reportBody:SetText(table.concat(lines, "\n"))
         end
         frame.memberReport:Show()
+        frame.memberReport:Raise()
     end
     frame.showMemberReport = showGuildFoundReport
 
@@ -567,6 +570,21 @@ end
 
 local function setHeaders(frame, values, sortKeys, defaultKey, columnX, columnWidth, headerY)
     columnX, columnWidth = columnX or COLUMN_X, columnWidth or COLUMN_WIDTH
+    if frame.embedded then
+        local availableWidth = math.max(520, (frame.main:GetWidth() or 700) - 46)
+        local finalIndex = #columnX
+        local sourceWidth = (columnX[finalIndex] or 0) + (columnWidth[finalIndex] or 0)
+        local scale = sourceWidth > 0 and math.min(1, availableWidth / sourceWidth) or 1
+        local scaledX, scaledWidth = {}, {}
+        for index = 1, #columnX do
+            scaledX[index] = math.floor((columnX[index] or 0) * scale + 0.5)
+            scaledWidth[index] = math.max(35, math.floor((columnWidth[index] or 0) * scale + 0.5))
+        end
+        columnX, columnWidth = scaledX, scaledWidth
+        frame.content:SetWidth(availableWidth)
+    else
+        frame.content:SetWidth(722)
+    end
     headerY = headerY or -156
     frame.content.columnX, frame.content.columnWidth = columnX, columnWidth
     frame.scroll:ClearAllPoints()
@@ -686,6 +704,7 @@ local function openMemberManagementMenu(frame, member)
     if not menuScale or menuScale <= 0 then menuScale = UIParent:GetEffectiveScale() or 1 end
     menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / menuScale, cursorY / menuScale)
     menu:Show()
+    menu:Raise()
 end
 
 local function filterAndSort(frame, items, shouldInclude, valueFor)
@@ -1166,6 +1185,9 @@ end
 
 function Dashboard:Open()
     if not iRC:CanOpenPanel() then return false end
+    if iRC.MainUI and iRC.MainUI.OpenCategory then
+        return iRC.MainUI:OpenCategory("Verification Management")
+    end
     local frame = self:Create()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     iRC:RefreshGuildRoster()
@@ -1173,6 +1195,36 @@ function Dashboard:Open()
     frame:Show()
     self:RequestStalePresenceIfShown()
     return true
+end
+
+function Dashboard:ShowEmbedded(parent, overlayParent, tabName)
+    local frame = self:Create()
+    self.embedded = true
+    frame.embedded = true
+    frame.tab = tabName == "Incidents" and "Incidents" or "Verification"
+    frame.main:SetParent(parent)
+    frame.main:ClearAllPoints()
+    frame.main:SetAllPoints(parent)
+    frame.main:SetFrameLevel(parent:GetFrameLevel() + 2)
+    frame.memberMenu:SetParent(overlayParent or parent)
+    frame.memberReport:SetParent(overlayParent or parent)
+    local overlayLevel = (overlayParent or parent):GetFrameLevel() + 50
+    frame.memberMenu:SetFrameLevel(overlayLevel)
+    frame.memberReport:SetFrameLevel(overlayLevel + 1)
+    frame.memberReport:ClearAllPoints()
+    frame.memberReport:SetPoint("CENTER", overlayParent or parent, "CENTER", 0, 0)
+    frame.main:Show()
+    self:Refresh()
+    self:RequestStalePresenceIfShown()
+end
+
+function Dashboard:HideEmbedded()
+    if not self.frame or not self.embedded then return end
+    self.embedded = nil
+    self.frame.embedded = nil
+    self.frame.main:Hide()
+    self.frame.memberMenu:Hide()
+    self.frame.memberReport:Hide()
 end
 
 function Dashboard:Toggle()
@@ -1186,20 +1238,20 @@ end
 
 function Dashboard:RefreshIfShown()
     self:ScheduleAttentionReminderCheck()
-    if not self.frame or not self.frame:IsShown() or self.pendingRefresh then return end
+    if not self.frame or (not self.frame:IsShown() and not self.embedded) or self.pendingRefresh then return end
     if not C_Timer or not C_Timer.After then self:Refresh(); return end
     local ticket = {}
     self.pendingRefresh = ticket
     C_Timer.After(0.2, function()
         if Dashboard.pendingRefresh ~= ticket then return end
         Dashboard.pendingRefresh = nil
-        if Dashboard.frame and Dashboard.frame:IsShown() then Dashboard:Refresh() end
+        if Dashboard.frame and (Dashboard.frame:IsShown() or Dashboard.embedded) then Dashboard:Refresh() end
     end)
 end
 
 function Dashboard:RequestStalePresenceIfShown()
     local frame = self.frame
-    if not frame or not frame:IsShown() or frame.tab ~= "Verification"
+    if not frame or (not frame:IsShown() and not self.embedded) or frame.tab ~= "Verification"
         or not iRC:IsGuildConnectionActive() or not iRC:IsAddonResponseRequired() then return false end
     local now = time()
     if now - (self.lastVisiblePresenceRequestAt or 0) < 60 then return false end

@@ -11,11 +11,6 @@ local function IsAddonLoadedCompat(addonName)
     return false
 end
 
-local function CanUseGuildFoundTools()
-    return iRC:IsTestAdminGuildMaster()
-        or (iRC:HasGuildPermission("guildBanks") and iRC:IsGuildFoundRequired())
-end
-
 local function CanUseManagementTools()
     return iRC:HasAnyManagementPermission()
 end
@@ -34,6 +29,8 @@ local function BuildActiveRulesExplanation()
         lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SELF_FOUND")
         if iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND" then
             lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_SWITCH_TO_GUILD_FOUND")
+        elseif iRC:GetMaxLevelProgressionMode(rules) == "UNRESTRICTED" then
+            lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_UNRESTRICTED_AT_60")
         end
     elseif progression == "GUILD_FOUND" then
         lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_FOUND_ONLY")
@@ -52,9 +49,9 @@ local function BuildActiveRulesExplanation()
     end
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_GROUPS", rules.guildGroupsMinimumLevel or 1) end
     if rules.guildMapEnabled then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_MAP") end
-    if rules.disableGuildLevel60Message then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_NO_LEVEL60_MESSAGE") end
-    if iRC:IsOfficialHardcoreRealm() and rules.disableGuildDeathMessage then
-        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_NO_DEATH_MESSAGE")
+    if rules.enableGuildLevel60Message then lines[#lines + 1] = iRC:Text("ENABLE_GUILD_LEVEL60_MESSAGE") end
+    if iRC:IsOfficialHardcoreRealm() and rules.enableGuildDeathMessage then
+        lines[#lines + 1] = iRC:Text("ENABLE_GUILD_DEATH_MESSAGE")
     end
     if #lines == 0 then return iRC:Text("RULES_READ_ONLY_NONE") end
     for index, line in ipairs(lines) do lines[index] = "|cffffa31a•|r " .. line end
@@ -135,7 +132,7 @@ local function CreateSettingsCheckbox(parent, label, description, yOffset, getVa
     if description and description ~= "" then
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         desc:SetPoint("TOPLEFT", parent, "TOPLEFT", left + 28, nextY)
-        desc:SetWidth((synced and 442 or 470) - indent)
+        desc:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -18, nextY)
         desc:SetJustifyH("LEFT")
         desc:SetText(description)
         checkbox.description = desc
@@ -180,7 +177,7 @@ local function CreateSettingsDropdown(frameName, parent, label, description, yOf
     if description and description ~= "" then
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         desc:SetPoint("TOPLEFT", parent, "TOPLEFT", left + 28, nextY)
-        desc:SetWidth(synced and 442 or 470)
+        desc:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -18, nextY)
         desc:SetJustifyH("LEFT")
         desc:SetText(description)
         nextY = nextY - math.max(desc:GetStringHeight(), 12) - 6
@@ -263,6 +260,38 @@ local function CreateConnectionStatusCard(parent, yOffset)
     return { status = status, detail = detail }, yOffset - 138
 end
 
+local function CreateManagementSettingsCard(parent, title, description, yOffset)
+    local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    card:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, yOffset)
+    card:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -12, yOffset)
+    card:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    card:SetBackdropColor(0.045, 0.04, 0.035, 0.96)
+    card:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.48)
+
+    local accent = card:CreateTexture(nil, "ARTWORK")
+    accent:SetWidth(3)
+    accent:SetPoint("TOPLEFT", card, "TOPLEFT", 5, -7)
+    accent:SetPoint("BOTTOMLEFT", card, "BOTTOMLEFT", 5, 7)
+    accent:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.88)
+
+    local heading = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    heading:SetPoint("TOPLEFT", card, "TOPLEFT", 18, -13)
+    heading:SetText(title)
+
+    local body = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    body:SetPoint("TOPLEFT", heading, "BOTTOMLEFT", 0, -5)
+    body:SetPoint("TOPRIGHT", card, "TOPRIGHT", -18, -36)
+    body:SetJustifyH("LEFT")
+    body:SetText(description or "")
+
+    return card, -48 - math.max(body:GetStringHeight(), 12)
+end
+
 local function FormatRulesetTime(timestamp)
     timestamp = tonumber(timestamp) or 0
     if timestamp <= 0 then return L.RULESET_METADATA_UNKNOWN end
@@ -311,6 +340,7 @@ local function GetManagementConnectionStatus(connection, category)
     elseif connection and category == "guildFound" then
         addCandidate(connection.guildFoundTradeExceptionSettings and connection.guildFoundTradeExceptionSettings.source,
             connection.guildFoundTradeExceptionSettings and connection.guildFoundTradeExceptionSettings.timestamp)
+    elseif connection and category == "guildBanks" then
         addCandidate(connection.guildBankExceptions and connection.guildBankExceptions.source,
             connection.guildBankExceptions and connection.guildBankExceptions.timestamp)
     end
@@ -449,10 +479,12 @@ local iNIFContainer, iNIFContent = CreateTabContent()
 local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
 local guildFoundContainer, guildFoundContent = CreateTabContent()
+local guildBanksContainer, guildBanksContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
 local guildNotificationsContainer, guildNotificationsContent = CreateTabContent()
 local guildHomepageContainer, guildHomepageContent = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer }
+local diagnosticsContainer, diagnosticsContent, diagnosticsScroll = CreateTabContent()
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer, diagnosticsContainer, guildBanksContainer }
 local sidebarButtons = {}
 local selectedTab = 1
 
@@ -478,10 +510,7 @@ local sidebarItems = {
 local standardSidebarItems = {
     { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
-    { type = "header", label = L.MANAGEMENT_HEADER, managementOnly = true },
-    { type = "tab", label = L.GUILD_NOTIFICATIONS_TAB, index = 11, managementOnly = true },
-    { type = "tab", label = L.GUILD_HOMEPAGE_TAB, index = 12, homepageOnly = true },
-    { type = "tab", label = L.GUILDFOUND_TOOLS_TAB, index = 9, guildFoundOnly = true },
+    { type = "tab", label = "Diagnostic Tools", index = 13 },
     { type = "header", label = "Other Addons" },
     { type = "tab", label = "iWillRemember", index = 5 },
     { type = "tab", label = "iNeedIfYouNeed", index = 6 },
@@ -543,6 +572,238 @@ local function LayoutSidebar(managementAvailable)
             end
         end
     end
+end
+
+local diagnosticOutput, diagnosticsEnabledCheck
+do
+    local diagnostics = iRC.Diagnostics
+    local diagnosticY = -12
+    _, diagnosticY = CreateSectionHeader(diagnosticsContent, "Diagnostic Tools", diagnosticY)
+    _, diagnosticY = CreateInfoText(diagnosticsContent,
+        "Session-only troubleshooting tools. Nothing is saved. Reports may contain character, guild, and addon names; review them before sharing.",
+        diagnosticY, "GameFontDisableSmall")
+
+    diagnosticsEnabledCheck, diagnosticY = CreateSettingsCheckbox(diagnosticsContent, "Enable Diagnostic Tools",
+        "Enables bounded event/sync capture, traffic measurement, and function timing until logout or until switched off.", diagnosticY,
+        function() return diagnostics and diagnostics.enabled end,
+        function(value)
+            if not diagnostics then return end
+            diagnostics:SetEnabled(value)
+            iRC:SetTrafficMonitorEnabled(value)
+            iRC:SetFunctionProfilerEnabled(value)
+        end)
+
+    local memberLabel = diagnosticsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberLabel:SetPoint("TOPLEFT", diagnosticsContent, "TOPLEFT", 20, diagnosticY)
+    memberLabel:SetText("Member name (optional)")
+    local memberInput = CreateFrame("EditBox", nil, diagnosticsContent, "InputBoxTemplate")
+    memberInput:SetSize(300, 24)
+    memberInput:SetPoint("TOPLEFT", diagnosticsContent, "TOPLEFT", 20, diagnosticY - 20)
+    memberInput:SetAutoFocus(false)
+    memberInput:SetMaxLetters(80)
+    local memberSuggestions = CreateFrame("Frame", nil, diagnosticsContent, "BackdropTemplate")
+    memberSuggestions:SetSize(300, 128)
+    memberSuggestions:SetPoint("TOPLEFT", memberInput, "BOTTOMLEFT", 0, -2)
+    memberSuggestions:SetFrameStrata("DIALOG")
+    memberSuggestions:SetFrameLevel(diagnosticsContent:GetFrameLevel() + 30)
+    memberSuggestions:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    memberSuggestions:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
+    memberSuggestions:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.85)
+    memberSuggestions:Hide()
+    local memberSuggestionButtons = {}
+    for index = 1, 5 do
+        local button = CreateFrame("Button", nil, memberSuggestions)
+        button:SetSize(282, 23)
+        button:SetPoint("TOPLEFT", memberSuggestions, "TOPLEFT", 7, -6 - (index - 1) * 23)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
+        button:SetScript("OnMouseDown", function(self, mouseButton)
+            if mouseButton ~= "LeftButton" then return end
+            if not self.fullName then return end
+            memberInput:SetText(iRC:FormatPlayerName(self.fullName))
+            memberInput:SetCursorPosition(#memberInput:GetText())
+            memberInput:ClearFocus()
+            memberSuggestions:Hide()
+        end)
+        memberSuggestionButtons[index] = button
+    end
+    local function UpdateMemberSuggestions()
+        local query = memberInput:GetText():gsub("^%s+", ""):gsub("%s+$", ""):lower()
+        local matches, seen = {}, {}
+        if query ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
+            for rosterIndex = 1, GetNumGuildMembers(true) do
+                local rosterName = GetGuildRosterInfo(rosterIndex)
+                local displayName = rosterName and iRC:FormatPlayerName(rosterName)
+                local key = displayName and displayName:lower()
+                if key and not seen[key] and key:find(query, 1, true) then
+                    seen[key] = true
+                    matches[#matches + 1] = { fullName = rosterName, displayName = displayName,
+                        starts = key:find(query, 1, true) == 1 }
+                end
+            end
+            table.sort(matches, function(a, b)
+                if a.starts ~= b.starts then return a.starts end
+                return a.displayName:lower() < b.displayName:lower()
+            end)
+        end
+        for index, button in ipairs(memberSuggestionButtons) do
+            local match = matches[index]
+            button.fullName = match and match.fullName or nil
+            button:SetShown(match ~= nil)
+            if match then button.text:SetText(match.displayName) end
+        end
+        memberSuggestions:SetShown(memberInput:HasFocus() and matches[1] ~= nil)
+    end
+    memberInput:SetScript("OnTextChanged", UpdateMemberSuggestions)
+    memberInput:SetScript("OnEditFocusGained", UpdateMemberSuggestions)
+    memberInput:SetScript("OnEditFocusLost", function(self)
+        C_Timer.After(0, function()
+            if not self:HasFocus() and not iRC:IsMouseOverFrame(memberSuggestions) then
+                memberSuggestions:Hide()
+            end
+        end)
+    end)
+    memberInput:SetScript("OnTabPressed", function(self)
+        local first = memberSuggestionButtons[1]
+        if first and first:IsShown() and first.fullName then
+            self:SetText(iRC:FormatPlayerName(first.fullName))
+            self:SetCursorPosition(#self:GetText())
+            memberSuggestions:Hide()
+        end
+    end)
+    memberInput:SetScript("OnEnterPressed", function(self)
+        local first = memberSuggestionButtons[1]
+        if first and first:IsShown() and first.fullName then
+            self:SetText(iRC:FormatPlayerName(first.fullName))
+            self:SetCursorPosition(#self:GetText())
+            self:ClearFocus()
+            memberSuggestions:Hide()
+        else
+            self:ClearFocus()
+        end
+    end)
+    memberInput:SetScript("OnEscapePressed", function(self) memberSuggestions:Hide(); self:ClearFocus() end)
+    diagnosticY = diagnosticY - 54
+
+    local function SetReport(text)
+        if not diagnosticOutput then return end
+        diagnosticOutput:SetText(tostring(text or ""))
+        diagnosticOutput:SetCursorPosition(0)
+        diagnosticOutput:HighlightText(0, 0)
+        diagnosticOutput:ClearFocus()
+        C_Timer.After(0, function()
+            if not diagnosticsContainer:IsShown() then return end
+            diagnosticsScroll:UpdateScrollChildRect()
+            diagnosticsScroll:SetVerticalScroll(math.max(0,
+                diagnosticsContent:GetHeight() - diagnosticsScroll:GetHeight()))
+        end)
+    end
+
+    local function AddGroupLabel(text, yOffset)
+        local label = diagnosticsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("TOPLEFT", diagnosticsContent, "TOPLEFT", 20, diagnosticY + yOffset)
+        label:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+        label:SetText(text)
+    end
+
+    local function AddButton(text, column, yOffset, callback)
+        local button = CreateFrame("Button", nil, diagnosticsContent, "UIPanelButtonTemplate")
+        button:SetSize(240, 25)
+        button:SetPoint("TOPLEFT", diagnosticsContent, "TOPLEFT", 20 + column * 250, diagnosticY + yOffset)
+        button:SetText(text)
+        button:SetScript("OnClick", callback)
+        return button
+    end
+
+    AddGroupLabel("Capture", 0)
+    AddButton("Start event / sync log", 0, -22, function()
+        if diagnostics and diagnostics:StartLog() then SetReport("Capture started. Reproduce the problem, then use Show captured log.") end
+    end)
+    AddButton("Stop capture", 1, -22, function()
+        if diagnostics then diagnostics:StopLog(); SetReport("Capture stopped. Captured data is retained until diagnostics are disabled.") end
+    end)
+    AddButton("Show captured log", 0, -51, function() if diagnostics then SetReport(diagnostics:BuildLogReport()) end end)
+    AddButton("Clear captured log", 1, -51, function()
+        if diagnostics then diagnostics:DiscardLog(); SetReport("Captured diagnostic data cleared.") end
+    end)
+
+    AddGroupLabel("Reports", -88)
+    AddButton("Connection health", 0, -110, function() if diagnostics then SetReport(diagnostics:BuildHealthReport()) end end)
+    AddButton("Diagnose member", 1, -110, function() if diagnostics then SetReport(diagnostics:BuildMemberReport(memberInput:GetText())) end end)
+    AddButton("Cache inventory", 0, -139, function() if diagnostics then SetReport(diagnostics:BuildCacheReport()) end end)
+    AddButton("Performance report", 1, -139, function() if diagnostics then SetReport(diagnostics:BuildPerformanceReport()) end end)
+    AddButton("Test WoW API endpoints", 0, -168, function() if diagnostics then SetReport(diagnostics:BuildApiReport()) end end)
+    AddButton("Test event registration", 1, -168, function() if diagnostics then SetReport(diagnostics:BuildEventReport()) end end)
+    AddButton("Loaded addons", 0, -197, function() if diagnostics then SetReport(diagnostics:BuildAddOnReport()) end end)
+    AddButton("Build complete bug report", 1, -197, function() if diagnostics then SetReport(diagnostics:BuildBugReport(memberInput:GetText())) end end)
+
+    AddGroupLabel("Advanced", -234)
+    AddButton("Enable verbose taint log", 0, -256, function()
+        if diagnostics then diagnostics:SetTaintLog(true); SetReport("Taint logging set to 2. Reload before reproducing the protected-action problem. Logs are written to Logs\\taint.log.") end
+    end)
+    AddButton("Disable taint log", 1, -256, function()
+        if diagnostics then diagnostics:SetTaintLog(false); SetReport("Taint logging disabled.") end
+    end)
+    diagnosticY = diagnosticY - 295
+
+    local outputFrame = CreateFrame("Frame", nil, diagnosticsContent, "BackdropTemplate")
+    outputFrame:SetPoint("TOPLEFT", diagnosticsContent, "TOPLEFT", 16, diagnosticY)
+    outputFrame:SetSize(510, 390)
+    outputFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+    outputFrame:SetBackdropColor(0.015, 0.015, 0.02, 0.95)
+    outputFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
+    local outputScroll = CreateFrame("ScrollFrame", nil, outputFrame, "UIPanelScrollFrameTemplate")
+    outputScroll:SetPoint("TOPLEFT", 8, -8)
+    outputScroll:SetPoint("BOTTOMRIGHT", -28, 8)
+    diagnosticOutput = CreateFrame("EditBox", nil, outputScroll)
+    diagnosticOutput:SetMultiLine(true)
+    diagnosticOutput:SetAutoFocus(false)
+    diagnosticOutput:SetFontObject("GameFontHighlightSmall")
+    diagnosticOutput:SetWidth(460)
+    diagnosticOutput:SetHeight(360)
+    diagnosticOutput:SetTextInsets(4, 4, 4, 4)
+    diagnosticOutput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    diagnosticOutput:SetScript("OnEditFocusLost", function(self)
+        self.copyShortcutDown = nil
+        self:HighlightText(0, 0)
+    end)
+    diagnosticOutput:SetScript("OnKeyDown", function(self, key)
+        self.copyShortcutDown = tostring(key or ""):upper() == "C"
+            and IsControlKeyDown and IsControlKeyDown() or false
+    end)
+    diagnosticOutput:SetScript("OnKeyUp", function(self, key)
+        if tostring(key or ""):upper() ~= "C" or not self.copyShortcutDown then return end
+        self.copyShortcutDown = nil
+        self:HighlightText(0, 0)
+        self:ClearFocus()
+    end)
+    diagnosticOutput:SetScript("OnTextChanged", function(self)
+        local lineCount = 1
+        for _ in tostring(self:GetText() or ""):gmatch("\n") do lineCount = lineCount + 1 end
+        self:SetHeight(math.max(360, lineCount * 14 + 20))
+        outputScroll:UpdateScrollChildRect()
+    end)
+    outputScroll:SetScrollChild(diagnosticOutput)
+    diagnosticOutput:SetText("Enable Diagnostic Tools, then choose a report.")
+
+    local copyLogButton = CreateFrame("Button", nil, diagnosticsContent, "UIPanelButtonTemplate")
+    copyLogButton:SetSize(150, 25)
+    copyLogButton:SetPoint("TOPRIGHT", outputFrame, "BOTTOMRIGHT", 0, -8)
+    copyLogButton:SetText("Copy Log")
+    copyLogButton:SetScript("OnClick", function()
+        diagnosticOutput:SetFocus()
+        diagnosticOutput:HighlightText()
+    end)
+    local copyHint = diagnosticsContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    copyHint:SetPoint("RIGHT", copyLogButton, "LEFT", -10, 0)
+    copyHint:SetText("Press Ctrl+C to copy")
+    diagnosticsContent:SetHeight(math.abs(diagnosticY) + 455)
 end
 
 local y = -12
@@ -685,7 +946,14 @@ guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighligh
 _, y = CreateInfoText(connectionContent, L.GUILD_RULES_INTRO, y, "GameFontDisableSmall")
 guildActivationCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_ACTIVATION_LABEL, L.GUILD_ACTIVATION_DESC, y,
     function() return iRC:IsGuildConnectionActive() end,
-    function(value) iRC:SetGuildConnectionActive(value) end, nil, true)
+    function(value)
+        if not value and iRC.MainUI and iRC.MainUI.ConfirmDisableGuildConnection then
+            iRC.MainUI:ConfirmDisableGuildConnection()
+            guildActivationCheck:Refresh()
+            return
+        end
+        iRC:SetGuildConnectionActive(value)
+    end, nil, true)
 _, y = CreateSubcategoryHeader(connectionContent, "Race Rules", y - 2)
 raceRuleUI.lock, y = CreateSettingsCheckbox(connectionContent, L.RACE_LOCK_RULE, L.RACE_LOCK_RULE_DESC, y,
     function() return iRC:GetConnectionRules().raceLock end,
@@ -786,14 +1054,13 @@ guildMapRuleCheck, y = CreateSettingsCheckbox(connectionContent,
     function() return iRC:GetConnectionRules().guildMapEnabled end,
     function(value) iRC:SetConnectionRule("guildMapEnabled", value) end, nil, true)
 raceRuleUI.level60Message, y = CreateSettingsCheckbox(connectionContent,
-    L.DISABLE_GUILD_LEVEL60_MESSAGE, L.DISABLE_GUILD_LEVEL60_MESSAGE_DESC, y,
-    function() return iRC:GetConnectionRules().disableGuildLevel60Message end,
-    function(value) iRC:SetConnectionRule("disableGuildLevel60Message", value) end, nil, true)
-local deathMessageTopY = y
+    L.ENABLE_GUILD_LEVEL60_MESSAGE, L.ENABLE_GUILD_LEVEL60_MESSAGE_DESC, y,
+    function() return iRC:GetConnectionRules().enableGuildLevel60Message == true end,
+    function(value) iRC:SetConnectionRule("enableGuildLevel60Message", value) end, nil, true)
 raceRuleUI.deathMessage, y = CreateSettingsCheckbox(connectionContent,
-    L.DISABLE_GUILD_DEATH_MESSAGE, L.DISABLE_GUILD_DEATH_MESSAGE_DESC, y,
-    function() return iRC:GetConnectionRules().disableGuildDeathMessage end,
-    function(value) iRC:SetConnectionRule("disableGuildDeathMessage", value) end, nil, true)
+    L.ENABLE_GUILD_DEATH_MESSAGE, L.ENABLE_GUILD_DEATH_MESSAGE_DESC, y,
+    function() return iRC:GetConnectionRules().enableGuildDeathMessage == true end,
+    function(value) iRC:SetConnectionRule("enableGuildDeathMessage", value) end, nil, true)
 local deathMessageBottomY = y
 connectionContent:SetHeight(math.abs(y) + 20)
 
@@ -1148,6 +1415,13 @@ guildContactsEdit:SetScript("OnTextChanged", function(self)
     end
     updateGuildContactSuggestions(value)
 end)
+guildContactsEdit:SetScript("OnEditFocusLost", function(self)
+    C_Timer.After(0, function()
+        if not self:HasFocus() and not iRC:IsMouseOverFrame(guildContactSuggestionFrame) then
+            guildContactSuggestionFrame:Hide()
+        end
+    end)
+end)
 guildContactsEdit:SetScript("OnTabPressed", function(self)
     local first = guildContactSuggestionButtons[1]
     if first and first:IsShown() and first.fullName then
@@ -1463,7 +1737,7 @@ do
     end
     refreshGuildFoundTradeItemList = function()
         local settings = iRC:GetGuildFoundTradeExceptionSettings()
-        local canEdit = iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("guildBanks")
+        local canEdit = iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("tradeExceptions")
             and iRC:GetConnectionRules().guildFoundTradeExceptions == true
         local offset = 0
         for _, category in ipairs(categories) do
@@ -1507,19 +1781,27 @@ do
     end
     refreshGuildFoundTradeItemList()
     y = y - 295
-    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y - 4)
-    _, y = CreateInfoText(guildFoundContent, L.GUILD_BANK_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
-    guildBankEdit = CreateFrame("EditBox", nil, guildFoundContent, "InputBoxTemplate")
-    CreateSyncBadge(guildFoundContent, y - 22)
+    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_AUDIT_HEADER, y - 4)
+    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_DESC, y, "GameFontDisableSmall")
+    guildFoundAuditText, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_EMPTY, y, "GameFontHighlightSmall")
+    guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
+
+    y = -12
+    _, y = CreateSectionHeader(guildBanksContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y)
+    _, y = CreateInfoText(guildBanksContent, L.GUILD_BANK_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
+    managementConnectionCards.guildBanks, y = CreateConnectionStatusCard(guildBanksContent, y)
+    _, y = CreateSubcategoryHeader(guildBanksContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y - 4)
+    guildBankEdit = CreateFrame("EditBox", nil, guildBanksContent, "InputBoxTemplate")
+    CreateSyncBadge(guildBanksContent, y - 22)
     guildBankEdit:SetSize(285, 24)
-    guildBankEdit:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 48, y - 22)
+    guildBankEdit:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 48, y - 22)
     guildBankEdit:SetAutoFocus(false)
     guildBankEdit:SetMaxLetters(60)
-    guildBankSuggestionFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
+    guildBankSuggestionFrame = CreateFrame("Frame", nil, guildBanksContent, "BackdropTemplate")
     guildBankSuggestionFrame:SetSize(285, 128)
     guildBankSuggestionFrame:SetPoint("TOPLEFT", guildBankEdit, "BOTTOMLEFT", 0, -2)
     guildBankSuggestionFrame:SetFrameStrata("DIALOG")
-    guildBankSuggestionFrame:SetFrameLevel(guildFoundContent:GetFrameLevel() + 20)
+    guildBankSuggestionFrame:SetFrameLevel(guildBanksContent:GetFrameLevel() + 20)
     guildBankSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     guildBankSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
@@ -1574,11 +1856,11 @@ do
         guildBankSuggestionFrame:SetShown(matches[1] ~= nil)
     end
     local selectedNewBankType = "GUILD"
-    local bankTypeLabel = guildFoundContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    bankTypeLabel:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 48, y - 56)
+    local bankTypeLabel = guildBanksContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    bankTypeLabel:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 48, y - 56)
     bankTypeLabel:SetText("Bank type:")
-    local bankTypeDropdown = CreateFrame("Frame", "iRCNewBankTypeDropdown", guildFoundContent, "UIDropDownMenuTemplate")
-    bankTypeDropdown:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 105, y - 45)
+    local bankTypeDropdown = CreateFrame("Frame", "iRCNewBankTypeDropdown", guildBanksContent, "UIDropDownMenuTemplate")
+    bankTypeDropdown:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 105, y - 45)
     UIDropDownMenu_SetWidth(bankTypeDropdown, 145)
     UIDropDownMenu_JustifyText(bankTypeDropdown, "LEFT")
     UIDropDownMenu_SetText(bankTypeDropdown, "Guild Bank")
@@ -1607,6 +1889,13 @@ do
         end
     end
     guildBankEdit:SetScript("OnTextChanged", function(self) updateGuildBankSuggestions(self:GetText()) end)
+    guildBankEdit:SetScript("OnEditFocusLost", function(self)
+        C_Timer.After(0, function()
+            if not self:HasFocus() and not iRC:IsMouseOverFrame(guildBankSuggestionFrame) then
+                guildBankSuggestionFrame:Hide()
+            end
+        end)
+    end)
     guildBankEdit:SetScript("OnTabPressed", function(self)
         local first = guildBankSuggestionButtons[1]
         if first and first:IsShown() and first.fullName then
@@ -1618,7 +1907,7 @@ do
     guildBankEdit:SetScript("OnEnterPressed", addGuildBank)
     guildBankEdit:SetScript("OnEscapePressed", function(self) guildBankSuggestionFrame:Hide(); self:ClearFocus() end)
     SetSimpleTooltip(guildBankEdit, L.GUILD_BANK_EXCEPTIONS_TITLE, L.GUILD_BANK_EXCEPTIONS_DESC)
-    guildBankSave = CreateFrame("Button", nil, guildFoundContent, "UIPanelButtonTemplate")
+    guildBankSave = CreateFrame("Button", nil, guildBanksContent, "UIPanelButtonTemplate")
     guildBankSave:SetSize(90, 24)
     guildBankSave:SetPoint("LEFT", guildBankEdit, "RIGHT", 10, 0)
     guildBankSave:SetText(L.GUILD_BANK_ADD)
@@ -1626,8 +1915,8 @@ do
     guildBankSave:SetScript("OnClick", addGuildBank)
     SetSimpleTooltip(guildBankSave, L.GUILD_BANK_ADD, L.GUILD_BANK_SAVE_DESC)
 
-    local listFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
-    listFrame:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 90)
+    local listFrame = CreateFrame("Frame", nil, guildBanksContent, "BackdropTemplate")
+    listFrame:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 20, y - 90)
     listFrame:SetSize(470, 150)
     listFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
@@ -1667,24 +1956,21 @@ do
     guildBankListEmpty:SetPoint("CENTER", listFrame, "CENTER", 0, 0)
     guildBankListEmpty:SetText(L.GUILD_BANK_EMPTY)
     y = y - 250
-    guildBankConflictText, y = CreateInfoText(guildFoundContent, "", y - 2, "GameFontNormal")
-    guildBankConflictMerge, y = CreateSettingsButton(guildFoundContent, L.MANAGEMENT_CONFLICT_MERGE, 120, y, function()
+    guildBankConflictText, y = CreateInfoText(guildBanksContent, "", y - 2, "GameFontNormal")
+    guildBankConflictMerge, y = CreateSettingsButton(guildBanksContent, L.MANAGEMENT_CONFLICT_MERGE, 120, y, function()
         iRC:ResolveManagementConflict("BANKS", "merge")
     end)
-    guildBankConflictAccept = CreateSettingsButton(guildFoundContent, L.MANAGEMENT_CONFLICT_ACCEPT, 120, y + 30, function()
+    guildBankConflictAccept = CreateSettingsButton(guildBanksContent, L.MANAGEMENT_CONFLICT_ACCEPT, 120, y + 30, function()
         iRC:ResolveManagementConflict("BANKS", "incoming")
     end)
     guildBankConflictAccept:ClearAllPoints()
     guildBankConflictAccept:SetPoint("LEFT", guildBankConflictMerge, "RIGHT", 8, 0)
-    guildBankConflictKeep = CreateSettingsButton(guildFoundContent, L.MANAGEMENT_CONFLICT_KEEP, 120, y + 30, function()
+    guildBankConflictKeep = CreateSettingsButton(guildBanksContent, L.MANAGEMENT_CONFLICT_KEEP, 120, y + 30, function()
         iRC:ResolveManagementConflict("BANKS", "current")
     end)
     guildBankConflictKeep:ClearAllPoints()
     guildBankConflictKeep:SetPoint("LEFT", guildBankConflictAccept, "RIGHT", 8, 0)
-    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_AUDIT_HEADER, y - 4)
-    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_DESC, y, "GameFontDisableSmall")
-    guildFoundAuditText, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_EMPTY, y, "GameFontHighlightSmall")
-    guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
+    guildBanksContent:SetHeight(math.max(math.abs(y) + 20, 450))
 end
 
 local newMemberWelcomeCheck, hideAttentionRemindersCheck, automaticWarningChecks, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
@@ -1693,10 +1979,11 @@ do
     local y = -12
     _, y = CreateSectionHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_TITLE, y)
     managementConnectionCards.notifications, y = CreateConnectionStatusCard(guildNotificationsContent, y)
-    _, y = CreateSubcategoryHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_CATEGORY, y - 2)
-    _, y = CreateInfoText(guildNotificationsContent, L.GUILD_NOTIFICATIONS_DESC, y, "GameFontDisableSmall")
-    newMemberWelcomeCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
-        L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, y - 4,
+
+    local notificationCard, notificationY = CreateManagementSettingsCard(guildNotificationsContent,
+        L.GUILD_NOTIFICATIONS_CATEGORY, L.GUILD_NOTIFICATIONS_DESC, y - 2)
+    newMemberWelcomeCheck, notificationY = CreateSettingsCheckbox(notificationCard,
+        L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, notificationY - 4,
         function() return iRC:IsNewMemberWelcomeEnabled() end,
         function(value) iRC:SetNewMemberWelcomeEnabled(value) end, nil, true)
     automaticWarningChecks = {}
@@ -1704,12 +1991,12 @@ do
         { "OFFICER", L.DISABLE_OFFICER_WARNINGS }, { "WHISPER", L.DISABLE_WHISPER_WARNINGS }, { "GUILD", L.DISABLE_GUILD_WARNINGS },
     }) do
         local channel = entry[1]
-        automaticWarningChecks[channel], y = CreateSettingsCheckbox(guildNotificationsContent, entry[2], L.DISABLE_AUTOMATIC_WARNINGS_DESC, y,
+        automaticWarningChecks[channel], notificationY = CreateSettingsCheckbox(notificationCard, entry[2], L.DISABLE_AUTOMATIC_WARNINGS_DESC, notificationY,
             function() return iRC:IsAutomaticWarningDisabled(channel) end,
             function(value) iRC:SetAutomaticWarningDisabled(channel, value) end, nil, true)
     end
-    hideAttentionRemindersCheck, y = CreateSettingsCheckbox(guildNotificationsContent,
-        L.HIDE_ATTENTION_REMINDERS_OPTION, L.HIDE_ATTENTION_REMINDERS_OPTION_DESC, y,
+    hideAttentionRemindersCheck, notificationY = CreateSettingsCheckbox(notificationCard,
+        L.HIDE_ATTENTION_REMINDERS_OPTION, L.HIDE_ATTENTION_REMINDERS_OPTION_DESC, notificationY,
         function() return iRC:GetSettings().hideAttentionReminders == true end,
         function(value)
             iRC:GetSettings().hideAttentionReminders = value and true or false
@@ -1717,11 +2004,25 @@ do
                 iRC.ConnectionDashboard:CheckAttentionReminder(false)
             end
         end)
-    _, y = CreateSubcategoryHeader(guildNotificationsContent, L.DELEGATED_PERMISSIONS_CATEGORY, y - 4)
-    _, y = CreateInfoText(guildNotificationsContent, "Only the Guild Master can change these limits. Each selection includes that rank and every rank above it.", y, "GameFontDisableSmall")
+    welcomeConflictText, notificationY = CreateInfoText(notificationCard, "", notificationY - 2, "GameFontNormal")
+    welcomeConflictAccept, notificationY = CreateSettingsButton(notificationCard, L.MANAGEMENT_CONFLICT_ACCEPT, 130, notificationY, function()
+        iRC:ResolveManagementConflict("WELCOME", true)
+    end)
+    welcomeConflictKeep = CreateSettingsButton(notificationCard, L.MANAGEMENT_CONFLICT_KEEP, 130, notificationY + 30, function()
+        iRC:ResolveManagementConflict("WELCOME", false)
+    end)
+    welcomeConflictKeep:ClearAllPoints()
+    welcomeConflictKeep:SetPoint("LEFT", welcomeConflictAccept, "RIGHT", 8, 0)
+    local notificationHeight = math.abs(notificationY) + 18
+    notificationCard:SetHeight(notificationHeight)
+    y = y - notificationHeight - 12
+
+    local permissionCard, permissionY = CreateManagementSettingsCard(guildNotificationsContent,
+        L.DELEGATED_PERMISSIONS_CATEGORY,
+        "Only the Guild Master can change these limits. Each selection includes that rank and every rank above it.", y)
     local permissionLabels = {
         verification = "Verification decisions", presence = "Presence checks and automatic warnings",
-        incidents = "Incident history", guildBanks = "Guild Bank Exceptions",
+        incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions", guildBanks = "Guild Banks",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
     }
     local function rankValues()
@@ -1737,24 +2038,18 @@ do
         end
         return "Rank " .. tostring(value)
     end
-    for _, permission in ipairs({ "verification", "presence", "incidents", "guildBanks", "notifications", "homepage" }) do
+    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "guildBanks", "notifications", "homepage" }) do
         local permissionKey = permission
-        rankPermissionDropdowns[permission], y = CreateSettingsDropdown("iRCRankPermission" .. permission,
-            guildNotificationsContent, permissionLabels[permission], "Lowest guild rank allowed to use this feature. Every higher rank is also included.", y,
+        rankPermissionDropdowns[permission], permissionY = CreateSettingsDropdown("iRCRankPermission" .. permission,
+            permissionCard, permissionLabels[permission], "Lowest guild rank allowed to use this feature. Every higher rank is also included.", permissionY,
             function() return iRC:GetGuildRankPermission(permissionKey) end,
             function(value) iRC:SetGuildRankPermission(permissionKey, value) end,
             rankValues, rankLabel, true)
     end
-    welcomeConflictText, y = CreateInfoText(guildNotificationsContent, "", y - 4, "GameFontNormal")
-    welcomeConflictAccept, y = CreateSettingsButton(guildNotificationsContent, L.MANAGEMENT_CONFLICT_ACCEPT, 130, y, function()
-        iRC:ResolveManagementConflict("WELCOME", true)
-    end)
-    welcomeConflictKeep = CreateSettingsButton(guildNotificationsContent, L.MANAGEMENT_CONFLICT_KEEP, 130, y + 30, function()
-        iRC:ResolveManagementConflict("WELCOME", false)
-    end)
-    welcomeConflictKeep:ClearAllPoints()
-    welcomeConflictKeep:SetPoint("LEFT", welcomeConflictAccept, "RIGHT", 8, 0)
-    guildNotificationsContent:SetHeight(math.max(math.abs(y) + 20, 300))
+    local permissionHeight = math.abs(permissionY) + 18
+    permissionCard:SetHeight(permissionHeight)
+    y = y - permissionHeight - 12
+    guildNotificationsContent:SetHeight(math.max(math.abs(y) + 8, 300))
 end
 
 local testGuildMasterCheck, suppressWarningsCheck, suppressRulesCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
@@ -1862,9 +2157,10 @@ if iRC:IsTestAdmin() then
     adminContent:SetHeight(math.abs(y) + 20)
 end
 
-local function RefreshGuildBankTools(guildFoundAvailable)
-    local canEditGuildBanks = guildFoundAvailable and iRC:HasGuildPermission("guildBanks") and iRC:IsGuildConnectionActive()
-    local tradeExceptionsEnabled = canEditGuildBanks and iRC:GetConnectionRules().guildFoundTradeExceptions == true
+local function RefreshGuildBankTools()
+    local canEditGuildBanks = iRC:HasGuildPermission("guildBanks") and iRC:IsGuildConnectionActive()
+    local canEditTradeExceptions = iRC:HasGuildPermission("tradeExceptions") and iRC:IsGuildConnectionActive()
+    local tradeExceptionsEnabled = canEditTradeExceptions and iRC:GetConnectionRules().guildFoundTradeExceptions == true
     local rules = iRC:GetConnectionRules()
     local protectionActive = iRC:IsGuildConnectionActive() and iRC:IsGuildFoundRequired()
     local exceptionsActive = iRC:IsGuildConnectionActive() and rules.guildFoundTradeExceptions == true
@@ -1876,8 +2172,8 @@ local function RefreshGuildBankTools(guildFoundAvailable)
         iRC:Text(exceptionsActive and "GUILDFOUND_STATUS_ENABLED" or "GUILDFOUND_STATUS_DISABLED")))
     guildFoundStatus.exceptions:SetTextColor(unpack(exceptionsActive and orange or gray))
     guildFoundStatus.access:SetText(iRC:Text("GUILDFOUND_STATUS_ACCESS",
-        iRC:Text(canEditGuildBanks and "GUILDFOUND_STATUS_AVAILABLE" or "GUILDFOUND_STATUS_READ_ONLY")))
-    guildFoundStatus.access:SetTextColor(unpack(canEditGuildBanks and green or gray))
+        iRC:Text(canEditTradeExceptions and "GUILDFOUND_STATUS_AVAILABLE" or "GUILDFOUND_STATUS_READ_ONLY")))
+    guildFoundStatus.access:SetTextColor(unpack(canEditTradeExceptions and green or gray))
     for _, checkbox in pairs(guildFoundTradeExceptionChecks) do
         checkbox:Refresh()
         checkbox:SetEnabled(tradeExceptionsEnabled and true or false)
@@ -2062,7 +2358,7 @@ local function RefreshGeneralNotificationAndAdminOptions()
 end
 
 local function Refresh()
-    local guildFoundAvailable = CanUseGuildFoundTools()
+    if diagnosticsEnabledCheck then diagnosticsEnabledCheck:Refresh() end
     local managementAvailable = CanUseManagementTools()
     local canSwitchRulesView = managementAvailable or iRC:IsTestAdminGuildMaster()
     RefreshRulesView(canSwitchRulesView)
@@ -2078,7 +2374,7 @@ local function Refresh()
                 iRC:Text("GUILDFOUND_AUDIT_ACTION_" .. tostring(record.action)), record.target or "-")
         end
         guildFoundAuditText:SetText(#lines > 0 and table.concat(lines, "\n") or L.GUILDFOUND_AUDIT_EMPTY)
-        RefreshGuildBankTools(guildFoundAvailable)
+        RefreshGuildBankTools()
     end
     RefreshGeneralNotificationAndAdminOptions()
     local connection = iRC:GetConnection()
@@ -2258,11 +2554,11 @@ local function Refresh()
     guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
     guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     raceRuleUI.level60Message:SetEnabled(isGuildMaster and guildActive and true or false)
-    local showDeathMessageRule = iRC:IsOfficialHardcoreRealm()
-    raceRuleUI.deathMessage:SetShown(showDeathMessageRule)
-    connectionContent:SetHeight(math.abs(showDeathMessageRule and deathMessageBottomY or deathMessageTopY) + 20)
-    readOnlyRules:SetHeight(math.abs((showDeathMessageRule and deathMessageBottomY or deathMessageTopY) - rulesEditorTopY) + 24)
-    raceRuleUI.deathMessage:SetEnabled(showDeathMessageRule and isGuildMaster and guildActive and true or false)
+    local deathMessageAvailable = iRC:IsOfficialHardcoreRealm()
+    raceRuleUI.deathMessage:Show()
+    connectionContent:SetHeight(math.abs(deathMessageBottomY) + 20)
+    readOnlyRules:SetHeight(math.abs(deathMessageBottomY - rulesEditorTopY) + 24)
+    raceRuleUI.deathMessage:SetEnabled(deathMessageAvailable and isGuildMaster and guildActive and true or false)
     raceRuleUI.groups:SetEnabled(isGuildMaster and raceLockEnabled and true or false)
     local sameRaceExceptionEnabled = isGuildMaster and raceLockEnabled and iRC:GetConnectionRules().sameRaceGroupsOnly
     sameRaceLevelSlider:SetEnabled(sameRaceExceptionEnabled and true or false)
@@ -2280,8 +2576,8 @@ local function Refresh()
     SetRuleVisualState(raceRuleUI.language, rules.raceLock and rules.nativeTongueOnly)
     SetRuleVisualState(guildFoundTradeExceptionsCheck, rules.guildFoundTradeExceptions)
     SetRuleVisualState(guildMapRuleCheck, rules.guildMapEnabled)
-    SetRuleVisualState(raceRuleUI.level60Message, rules.disableGuildLevel60Message)
-    SetRuleVisualState(raceRuleUI.deathMessage, rules.disableGuildDeathMessage)
+    SetRuleVisualState(raceRuleUI.level60Message, rules.enableGuildLevel60Message)
+    SetRuleVisualState(raceRuleUI.deathMessage, rules.enableGuildDeathMessage)
     SetRuleVisualState(raceRuleUI.groups, rules.raceLock and rules.sameRaceGroupsOnly)
     SetRuleVisualState(raceRuleUI.level60Exception, rules.raceLock and rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
     SetRuleVisualState(guildGroupsOnlyCheck, rules.guildGroupsOnly)
@@ -2326,8 +2622,47 @@ local function Refresh()
     end
 end
 
+local managementPanels
+
 iRC.RefreshOptionsIfShown = function()
-    if settingsFrame:IsShown() then Refresh() end
+    if settingsFrame:IsShown() then Refresh(); return end
+    for _, panel in pairs(managementPanels or {}) do
+        if panel:IsShown() then Refresh(); return end
+    end
+end
+
+managementPanels = {
+    notifications = guildNotificationsContainer,
+    homepage = guildHomepageContainer,
+    guildFound = guildFoundContainer,
+    guildBanks = guildBanksContainer,
+}
+
+function iRC:HideManagementPanels()
+    for _, panel in pairs(managementPanels) do panel:Hide() end
+end
+
+function iRC:ShowManagementPanel(panelKey, parent)
+    local panel = managementPanels[panelKey]
+    if not panel or not parent then return false end
+    self:HideManagementPanels()
+    Refresh()
+    panel:SetParent(parent)
+    panel:ClearAllPoints()
+    panel:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, -8)
+    panel:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -8, 8)
+    panel:SetFrameLevel(parent:GetFrameLevel() + 2)
+    local scrollFrame = panel:GetChildren()
+    local scrollChild = scrollFrame and scrollFrame.GetScrollChild and scrollFrame:GetScrollChild()
+    if scrollChild then
+        local function FitManagementContent(_, width)
+            scrollChild:SetWidth(math.max(550, (tonumber(width) or panel:GetWidth()) - 30))
+        end
+        panel:SetScript("OnSizeChanged", FitManagementContent)
+        FitManagementContent(panel, panel:GetWidth())
+    end
+    panel:Show()
+    return true
 end
 
 settingsFrame:SetScript("OnShow", Refresh)

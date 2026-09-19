@@ -23,7 +23,7 @@ iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 iRC.Prefix = "iRCConnV1"
 -- Testing-only controls are restricted to these exact character/realm pairs.
 iRC.TestAdminNames = {
-    "Crasling-Soulseeker",
+    "Wandy Nimsprocket",
     "Crasjin-Soulseeker",
     "Crasblight-Soulseeker",
     "Crasling Terot",
@@ -192,6 +192,7 @@ function iRC:IsPerformanceMode()
 end
 
 local incomingPerformanceQueue = {}
+local outgoingPerformanceQueue = {}
 local incomingPerformanceScheduled = false
 local function drainIncomingPerformanceQueue()
     local callback = table.remove(incomingPerformanceQueue, 1)
@@ -206,6 +207,10 @@ local function drainIncomingPerformanceQueue()
     end
 end
 
+function iRC:GetPerformanceQueueStatus()
+    return { incoming = #incomingPerformanceQueue, outgoing = #outgoingPerformanceQueue }
+end
+
 function iRC:QueuePerformanceIncoming(message, callback)
     if not self:IsPerformanceMode() or not C_Timer or not C_Timer.After then return false end
     local kind = type(message) == "string" and message:match("^([A-Z][A-Z0-9_]*)") or ""
@@ -213,8 +218,12 @@ function iRC:QueuePerformanceIncoming(message, callback)
         or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
         or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
         or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" or kind == "MAP_LAYER" then return false end
-    if #incomingPerformanceQueue >= 256 then return false end
+    if #incomingPerformanceQueue >= 256 then
+        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "incoming", kind, #incomingPerformanceQueue) end
+        return false
+    end
     incomingPerformanceQueue[#incomingPerformanceQueue + 1] = callback
+    if self.Diagnostics then self.Diagnostics:Trace("QUEUE_IN", kind, #message, #incomingPerformanceQueue) end
     if not incomingPerformanceScheduled then
         incomingPerformanceScheduled = true
         C_Timer.After(0.05, drainIncomingPerformanceQueue)
@@ -222,12 +231,12 @@ function iRC:QueuePerformanceIncoming(message, callback)
     return true
 end
 
-local outgoingPerformanceQueue = {}
 local outgoingPerformanceScheduled = false
 local function sendAddonTrafficNow(prefix, message, distribution, target)
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
     local sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
     if sent and iRC.TrafficMonitorEnabled then iRC:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
+    if iRC.Diagnostics then iRC.Diagnostics:Trace(sent and "SEND" or "SEND_FAIL", prefix, message:match("^([A-Z][A-Z0-9_]*)") or "other", #message, distribution, target or "") end
     return sent or false
 end
 
@@ -250,6 +259,7 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
     message = tostring(message or "")
     if #message > 255 then
         self:DebugMsg("Blocked oversized addon message (" .. tostring(#message) .. " bytes) for " .. tostring(prefix or "?"), 1)
+        if self.Diagnostics then self.Diagnostics:Trace("OVERSIZED", prefix, #message, distribution, target or "") end
         return false
     end
     local now = GetTime and GetTime() or 0
@@ -268,6 +278,7 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
     if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After
         and #outgoingPerformanceQueue < 256 then
         outgoingPerformanceQueue[#outgoingPerformanceQueue + 1] = { prefix, message, distribution, target }
+        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, #outgoingPerformanceQueue) end
         if not outgoingPerformanceScheduled then
             outgoingPerformanceScheduled = true
             C_Timer.After(0.08, drainOutgoingPerformanceQueue)
@@ -338,7 +349,7 @@ function iRC:GetTrafficHotspots()
 end
 
 function iRC:SetTrafficMonitorEnabled(enabled)
-    enabled = enabled == true and self:IsTestAdmin()
+    enabled = enabled == true and (self:IsTestAdmin() or (self.Diagnostics and self.Diagnostics.enabled))
     self.TrafficMonitorEnabled = enabled
     if not enabled then
         if trafficFrame then trafficFrame:UnregisterAllEvents() end
@@ -392,30 +403,33 @@ function iRC:RecordFunctionTime(label, elapsed)
     local slot = second % 60 + 1
     local bucket = buckets[slot]
     if not bucket or bucket.second ~= second then
-        bucket = { second = second, ms = 0, calls = 0 }
+        bucket = { second = second, ms = 0, calls = 0, peak = 0 }
         buckets[slot] = bucket
     end
     bucket.ms = bucket.ms + math.max(0, elapsed)
     bucket.calls = bucket.calls + 1
+    bucket.peak = math.max(bucket.peak or 0, elapsed)
+    if self.Diagnostics then self.Diagnostics:RecordSlowOperation(label, elapsed) end
 end
 
 function iRC:GetFunctionHotspots()
     local now, rows = math.floor(GetTime and GetTime() or 0), {}
     for label, buckets in pairs(functionProfileBuckets) do
-        local ms, calls = 0, 0
+        local ms, calls, peak = 0, 0, 0
         for _, bucket in pairs(buckets) do
             if bucket.second > now - 60 and bucket.second <= now then
-                ms, calls = ms + bucket.ms, calls + bucket.calls
+                ms, calls, peak = ms + bucket.ms, calls + bucket.calls, math.max(peak, bucket.peak or 0)
             end
         end
-        if calls > 0 then rows[#rows + 1] = { label = label, ms = ms, calls = calls } end
+        if calls > 0 then rows[#rows + 1] = { label = label, ms = ms, calls = calls, peak = peak } end
     end
     table.sort(rows, function(a, b) return a.ms > b.ms end)
     return rows
 end
 
 function iRC:SetFunctionProfilerEnabled(enabled)
-    enabled = enabled == true and self:IsTestAdmin() and type(debugprofilestop) == "function"
+    enabled = enabled == true and (self:IsTestAdmin() or (self.Diagnostics and self.Diagnostics.enabled))
+        and type(debugprofilestop) == "function"
     if enabled == self.FunctionProfilerEnabled then return end
     self.FunctionProfilerEnabled = enabled
     if not enabled then
@@ -460,6 +474,8 @@ local DEFAULT_SETTINGS = {
     guildMapPinSize = 8,
     shareGuildMapPosition = true,
 }
+local savedVariablesReady = false
+local startupSettings = {}
 
 iRC.DefaultConnectionRules = {
     guildRace = "",
@@ -476,14 +492,33 @@ iRC.DefaultConnectionRules = {
     guildGroupsMinimumLevel = 1,
     guildFoundTradeExceptions = false,
     guildMapEnabled = false,
-    disableGuildLevel60Message = false,
-    disableGuildDeathMessage = false,
+    enableGuildLevel60Message = true,
+    enableGuildDeathMessage = true,
     guildContacts = "",
 }
 
+local function normalizeProgressionRules(rules)
+    if rules.guildFoundOnly == true then
+        rules.selfFoundOnly = false
+        rules.level60GuildFound = false
+        rules.allowLevel60WithoutSelfFound = false
+    elseif rules.selfFoundOnly == true then
+        -- level60GuildFound is the optional "Self-Found, then Guild-Found at
+        -- 60" sub-rule. It may coexist with Self-Found, but never with the
+        -- alternative unrestricted-at-60 setting.
+        if rules.level60GuildFound == true then rules.allowLevel60WithoutSelfFound = false end
+    elseif rules.level60GuildFound == true then
+        -- Without Self-Found this flag represents the combined
+        -- Self-Found-or-Guild-Found progression choice.
+        rules.allowLevel60WithoutSelfFound = false
+    else
+        rules.allowLevel60WithoutSelfFound = false
+    end
+end
+
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
-    guildBanks = 1, notifications = 1, homepage = 0,
+    tradeExceptions = 1, guildBanks = 1, notifications = 1, homepage = 0,
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -806,25 +841,82 @@ function iRC:IsInGuildConnection()
     return self:GetGuildKey() ~= nil
 end
 
-function iRC:GetSettings()
+local function ensureCharacterSettingsStore()
     iRCDB = iRCDB or {}
-    iRCDB.settings = iRCDB.settings or {}
+    iRCCharDB = iRCCharDB or {}
+    local legacy = type(iRCDB.settings) == "table" and iRCDB.settings or nil
+    local settings = type(iRCCharDB.settings) == "table" and iRCCharDB.settings or {}
+    if legacy and legacy ~= settings then
+        for key, value in pairs(legacy) do
+            if settings[key] == nil then settings[key] = value end
+        end
+    end
+    iRCCharDB.settings = settings
+    iRCDB.settings = settings
+    return settings
+end
+
+local function ensureCharacterConnectionStore()
+    iRCDB = iRCDB or {}
+    iRCCharDB = iRCCharDB or {}
+    local legacy = type(iRCDB.connections) == "table" and iRCDB.connections or nil
+    local connections = type(iRCCharDB.connections) == "table" and iRCCharDB.connections or {}
+    if legacy and legacy ~= connections then
+        for key, connection in pairs(legacy) do
+            if connections[key] == nil then connections[key] = connection end
+        end
+    end
+    iRCCharDB.connections = connections
+    iRCDB.connections = connections
+    return connections
+end
+
+local function prepareCharacterSavedState()
+    local settings = ensureCharacterSettingsStore()
+    local connections = ensureCharacterConnectionStore()
+    iRCCharDB.guildConnectionActive = type(iRCCharDB.guildConnectionActive) == "table"
+        and iRCCharDB.guildConnectionActive or {}
+    for key, connection in pairs(connections) do
+        if type(connection) == "table" then
+            iRCCharDB.guildConnectionActive[key] = connection.active == true
+        end
+    end
+    iRCCharDB.persistenceVersion = 1
+    -- Keep the compatibility references attached to the exact tables WoW
+    -- serializes for this character.
+    iRCDB.settings = settings
+    iRCDB.connections = connections
+end
+
+function iRC:GetSettings()
+    -- Forever restores per-character SavedVariables after addon files begin
+    -- executing but before ADDON_LOADED. UI construction may read defaults,
+    -- but must not create globals while the client is still restoring them.
+    if not savedVariablesReady then
+        for key, value in pairs(DEFAULT_SETTINGS) do
+            if startupSettings[key] == nil then startupSettings[key] = value end
+        end
+        startupSettings.shareGlobalRaceGrid = true
+        startupSettings.minimapButton = startupSettings.minimapButton or { hide = false, minimapPos = -30 }
+        return startupSettings
+    end
+    local settings = ensureCharacterSettingsStore()
     for key, value in pairs(DEFAULT_SETTINGS) do
-        if iRCDB.settings[key] == nil then
-            iRCDB.settings[key] = value
+        if settings[key] == nil then
+            settings[key] = value
         end
     end
     -- Public guild discovery is a core connection feature, not an optional
     -- preference. Migrate previously disabled profiles immediately.
-    iRCDB.settings.shareGlobalRaceGrid = true
-    iRCDB.settings.minimapButton = iRCDB.settings.minimapButton or {}
-    if iRCDB.settings.minimapButton.hide == nil then
-        iRCDB.settings.minimapButton.hide = iRCDB.settings.showMinimapButton == false
+    settings.shareGlobalRaceGrid = true
+    settings.minimapButton = settings.minimapButton or {}
+    if settings.minimapButton.hide == nil then
+        settings.minimapButton.hide = settings.showMinimapButton == false
     end
-    if iRCDB.settings.minimapButton.minimapPos == nil then
-        iRCDB.settings.minimapButton.minimapPos = -30
+    if settings.minimapButton.minimapPos == nil then
+        settings.minimapButton.minimapPos = -30
     end
-    return iRCDB.settings
+    return settings
 end
 
 local function decodeRulesTimestamp(value)
@@ -860,15 +952,32 @@ function iRC:GetConnection()
     local key = self:GetGuildKey()
     -- Dropdown initialization can read rules before ADDON_LOADED restores the DB.
     -- Let callers use defaults until then, without creating early saved state.
-    if not key or not iRCDB then return nil end
-    iRCDB.connections = iRCDB.connections or {}
-    local connection = iRCDB.connections[key]
+    if not savedVariablesReady or not key or not iRCDB then return nil end
+    local connections = ensureCharacterConnectionStore()
+    local connection = connections[key]
     if not connection then
         connection = { key = key, guildName = GetGuildInfo("player"), rulesVersion = 1, active = false, members = {} }
-        iRCDB.connections[key] = connection
+        connections[key] = connection
     end
     if initializedConnections[connection] then return connection end
-    if connection.active == nil then connection.active = false end
+    -- Keep guild activation in a small dedicated character store as well as
+    -- the connection cache. This makes activation survive relogs even if the
+    -- larger cached connection is rebuilt while the guild roster initializes.
+    iRCCharDB = iRCCharDB or {}
+    iRCCharDB.guildConnectionActive = iRCCharDB.guildConnectionActive or {}
+    local savedActive = iRCCharDB.guildConnectionActive[key]
+    if savedActive ~= nil then
+        connection.active = savedActive == true
+    else
+        connection.active = connection.active == true
+        iRCCharDB.guildConnectionActive[key] = connection.active
+    end
+    if connection.activationTimestamp == nil then
+        connection.activationTimestamp = decodeRulesTimestamp(connection.rulesTimestampHex)
+    else
+        connection.activationTimestamp = math.max(0, math.floor(tonumber(connection.activationTimestamp) or 0))
+    end
+    connection.activationSource = tostring(connection.activationSource or connection.rulesTimestampSource or "")
     connection.guildNotifications = connection.guildNotifications or { welcomeNewMembers = false }
     if connection.guildNotifications.welcomeNewMembers == nil then
         connection.guildNotifications.welcomeNewMembers = false
@@ -908,6 +1017,8 @@ function iRC:GetConnection()
     for key, value in pairs(self.DefaultConnectionRules) do
         if connection.rules[key] == nil then connection.rules[key] = value end
     end
+    if not self:IsOfficialHardcoreRealm() then connection.rules.enableGuildDeathMessage = false end
+    normalizeProgressionRules(connection.rules)
     if connection.rules.guildRace == "" and self:IsGuildMaster() then
         local _, raceFile = UnitRace("player")
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
@@ -1204,18 +1315,44 @@ function iRC:IsGuildConnectionActive()
     return connection and connection.active == true or false
 end
 
-function iRC:SetGuildConnectionActive(active, receivedFromGuild)
+function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimestamp, activationSource)
     if not receivedFromGuild and not self:IsGuildMaster() then return false end
     local connection = self:GetConnection()
     if not connection then return false end
     active = active and true or false
-    if connection.active == active then return false end
+    local guildKey = self:GetGuildKey()
+    iRCCharDB = iRCCharDB or {}
+    iRCCharDB.guildConnectionActive = iRCCharDB.guildConnectionActive or {}
+    if guildKey then iRCCharDB.guildConnectionActive[guildKey] = active end
+    if connection.active == active then
+        if receivedFromGuild and tonumber(activationTimestamp)
+            and tonumber(activationTimestamp) > (tonumber(connection.activationTimestamp) or 0) then
+            connection.activationTimestamp = math.floor(tonumber(activationTimestamp))
+            connection.activationSource = tostring(activationSource or "")
+        end
+        return false
+    end
     connection.active = active
+    if receivedFromGuild then
+        connection.activationTimestamp = math.max(0, math.floor(tonumber(activationTimestamp) or 0))
+        connection.activationSource = tostring(activationSource or "")
+    else
+        connection.activationTimestamp = math.max(time(), (tonumber(connection.activationTimestamp) or 0) + 1)
+        connection.activationSource = self:GetPlayerName()
+    end
     if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
-    if active and not receivedFromGuild and self:GetGuildRace() == "" then
-        local _, raceFile = UnitRace("player")
-        connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
-        self:StampConnectionRules(connection)
+    if active and not receivedFromGuild then
+        local rulesChanged = false
+        if self:GetGuildRace() == "" then
+            local _, raceFile = UnitRace("player")
+            connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
+            rulesChanged = true
+        end
+        if connection.rules.guildMapEnabled ~= true then
+            connection.rules.guildMapEnabled = true
+            rulesChanged = true
+        end
+        if rulesChanged then self:StampConnectionRules(connection) end
     end
     if not active then
         if self.ResetPresenceNotificationChecks then self:ResetPresenceNotificationChecks() end
@@ -1381,6 +1518,30 @@ function iRC:FormatInviteContactName(name)
     return (self:FormatPlayerName(name):gsub("^%l", string.upper))
 end
 
+function iRC:GetWhisperTargetName(name)
+    local target = self:FormatPlayerName(name)
+    if self:IsForeverClient() then
+        -- Forever exposes UnitName as "First Last", while chat addresses the
+        -- same character using the visible "First-Last" form.
+        target = target:gsub("%s+", "-")
+    end
+    return target
+end
+
+function iRC:OpenWhisper(name)
+    local target = self:GetWhisperTargetName(name)
+    if target == "" then return false end
+    if ChatFrame_OpenChat then
+        ChatFrame_OpenChat("/w " .. target .. " ", DEFAULT_CHAT_FRAME)
+        return true
+    end
+    if ChatFrame_SendTell then
+        ChatFrame_SendTell(target)
+        return true
+    end
+    return false
+end
+
 function iRC:GetGuildBankExceptionText()
     local connection = self:GetConnection()
     local names = {}
@@ -1457,6 +1618,9 @@ function iRC:SetProgressionMode(mode)
         connection.rules.level60GuildFound = false
         connection.rules.allowLevel60WithoutSelfFound = false
     end
+    if not connection.rules.guildFoundOnly and not connection.rules.level60GuildFound then
+        connection.rules.guildFoundTradeExceptions = false
+    end
     if mode == "SELF_FOUND" or mode == "GUILD_FOUND" or mode == "SELF_FOUND_OR_GUILD_FOUND" then
         self:GetSettings().hideAttentionReminders = true
     end
@@ -1474,6 +1638,9 @@ function iRC:SetMaxLevelProgressionMode(mode)
     if not connection then return false end
     connection.rules.level60GuildFound = mode == "GUILD_FOUND"
     connection.rules.allowLevel60WithoutSelfFound = mode == "UNRESTRICTED"
+    if not connection.rules.level60GuildFound and not connection.rules.guildFoundOnly then
+        connection.rules.guildFoundTradeExceptions = false
+    end
     if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     if connection.rules.level60GuildFound then self:MarkGuildFoundRequired(connection) end
     self:StampConnectionRules(connection)
@@ -1490,7 +1657,14 @@ function iRC:SetConnectionRule(key, value)
     value = value and true or false
     if value and (key == "nativeTongueOnly" or key == "sameRaceGroupsOnly" or key == "allowLevel60MixedRaceGroups")
         and connection.rules.raceLock ~= true then return false end
+    if value and key == "guildFoundTradeExceptions"
+        and connection.rules.guildFoundOnly ~= true and connection.rules.level60GuildFound ~= true then return false end
+    if value and key == "enableGuildDeathMessage" and not self:IsOfficialHardcoreRealm() then return false end
     connection.rules[key] = value
+    if key == "selfFoundOnly" or key == "guildFoundOnly" or key == "level60GuildFound"
+        or key == "allowLevel60WithoutSelfFound" then
+        normalizeProgressionRules(connection.rules)
+    end
     if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     if key == "raceLock" and not value then
         connection.rules.nativeTongueOnly = false
@@ -1600,15 +1774,17 @@ end
 
 iRC.Frame:RegisterEvent("ADDON_LOADED")
 iRC.Frame:RegisterEvent("PLAYER_LOGIN")
+iRC.Frame:RegisterEvent("PLAYER_LOGOUT")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
     if event == "ADDON_LOADED" then
         if loadedName ~= iRC.Name then return end
+        savedVariablesReady = true
         iRCDB = iRCDB or {}
-        iRCDB.connections = iRCDB.connections or {}
-        iRC:GetSettings()
         iRCCharDB = iRCCharDB or {}
+        ensureCharacterConnectionStore()
+        iRC:GetSettings()
     elseif event == "PLAYER_LOGIN" then
         iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
@@ -1622,6 +1798,8 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
                 iRC:Print(iRC:Text("RACELOCKED_FORK_DISABLE_REMINDER"))
             end
         end)
+    elseif event == "PLAYER_LOGOUT" then
+        prepareCharacterSavedState()
     elseif event == "PLAYER_REGEN_DISABLED" then
         iRC:EnterLowTrafficMode()
         iRC:CloseAllWindows()

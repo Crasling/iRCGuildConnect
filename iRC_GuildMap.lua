@@ -10,7 +10,7 @@ local LAYER_VERSION = "1"
 local POSITION_LIFETIME = 90
 local LAYER_LIFETIME = 60
 local localLayer
-local initialized, mapInitialized, positionSendPending
+local initialized, mapInitialized, mapInitializationArmed, mapInitializationPending, positionSendPending
 local mapTicker
 local pinMenu
 
@@ -48,7 +48,7 @@ local function showPinMenu(pin)
             return button
         end
         pinMenu.whisper = addAction(-5, "Whisper ", function(name)
-            if ChatFrame_SendTell then ChatFrame_SendTell(iRC:FormatPlayerName(name)) end
+            iRC:OpenWhisper(name)
         end)
         pinMenu.invite = addAction(-30, "Invite ", function(name)
             if C_PartyInfo and C_PartyInfo.InviteUnit then
@@ -295,7 +295,10 @@ local function scheduleNextPosition()
 end
 
 local function initializeMap()
-    if mapInitialized or not WorldMapFrame or not WorldMapFrame.ScrollContainer then return end
+    if mapInitialized or not WorldMapFrame or not WorldMapFrame.ScrollContainer
+        or type(WorldMapFrame.GetMapID) ~= "function"
+        or type(WorldMapFrame.HookScript) ~= "function"
+        or type(WorldMapFrame.ScrollContainer.HookScript) ~= "function" then return end
     mapInitialized = true
     local function addLabelOutline(label)
         local fontFile, fontSize = label:GetFont()
@@ -336,7 +339,6 @@ local function initializeMap()
         showToggle:SetChecked(iRC:GetSettings().showGuildMap ~= false)
     end
     GuildMap.UpdateToggle = updateToggle
-    if WorldMapFrame.OnMapChanged then hooksecurefunc(WorldMapFrame, "OnMapChanged", function() GuildMap:UpdatePins() end) end
     WorldMapFrame.ScrollContainer:HookScript("OnMouseWheel", function() GuildMap:UpdatePins() end)
     WorldMapFrame:HookScript("OnShow", function()
         updateToggle()
@@ -351,6 +353,41 @@ local function initializeMap()
         for name in pairs(GuildMap.pins) do clearPin(name) end
     end)
     updateToggle()
+    -- When initialization was deferred from the first OnShow, the normal
+    -- OnShow hook above was not installed in time for that same opening.
+    if WorldMapFrame:IsShown() then
+        if not mapTicker and C_Timer and C_Timer.NewTicker then mapTicker = C_Timer.NewTicker(15, function() GuildMap:UpdatePins() end) end
+        GuildMap:UpdatePins()
+    end
+end
+
+local function scheduleMapInitialization()
+    if mapInitialized or mapInitializationPending then return end
+    mapInitializationPending = true
+    local function finish()
+        mapInitializationPending = false
+        initializeMap()
+    end
+    -- Forever loads the map canvas lazily. Waiting one frame prevents iRC from
+    -- touching WorldMapFrame while Blizzard is still applying its mixins.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, finish)
+    else
+        finish()
+    end
+end
+
+local function armMapInitialization()
+    if mapInitialized or mapInitializationArmed or not WorldMapFrame
+        or type(WorldMapFrame.HookScript) ~= "function" then return end
+    mapInitializationArmed = true
+    -- Do not build iRC's map controls during PLAYER_LOGIN on a UI reload.
+    -- At that point Forever has created WorldMapFrame but may not have
+    -- completed its internal map-canvas state. OnShow runs only after
+    -- Blizzard has safely finished opening the map.
+    WorldMapFrame:HookScript("OnShow", function()
+        scheduleMapInitialization()
+    end)
 end
 
 function GuildMap:SetShown(enabledValue)
@@ -379,11 +416,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if initialized then return end
         initialized = true
-        initializeMap()
+        if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_WorldMap") then armMapInitialization() end
         GuildMap:SchedulePosition(8, 3)
         scheduleNextPosition()
     elseif event == "ADDON_LOADED" then
-        initializeMap()
+        local loadedAddon = ...
+        if loadedAddon == "Blizzard_WorldMap" then armMapInitialization() end
     elseif event == "ZONE_CHANGED_NEW_AREA" then
         localLayer = nil
         GuildMap:SchedulePosition(3)

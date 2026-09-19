@@ -111,12 +111,55 @@ local function makeMemberRow(parent, index)
     row.name:SetPoint("TOPLEFT", 14, -10)
     row.name:SetWidth(220)
     row.name:SetJustifyH("LEFT")
+    row.onlineTag = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.onlineTag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
+    row.onlineTag:SetText("[Online]")
+    row.onlineTag:SetTextColor(0.30, 1, 0.35)
     row.tag = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
+    row.tag:SetPoint("LEFT", row.onlineTag, "RIGHT", 6, 0)
     row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -5)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
     row.detail:SetJustifyH("LEFT")
+    return row
+end
+
+local function makeGuildRuleRow(parent, index)
+    local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    row:SetHeight(54)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 60))
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 60))
+    createBackdrop(row, { 0.075, 0.065, 0.05, 0.96 }, { 0.30, 0.26, 0.19, 1 })
+    row.accent = row:CreateTexture(nil, "ARTWORK")
+    row.accent:SetWidth(3)
+    row.accent:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -5)
+    row.accent:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 5)
+    row.title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    row.title:SetPoint("TOPLEFT", 15, -7)
+    row.title:SetPoint("RIGHT", row, "RIGHT", -137, 0)
+    row.title:SetJustifyH("LEFT")
+    row.description = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.description:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -3)
+    row.description:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -137, 6)
+    row.description:SetJustifyH("LEFT")
+    row.description:SetJustifyV("TOP")
+    row.description:SetWordWrap(true)
+    row.stateBackground = row:CreateTexture(nil, "ARTWORK")
+    row.stateBackground:SetSize(112, 28)
+    row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -11, 0)
+    row.state = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.state:SetPoint("CENTER", row.stateBackground, "CENTER", 0, 0)
+    row.state:SetWidth(104)
+    row.state:SetJustifyH("CENTER")
+    row.dependencyVertical = row:CreateTexture(nil, "ARTWORK")
+    row.dependencyVertical:SetColorTexture(0.72, 0.48, 0.18, 0.85)
+    row.dependencyVertical:SetWidth(2)
+    row.dependencyHorizontal = row:CreateTexture(nil, "ARTWORK")
+    row.dependencyHorizontal:SetColorTexture(0.72, 0.48, 0.18, 0.85)
+    row.dependencyHorizontal:SetHeight(2)
+    row.dependencyVertical:Hide()
+    row.dependencyHorizontal:Hide()
+    row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     return row
 end
 
@@ -164,7 +207,7 @@ local function makeRaceCard(parent)
     card.averageLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     card.averageLabel:SetPoint("TOP", card, "TOP", -240, -58)
     card.averageLabel:SetWidth(145)
-    card.averageLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_LEVEL_60"))
+    card.averageLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_LEVEL_20"))
     card.membersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     card.membersLabel:SetPoint("TOP", card, "TOP", -80, -58)
     card.membersLabel:SetWidth(145)
@@ -232,7 +275,7 @@ local function makeRaceCard(parent)
         GameTooltip:SetText(self.report.guildName or "—")
         if self.report.timestamp and self.report.timestamp > 0 then GameTooltip:AddLine(iRC:Text("RL_GRID_UPDATED", date("%Y-%m-%d %H:%M", self.report.timestamp))) end
         if self.report.source then GameTooltip:AddLine(iRC:Text("RL_GRID_SOURCE", self.report.source)) end
-        GameTooltip:AddLine(iRC:Text("GUILD_STATS_POPULATION", self.report.activeLevel60 or 0,
+        GameTooltip:AddLine(iRC:Text("GUILD_STATS_POPULATION", self.report.activeLevel20 or 0,
             self.report.activePlayers or 0, self.report.activeMembers or 0, self.report.members or 0), 1, 1, 1, true)
         if self.report.cached then GameTooltip:AddLine(iRC:Text("RL_GRID_CACHED"), 1, 0.65, 0) end
         for class, average in pairs(self.report.classAverageLevels or {}) do
@@ -298,8 +341,28 @@ local MAIN_NAVIGATION = {
     { id = "Current Server", header = true },
     { id = "Race Overview", label = iRC:Text("GUILD_STATS_TITLE") },
     { id = "Current Guild", header = true },
+    { id = "Guild Rules", label = "Guild Rules", child = true },
     { id = "Guild Members", label = "Guild Members", child = true },
     { id = "Guild Bank", label = "Guild Bank", child = true },
+    { id = "Management", header = true, managementHeader = true },
+    { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, permission = "verification", dashboardTab = "Verification" },
+    { id = "Incident Management", label = iRC:Text("INCIDENT_TAB"), grandchild = true, permission = "incidents", dashboardTab = "Incidents" },
+    { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications" },
+    { id = "Homepage Management", label = iRC:Text("GUILD_HOMEPAGE_TAB"), child = true, permission = "homepage", panelKey = "homepage" },
+    { id = "Guild-Found Management", label = iRC:Text("GUILDFOUND_TOOLS_TAB"), child = true, permission = "tradeExceptions", panelKey = "guildFound" },
+    { id = "Guild Bank Management", label = "Guild Banks", child = true, permission = "guildBanks", panelKey = "guildBanks" },
+}
+
+local MANAGEMENT_PANEL_KEYS = {
+    ["Notification Management"] = "notifications",
+    ["Homepage Management"] = "homepage",
+    ["Guild-Found Management"] = "guildFound",
+    ["Guild Bank Management"] = "guildBanks",
+}
+
+local DASHBOARD_PANEL_TABS = {
+    ["Verification Management"] = "Verification",
+    ["Incident Management"] = "Incidents",
 }
 
 local function currentServerNavigationName()
@@ -489,7 +552,13 @@ local function createMemberProfessionSearch(main, frame)
         if frame.allMemberData then applyMemberSearch(frame) end
     end)
     search.edit:SetScript("OnEditFocusGained", function() updateMemberSuggestions(frame) end)
-    search.edit:SetScript("OnEditFocusLost", function() search.suggestions:Hide() end)
+    search.edit:SetScript("OnEditFocusLost", function(self)
+        C_Timer.After(0, function()
+            if not self:HasFocus() and not iRC:IsMouseOverFrame(search.suggestions) then
+                search.suggestions:Hide()
+            end
+        end)
+    end)
     search.edit:SetScript("OnEscapePressed", function(self) self:ClearFocus(); search.suggestions:Hide() end)
     search.edit:SetScript("OnEnterPressed", function(self)
         local first = search.buttons[1]
@@ -551,35 +620,82 @@ function UI:Create()
     -- addon frame, so hiding it directly is safe in and out of combat.
     frame.close:SetScript("OnClick", function() frame:Hide() end)
 
+    local disableConfirm = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    disableConfirm:SetSize(510, 190)
+    disableConfirm:SetPoint("CENTER", frame, "CENTER", 0, 20)
+    disableConfirm:SetFrameStrata("FULLSCREEN_DIALOG")
+    disableConfirm:SetToplevel(true)
+    disableConfirm:EnableMouse(true)
+    createBackdrop(disableConfirm, { 0.025, 0.022, 0.018, 1 }, { 0.72, 0.30, 0.16, 1 })
+    disableConfirm.title = disableConfirm:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    disableConfirm.title:SetPoint("TOPLEFT", 22, -20)
+    disableConfirm.title:SetText(iRC:Text("GUILD_CONNECTION_DISABLE_CONFIRM_TITLE"))
+    disableConfirm.title:SetTextColor(unpack(COLORS.gold))
+    disableConfirm.body = disableConfirm:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    disableConfirm.body:SetPoint("TOPLEFT", disableConfirm.title, "BOTTOMLEFT", 0, -14)
+    disableConfirm.body:SetPoint("TOPRIGHT", disableConfirm, "TOPRIGHT", -22, -52)
+    disableConfirm.body:SetJustifyH("LEFT")
+    disableConfirm.body:SetJustifyV("TOP")
+    disableConfirm.body:SetWordWrap(true)
+    disableConfirm.body:SetText(iRC:Text("GUILD_CONNECTION_DISABLE_CONFIRM"))
+    local function makeConfirmButton(text, width)
+        local button = CreateFrame("Button", nil, disableConfirm, "BackdropTemplate")
+        button:SetSize(width, 28)
+        createBackdrop(button, { 0.08, 0.06, 0.04, 1 }, { 0.48, 0.35, 0.16, 1 })
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("CENTER")
+        button.text:SetText(text)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(1, 0.72, 0.22, 0.12)
+        return button
+    end
+    disableConfirm.cancel = makeConfirmButton(iRC:Text("GUILD_CONNECTION_KEEP_ENABLED"), 130)
+    disableConfirm.cancel:SetPoint("BOTTOMRIGHT", disableConfirm, "BOTTOMRIGHT", -22, 18)
+    disableConfirm.cancel:SetScript("OnClick", function() disableConfirm:Hide() end)
+    disableConfirm.accept = makeConfirmButton(iRC:Text("GUILD_CONNECTION_DISABLE"), 130)
+    disableConfirm.accept:SetPoint("RIGHT", disableConfirm.cancel, "LEFT", -10, 0)
+    disableConfirm.accept:SetBackdropColor(0.20, 0.035, 0.025, 1)
+    disableConfirm.accept:SetBackdropBorderColor(0.85, 0.20, 0.12, 1)
+    disableConfirm.accept:SetScript("OnClick", function()
+        disableConfirm:Hide()
+        if iRC:SetGuildConnectionActive(false) ~= false then UI:Refresh() end
+    end)
+    disableConfirm:Hide()
+    frame.disableConfirm = disableConfirm
+
     local header = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    header:SetPoint("TOPLEFT", 15, -14)
-    header:SetPoint("TOPRIGHT", -15, -14)
-    header:SetHeight(78)
+    header:SetPoint("TOPLEFT", 15, -10)
+    header:SetPoint("TOPRIGHT", -15, -10)
+    header:SetHeight(52)
     createBackdrop(header, { 0.10, 0.07, 0.035, 0.98 }, { 0.55, 0.41, 0.17, 1 })
 
     frame.title = header:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    frame.title:SetPoint("TOPLEFT", header, "TOPLEFT", 18, -11)
-    frame.title:SetText(iRC.DisplayName)
+    frame.title:SetPoint("TOPLEFT", header, "TOPLEFT", 16, -7)
+    frame.title:SetText(iRC.Title or iRC.DisplayName)
     frame.title:SetTextColor(unpack(COLORS.gold))
     frame.player = header:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    frame.player:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 17, 13)
+    frame.player:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 16, 8)
+    frame.player:SetWidth(500)
+    frame.player:SetJustifyH("LEFT")
+    frame.connectionStatus = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.connectionStatus:SetPoint("TOPRIGHT", header, "TOPRIGHT", -34, -8)
+    frame.connectionStatus:SetJustifyH("RIGHT")
+    frame.connectionGuild = header:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.connectionGuild:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", -34, 8)
+    frame.connectionGuild:SetWidth(330)
+    frame.connectionGuild:SetJustifyH("RIGHT")
     local sidebar = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    sidebar:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -106)
+    sidebar:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -73)
     sidebar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 17)
     sidebar:SetWidth(210)
     createBackdrop(sidebar, { 0.18, 0.11, 0.045, 0.98 }, { 0.58, 0.43, 0.18, 1 })
     frame.sidebar = sidebar
 
-    local sidebarTitle = sidebar:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    sidebarTitle:SetPoint("TOPLEFT", 14, -13)
-    sidebarTitle:SetText(iRC:Text("IRC_MAIN_NAV_TITLE"))
-    sidebarTitle:SetTextColor(unpack(COLORS.gold))
     frame.tabs = {}
-    local visibleTabIndex = 0
-    for _, item in ipairs(MAIN_NAVIGATION) do
+    for itemIndex, item in ipairs(MAIN_NAVIGATION) do
         if not item.hidden then
-            visibleTabIndex = visibleTabIndex + 1
-            local y = -((visibleTabIndex - 1) * 35 + 41)
+            local y = -((itemIndex - 1) * 35 + 14)
             if item.header then
                 local heading = sidebar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                 heading:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 18, y - 7)
@@ -590,22 +706,26 @@ function UI:Create()
                 if item.id == "Current Server" then
                     heading:SetText(currentServerNavigationName())
                     frame.serverNameHeader = heading
+                elseif item.managementHeader then
+                    heading:SetText("Management")
                 else
                     heading:SetText(currentGuildNavigationName())
                     frame.guildNameHeader = heading
                 end
+                item.widget = heading
             else
                 local tab = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
-                tab:SetSize(item.child and 166 or 180, 31)
-                tab:SetPoint("TOPLEFT", item.child and 28 or 14, y)
+                tab:SetSize(item.grandchild and 152 or (item.child and 166 or 180), 31)
+                tab:SetPoint("TOPLEFT", item.grandchild and 42 or (item.child and 28 or 14), y)
                 createBackdrop(tab, { 0.08, 0.065, 0.05, 0.96 }, { 0.34, 0.28, 0.20, 1 })
                 tab:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
                 tab.label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
                 tab.label:SetPoint("LEFT", 12, 0)
-                tab.label:SetText(item.child and "- " .. item.label or item.label)
+                tab.label:SetText((item.child or item.grandchild) and "- " .. item.label or item.label)
                 tab.category = item.id
                 tab:SetScript("OnClick", function(self)
                     frame.category = self.category
+                    if self.category == "Guild Rules" and frame.scroll then frame.scroll:SetVerticalScroll(0) end
                     if self.category == "Race Overview" then
                         guildStatsFilter = getCurrentGuildStatsFilter()
                         UI.preservedRaceScroll = 0
@@ -615,9 +735,43 @@ function UI:Create()
                     UI:Refresh()
                 end)
                 frame.tabs[item.id] = tab
+                item.widget = tab
             end
         end
     end
+    frame.LayoutNavigation = function()
+        local showManagement = false
+        for _, navigationItem in ipairs(MAIN_NAVIGATION) do
+            if navigationItem.permission and iRC:HasGuildPermission(navigationItem.permission) then
+                showManagement = true
+                break
+            end
+        end
+        local visibleIndex = 0
+        for _, item in ipairs(MAIN_NAVIGATION) do
+            local visible = not item.hidden
+                and (not item.managementHeader or showManagement)
+                and (not item.permission or iRC:HasGuildPermission(item.permission))
+            local widget = item.widget
+            if widget then
+                widget:SetShown(visible)
+                if visible then
+                    visibleIndex = visibleIndex + 1
+                    local y = -((visibleIndex - 1) * 35 + 14)
+                    widget:ClearAllPoints()
+                    widget:SetPoint("TOPLEFT", sidebar, "TOPLEFT",
+                        item.header and 18 or (item.grandchild and 42 or (item.child and 28 or 14)), item.header and y - 7 or y)
+                end
+            end
+        end
+        for _, item in ipairs(MAIN_NAVIGATION) do
+            if item.id == frame.category and item.permission and not iRC:HasGuildPermission(item.permission) then
+                frame.category = "Guild Members"
+                break
+            end
+        end
+    end
+    frame.LayoutNavigation()
 
     local main = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     main:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 13, 0)
@@ -665,6 +819,24 @@ function UI:Create()
         self:SetText(remaining > 0 and iRC:Text("RL_GRID_REFRESH_COOLDOWN", math.ceil(remaining)) or iRC:Text("RL_GRID_REFRESH"))
     end)
     frame.raceRefresh:Hide()
+    frame.rulesViewToggle = CreateFrame("Button", nil, main, "BackdropTemplate")
+    frame.rulesViewToggle:SetSize(150, 27)
+    frame.rulesViewToggle:SetPoint("TOPRIGHT", main, "TOPRIGHT", -14, -9)
+    createBackdrop(frame.rulesViewToggle, { 0.055, 0.045, 0.035, 0.98 }, { 0.28, 0.23, 0.16, 0.9 })
+    frame.rulesViewToggle.activeGlow = frame.rulesViewToggle:CreateTexture(nil, "BACKGROUND")
+    frame.rulesViewToggle.activeGlow:SetPoint("TOPLEFT", 3, -3)
+    frame.rulesViewToggle.activeGlow:SetPoint("BOTTOMRIGHT", -3, 3)
+    frame.rulesViewToggle.activeGlow:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.18)
+    frame.rulesViewToggle.text = frame.rulesViewToggle:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.rulesViewToggle.text:SetPoint("CENTER")
+    frame.rulesViewToggle.highlight = frame.rulesViewToggle:CreateTexture(nil, "HIGHLIGHT")
+    frame.rulesViewToggle.highlight:SetAllPoints()
+    frame.rulesViewToggle.highlight:SetColorTexture(1, 0.72, 0.22, 0.10)
+    frame.rulesViewToggle:SetScript("OnClick", function()
+        frame.rulesViewAsMember = not frame.rulesViewAsMember
+        UI:Refresh()
+    end)
+    frame.rulesViewToggle:Hide()
     frame.cacheUpdating = CreateFrame("Frame", nil, main)
     frame.cacheUpdating:SetSize(130, 20)
     frame.cacheUpdating:SetPoint("RIGHT", frame.raceRefresh, "LEFT", -10, 0)
@@ -762,7 +934,9 @@ function UI:Create()
     frame.bankSearch:SetAutoFocus(false)
     frame.bankSearch:SetMaxLetters(80)
     frame.bankSearch:SetTextInsets(5, 5, 0, 0)
-    frame.bankSearch.hint = main:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    -- Parent the hint to the edit box so hiding the Guild Bank search hides
+    -- every visual part of it on the other tabs as well.
+    frame.bankSearch.hint = frame.bankSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.bankSearch.hint:SetPoint("LEFT", frame.bankSearch, "LEFT", 7, 0)
     frame.bankSearch.hint:SetText("Search bank items")
     frame.bankSuggestions = CreateFrame("Frame", nil, main, "BackdropTemplate")
@@ -802,7 +976,13 @@ function UI:Create()
         updateBankSuggestions(frame)
     end)
     frame.bankSearch:SetScript("OnEditFocusGained", function() updateBankSuggestions(frame) end)
-    frame.bankSearch:SetScript("OnEditFocusLost", function() frame.bankSuggestions:Hide() end)
+    frame.bankSearch:SetScript("OnEditFocusLost", function(self)
+        C_Timer.After(0, function()
+            if not self:HasFocus() and not iRC:IsMouseOverFrame(frame.bankSuggestions) then
+                frame.bankSuggestions:Hide()
+            end
+        end)
+    end)
     frame.bankSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     frame.bankSearch:SetScript("OnEnterPressed", function(self)
         local first = frame.bankSuggestions.buttons[1]
@@ -890,11 +1070,18 @@ function UI:Create()
     memberMenu.whisper:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
-        if profile and ChatFrame_SendTell then ChatFrame_SendTell(iRC:FormatPlayerName(profile.name)) end
+        if profile then iRC:OpenWhisper(profile.name) end
     end)
     memberMenu:Hide()
     frame.memberMenu = memberMenu
-    frame:HookScript("OnHide", function() memberMenu:Hide(); professionReport:Hide() end)
+    frame:HookScript("OnHide", function()
+        memberMenu:Hide()
+        professionReport:Hide()
+        disableConfirm:Hide()
+        if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then
+            iRC.ConnectionDashboard:HideEmbedded()
+        end
+    end)
     local outsideClickWatcher = CreateFrame("Frame")
     outsideClickWatcher:RegisterEvent("GLOBAL_MOUSE_DOWN")
     outsideClickWatcher:SetScript("OnEvent", function()
@@ -915,6 +1102,12 @@ function UI:Create()
     frame.racePodium:Hide()
     frame.category = "Race Overview"
     return frame
+end
+
+function UI:ConfirmDisableGuildConnection()
+    local frame = self:Create()
+    frame.disableConfirm:Show()
+    frame.disableConfirm:Raise()
 end
 
 function UI:RenderMemberRows()
@@ -943,6 +1136,9 @@ function UI:RenderMemberRows()
         end
         row.name:SetText(iRC:FormatPlayerName(profile.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
+        row.onlineTag:SetShown(profile.online == true)
+        row.tag:ClearAllPoints()
+        row.tag:SetPoint("LEFT", profile.online == true and row.onlineTag or row.name, "RIGHT", profile.online == true and 6 or 8, 0)
         row.tag:SetText(memberTag and ("[" .. memberTag .. "]") or "")
         if tagColor then row.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
         row.tag:SetShown(memberTag ~= nil)
@@ -1057,6 +1253,313 @@ local function updateMemberRows(frame)
     updateMemberSuggestions(frame)
     frame.contentTitle:SetText("Guild Members")
     frame.contentSubtitle:SetText("Current guild roster and live addon information.")
+end
+
+local function updateGuildRules(frame)
+    for _, card in ipairs(frame.raceCards) do card:Hide() end
+    for _, section in pairs(frame.factionSections) do section:Hide() end
+    for _, row in ipairs(frame.memberRows) do row:Hide() end
+    for _, row in ipairs(frame.bankSnapshotRows) do row:Hide() end
+    frame.bankSnapshotText:Hide()
+    frame.racePodium:Hide()
+
+    local connection = iRC:GetConnection()
+    local rules = iRC:GetConnectionRules()
+    local isGuildMaster = iRC:IsGuildMaster()
+    local viewAsMember = isGuildMaster and frame.rulesViewAsMember == true
+    local canEdit = isGuildMaster and not viewAsMember
+    local connectionActive = connection and connection.active == true
+    local progression = iRC:GetProgressionMode(rules)
+    local maxLevelProgression = iRC:GetMaxLevelProgressionMode(rules)
+    local guildFoundRuleActive = rules.guildFoundOnly == true or rules.level60GuildFound == true
+    local entries = {
+        {
+            section = "Guild Connection",
+            title = "iRC Guild Connection",
+            description = "Controls whether this guild uses iRC rules, enforcement, verification, roster sharing, and community synchronization.",
+            active = connectionActive,
+            activeLabel = "ENABLED",
+            inactiveLabel = iRC:Text("GUILD_CONNECTION_REQUIRED"),
+            requiredWhenInactive = true,
+            activation = true,
+            set = function(value) return iRC:SetGuildConnectionActive(value) end,
+        },
+        {
+            section = "Race-Locked",
+            title = "Race-Locked Guild",
+            description = "Defines the guild as Race-Locked at every level and makes the dependent race and language rules available.",
+            active = rules.raceLock == true,
+            activeLabel = "ENFORCED",
+            inactiveLabel = "NOT REQUIRED",
+            set = function(value) return iRC:SetConnectionRule("raceLock", value) end,
+        },
+        {
+            section = "Race-Locked",
+            title = "Native Language Chat",
+            description = "At levels 1–60, outgoing supported chat uses the character's native racial language while Race-Locked is enforced.",
+            active = rules.raceLock == true and rules.nativeTongueOnly == true,
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            available = rules.raceLock == true,
+            dependencyDepth = 1,
+            set = function(value) return iRC:SetConnectionRule("nativeTongueOnly", value) end,
+        },
+        {
+            section = "Race-Locked",
+            title = "Same-Race Groups",
+            description = "From level " .. tostring(rules.sameRaceMinimumLevel or 1)
+                .. (rules.allowLevel60MixedRaceGroups and " through level 59" or " through level 60")
+                .. ", parties and raids may contain only characters of the guild's selected race.",
+            active = rules.raceLock == true and rules.sameRaceGroupsOnly == true,
+            activeLabel = "REQUIRED",
+            inactiveLabel = "NOT REQUIRED",
+            available = rules.raceLock == true,
+            dependencyDepth = 1,
+            set = function(value) return iRC:SetConnectionRule("sameRaceGroupsOnly", value) end,
+        },
+        {
+            section = "Race-Locked",
+            title = "Level 60 Mixed-Race Exception",
+            description = "At level 60, mixed-race parties and raids are allowed; the same-race requirement still applies below level 60.",
+            active = rules.raceLock == true and rules.sameRaceGroupsOnly == true
+                and rules.allowLevel60MixedRaceGroups == true,
+            available = rules.raceLock == true and rules.sameRaceGroupsOnly == true,
+            activeLabel = "ALLOWED",
+            inactiveLabel = "NOT ALLOWED",
+            dependencyDepth = 2,
+            set = function(value) return iRC:SetConnectionRule("allowLevel60MixedRaceGroups", value) end,
+        },
+        {
+            section = "Self-Found",
+            title = "Self-Found Progression",
+            description = maxLevelProgression == "GUILD_FOUND"
+                and "Characters must remain Self-Found from levels 1–59 and then follow the configured level 60 Guild-Found rule."
+                or maxLevelProgression == "UNRESTRICTED"
+                    and "Characters must remain Self-Found from levels 1–59; progression becomes unrestricted at level 60."
+                or "Characters must remain Self-Found throughout levels 1–60.",
+            active = progression == "SELF_FOUND",
+            activeLabel = "REQUIRED",
+            inactiveLabel = "NOT REQUIRED",
+            set = function(value) return iRC:SetProgressionMode(value and "SELF_FOUND" or "NONE") end,
+        },
+        {
+            section = "Self-Found",
+            title = "Level 60 Guild-Found Transition",
+            description = "Characters must be Self-Found during levels 1–59. Upon reaching level 60, Guild-Found rules replace the Self-Found requirement.",
+            active = progression == "SELF_FOUND" and maxLevelProgression == "GUILD_FOUND",
+            available = progression == "SELF_FOUND",
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            dependencyDepth = 1,
+            set = function(value) return iRC:SetMaxLevelProgressionMode(value and "GUILD_FOUND" or "SELF_FOUND") end,
+        },
+        {
+            section = "Self-Found",
+            title = "Level 60 Unrestricted Transition",
+            description = "Characters must be Self-Found during levels 1–59. At level 60, the progression restriction is removed.",
+            active = progression == "SELF_FOUND" and maxLevelProgression == "UNRESTRICTED",
+            available = progression == "SELF_FOUND",
+            dependencyDepth = 1,
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            set = function(value) return iRC:SetMaxLevelProgressionMode(value and "UNRESTRICTED" or "SELF_FOUND") end,
+        },
+        {
+            section = "Guild-Found",
+            title = "Guild-Found Progression",
+            description = "Characters must follow Guild-Found item, money, and trade restrictions throughout levels 1–60.",
+            active = progression == "GUILD_FOUND",
+            activeLabel = "REQUIRED",
+            inactiveLabel = "NOT REQUIRED",
+            set = function(value) return iRC:SetProgressionMode(value and "GUILD_FOUND" or "NONE") end,
+        },
+        {
+            section = "Guild-Found",
+            title = "Self-Found or Guild-Found Progression",
+            description = "Throughout levels 1–60, each character may qualify through either verified Self-Found or verified Guild-Found progression.",
+            active = progression == "SELF_FOUND_OR_GUILD_FOUND",
+            activeLabel = "REQUIRED",
+            inactiveLabel = "NOT REQUIRED",
+            set = function(value) return iRC:SetProgressionMode(value and "SELF_FOUND_OR_GUILD_FOUND" or "NONE") end,
+        },
+        {
+            section = "Group Rules",
+            title = "Guild-Only Groups",
+            description = "From level " .. tostring(rules.guildGroupsMinimumLevel or 1)
+                .. " through level 60, parties and raids may contain only members of this guild.",
+            active = rules.guildGroupsOnly == true,
+            activeLabel = "REQUIRED",
+            inactiveLabel = "NOT REQUIRED",
+            set = function(value) return iRC:SetConnectionRule("guildGroupsOnly", value) end,
+        },
+        {
+            section = "Guild-Found",
+            title = "Approved Guild-Found Trade Exceptions",
+            description = "At any level where Guild-Found rules apply, items in the guild's approved exception list may be traded as configured.",
+            active = guildFoundRuleActive and rules.guildFoundTradeExceptions == true,
+            available = guildFoundRuleActive,
+            activeLabel = "ALLOWED",
+            inactiveLabel = "NOT ALLOWED",
+            dependencyDepth = 1,
+            set = function(value) return iRC:SetConnectionRule("guildFoundTradeExceptions", value) end,
+        },
+        {
+            section = "Guild Features",
+            title = "Guild Member Map",
+            description = "At every level, participating guild members may share their current position and appear as pins on the world map.",
+            active = rules.guildMapEnabled == true,
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            set = function(value) return iRC:SetConnectionRule("guildMapEnabled", value) end,
+        },
+        {
+            section = "Announcements",
+            title = "Level 60 Guild Announcements",
+            description = "Send a guild-chat announcement when an eligible character reaches level 60.",
+            active = rules.enableGuildLevel60Message == true,
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            set = function(value) return iRC:SetConnectionRule("enableGuildLevel60Message", value) end,
+        },
+        {
+            section = "Announcements",
+            title = "Hardcore Death Guild Announcements",
+            description = iRC:IsOfficialHardcoreRealm()
+                and "On this official Hardcore realm, send a guild-chat announcement when a character permanently dies at any level."
+                or "Available only on official Hardcore realms. Death announcements remain disabled on this realm.",
+            active = iRC:IsOfficialHardcoreRealm() and rules.enableGuildDeathMessage == true,
+            available = iRC:IsOfficialHardcoreRealm(),
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            set = function(value) return iRC:SetConnectionRule("enableGuildDeathMessage", value) end,
+        },
+    }
+
+    local visible = {}
+    for sourceIndex, entry in ipairs(entries) do
+        entry.sourceIndex = sourceIndex
+        -- Preserve the configured rules while the connection is disabled,
+        -- but do not present any of them as currently enforced.
+        if not entry.activation and not connectionActive then entry.active = false end
+        if canEdit or entry.active or entry.activation then visible[#visible + 1] = entry end
+    end
+    local sectionOrder = {
+        ["Guild Connection"] = 1, ["Race-Locked"] = 2, ["Self-Found"] = 3,
+        ["Guild-Found"] = 4, ["Group Rules"] = 5, ["Guild Features"] = 6, Announcements = 7,
+    }
+    table.sort(visible, function(a, b)
+        local aOrder, bOrder = sectionOrder[a.section] or 99, sectionOrder[b.section] or 99
+        if aOrder ~= bOrder then return aOrder < bOrder end
+        return a.sourceIndex < b.sourceIndex
+    end)
+    if not frame.rulesEmpty then
+        frame.rulesEmpty = frame.scrollContent:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+        frame.rulesEmpty:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 14, -14)
+        frame.rulesEmpty:SetPoint("RIGHT", frame.scrollContent, "RIGHT", -14, 0)
+        frame.rulesEmpty:SetJustifyH("LEFT")
+        frame.rulesEmpty:SetText("No active guild rules have been published.")
+    end
+    frame.rulesEmpty:SetShown(#visible == 0)
+    frame.ruleRows = frame.ruleRows or {}
+    frame.ruleSectionHeaders = frame.ruleSectionHeaders or {}
+    local sectionIndex, yOffset, lastSection = 0, 0, nil
+    for index, entry in ipairs(visible) do
+        if entry.section ~= lastSection then
+            sectionIndex = sectionIndex + 1
+            local header = frame.ruleSectionHeaders[sectionIndex]
+            if not header then
+                header = CreateFrame("Frame", nil, frame.scrollContent, "BackdropTemplate")
+                header:SetHeight(22)
+                createBackdrop(header, { 0.13, 0.085, 0.035, 0.96 }, { 0.48, 0.35, 0.16, 1 })
+                header.text = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                header.text:SetPoint("LEFT", header, "LEFT", 12, 0)
+                header.text:SetTextColor(unpack(COLORS.gold))
+                frame.ruleSectionHeaders[sectionIndex] = header
+            end
+            header:ClearAllPoints()
+            header:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
+            header:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -yOffset)
+            header.text:SetText(entry.section)
+            header:Show()
+            yOffset = yOffset + 27
+            lastSection = entry.section
+        end
+        local row = frame.ruleRows[index]
+        if not row then
+            row = makeGuildRuleRow(frame.scrollContent, index)
+            frame.ruleRows[index] = row
+        end
+        local dependencyDepth = tonumber(entry.dependencyDepth) or 0
+        local leftInset = 10 + dependencyDepth * 18
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", leftInset, -yOffset)
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", -10, -yOffset)
+        row.dependencyVertical:ClearAllPoints()
+        row.dependencyHorizontal:ClearAllPoints()
+        if dependencyDepth > 0 then
+            -- Draw an L from the dependency branch above into this rule card.
+            row.dependencyVertical:SetPoint("TOPLEFT", row, "TOPLEFT", -10, 7)
+            row.dependencyVertical:SetPoint("BOTTOMLEFT", row, "LEFT", -10, 0)
+            row.dependencyHorizontal:SetPoint("LEFT", row.dependencyVertical, "BOTTOMLEFT", 0, 0)
+            row.dependencyHorizontal:SetPoint("RIGHT", row, "LEFT", 1, 0)
+            row.dependencyVertical:Show()
+            row.dependencyHorizontal:Show()
+        else
+            row.dependencyVertical:Hide()
+            row.dependencyHorizontal:Hide()
+        end
+        row.title:SetText(entry.title)
+        row.description:SetText(entry.description)
+        row.state:SetText(entry.active and (entry.activeLabel or "ACTIVE") or (entry.inactiveLabel or "INACTIVE"))
+        local editable = canEdit and (entry.activation or connectionActive) and entry.available ~= false
+        local blocked = canEdit and not editable
+        local currentEntry, currentEditable = entry, editable
+        row:SetEnabled(editable and true or false)
+        row:SetAlpha(blocked and 0.45 or 1)
+        row.title:SetTextColor(blocked and 0.62 or 1, blocked and 0.62 or 1, blocked and 0.62 or 1)
+        row.description:SetTextColor(blocked and 0.42 or 0.62, blocked and 0.42 or 0.62, blocked and 0.42 or 0.62)
+        local requiredWarning = entry.requiredWhenInactive and not entry.active
+        row.state:SetTextColor(requiredWarning and 1 or (blocked and 0.50 or (entry.active and 0.25 or 0.62)),
+            requiredWarning and 0.18 or (blocked and 0.50 or (entry.active and 1 or 0.62)),
+            requiredWarning and 0.12 or (blocked and 0.50 or (entry.active and 0.35 or 0.62)))
+        row.stateBackground:SetColorTexture(requiredWarning and 0.24 or (entry.active and 0.04 or 0.10),
+            requiredWarning and 0.025 or (entry.active and 0.24 or 0.085),
+            requiredWarning and 0.02 or (entry.active and 0.08 or 0.06), blocked and 0.32 or 0.82)
+        row.accent:SetColorTexture(blocked and 0.35 or (entry.active and 0.20 or 0.62),
+            blocked and 0.35 or (entry.active and 0.86 or 0.42),
+            blocked and 0.35 or (entry.active and 0.30 or 0.18), 1)
+        row:SetBackdropColor(entry.active and 0.045 or 0.075, entry.active and 0.12 or 0.065,
+            entry.active and 0.055 or 0.05, editable and 0.98 or 0.72)
+        row:SetBackdropBorderColor(requiredWarning and 0.85 or (entry.active and 0.20 or 0.30),
+            requiredWarning and 0.12 or (entry.active and 0.72 or 0.26),
+            requiredWarning and 0.08 or (entry.active and 0.27 or 0.19), 1)
+        row:SetScript("OnClick", function()
+            if not currentEditable then return end
+            if currentEntry.activation and currentEntry.active then
+                UI:ConfirmDisableGuildConnection()
+                return
+            end
+            if currentEntry.set(not currentEntry.active) ~= false then UI:Refresh() end
+        end)
+        row:Show()
+        yOffset = yOffset + 60
+    end
+    for index = #visible + 1, #frame.ruleRows do frame.ruleRows[index]:Hide() end
+    for index = sectionIndex + 1, #frame.ruleSectionHeaders do frame.ruleSectionHeaders[index]:Hide() end
+
+    frame.scrollContent:SetHeight(math.max(1, yOffset))
+    frame.contentTitle:SetText("Guild Rules")
+    if viewAsMember then
+        frame.contentSubtitle:SetText("Member preview: only active guild rules are shown.")
+    elseif canEdit then
+        frame.contentSubtitle:SetText(connectionActive
+            and "Click a rule to activate or deactivate it. Race-Locked can be combined with Self-Found or Guild-Found progression."
+            or "Enable iRC for this guild to configure and synchronize guild rules.")
+    else
+        frame.contentSubtitle:SetText(connectionActive
+            and "Active guild rules. Only the Guild Master can change this ruleset."
+            or "iRC is not currently enabled for this guild.")
+    end
 end
 
 local BANK_CATEGORY_ORDER = {
@@ -1376,7 +1879,7 @@ local function setRaceCard(card, group, rank)
     card.tag:SetText(tag and ("[" .. tag .. "]") or "")
     if tagColor then card.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
     card.tag:SetShown(tag ~= nil)
-    card.average:SetText(group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "—")
+    card.average:SetText(group.activeLevel20 ~= nil and formatNumber(group.activeLevel20) or "—")
     card.members:SetText(formatNumber(group.activePlayers or 0))
     card.total:SetText(group.activeMembers ~= nil and formatNumber(group.activeMembers) or "—")
     card.totalMembers:SetText(formatNumber(group.members or 0))
@@ -1437,7 +1940,7 @@ local function setRaceCard(card, group, rank)
                     iRC:Print(iRC:Text("GUILD_CONTACT_CROSS_FACTION"))
                     return
                 end
-                if ChatFrame_SendTell then ChatFrame_SendTell(iRC:FormatPlayerName(contactName)) end
+                iRC:OpenWhisper(contactName)
             end)
             button:SetScript("OnEnter", function(self)
                 GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText(iRC:Text("GUILD_CONTACT_WHISPER", displayName)); GameTooltip:Show()
@@ -1581,6 +2084,21 @@ end
 function UI:Refresh()
     self.pendingRefresh = nil
     local frame = self:Create()
+    if frame.LayoutNavigation then frame.LayoutNavigation() end
+    local managementPanelKey = MANAGEMENT_PANEL_KEYS[frame.category]
+    local dashboardTab = DASHBOARD_PANEL_TABS[frame.category]
+    if managementPanelKey then
+        if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then iRC.ConnectionDashboard:HideEmbedded() end
+        if iRC.ShowManagementPanel then iRC:ShowManagementPanel(managementPanelKey, frame.main) end
+    elseif dashboardTab then
+        if iRC.HideManagementPanels then iRC:HideManagementPanels() end
+        if iRC.ConnectionDashboard and iRC.ConnectionDashboard.ShowEmbedded then
+            iRC.ConnectionDashboard:ShowEmbedded(frame.main, frame, dashboardTab)
+        end
+    elseif iRC.HideManagementPanels then
+        iRC:HideManagementPanels()
+        if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then iRC.ConnectionDashboard:HideEmbedded() end
+    end
     if frame.category ~= "Guild Members" then
         frame.professionReport:Hide()
         frame.memberMenu:Hide()
@@ -1588,11 +2106,22 @@ function UI:Refresh()
     frame.serverNameHeader:SetText(currentServerNavigationName())
     frame.guildNameHeader:SetText(currentGuildNavigationName())
     local bankAccess = canUseGuildBankSnapshot()
-    frame.raceRefresh:SetShown(frame.category == "Race Overview")
-    frame.memberProfessionSearch:SetShown(frame.category == "Guild Members")
+    local embeddedManagement = managementPanelKey or dashboardTab
+    frame.raceRefresh:SetShown(not embeddedManagement and frame.category == "Race Overview")
+    local showRulesViewToggle = frame.category == "Guild Rules" and iRC:IsGuildMaster()
+    frame.rulesViewToggle:SetShown(showRulesViewToggle)
+    if showRulesViewToggle then
+        frame.rulesViewToggle.text:SetText(frame.rulesViewAsMember and "Back to edit" or "View as member")
+        frame.rulesViewToggle:SetBackdropColor(frame.rulesViewAsMember and 0.18 or 0.055,
+            frame.rulesViewAsMember and 0.09 or 0.045, frame.rulesViewAsMember and 0.025 or 0.035, 0.98)
+        frame.rulesViewToggle:SetBackdropBorderColor(frame.rulesViewAsMember and COLORS.gold[1] or 0.28,
+            frame.rulesViewAsMember and COLORS.gold[2] or 0.23, frame.rulesViewAsMember and COLORS.gold[3] or 0.16,
+            frame.rulesViewAsMember and 1 or 0.9)
+    end
+    frame.memberProfessionSearch:SetShown(not embeddedManagement and frame.category == "Guild Members")
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
-    frame.bankSave:SetShown(frame.category == "Guild Bank" and bankAccess)
-    frame.bankSearch:SetShown(frame.category == "Guild Bank")
+    frame.bankSave:SetShown(not embeddedManagement and frame.category == "Guild Bank" and bankAccess)
+    frame.bankSearch:SetShown(not embeddedManagement and frame.category == "Guild Bank")
     if frame.category ~= "Guild Bank" then frame.bankSuggestions:Hide() end
     if frame.category == "Guild Bank" then
         frame.bankItemInfoEvents:RegisterEvent("GET_ITEM_INFO_RECEIVED")
@@ -1600,6 +2129,11 @@ function UI:Refresh()
         frame.bankItemInfoEvents:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
     end
     frame.bankSnapshotText:Hide()
+    if frame.category ~= "Guild Rules" then
+        for _, row in ipairs(frame.ruleRows or {}) do row:Hide() end
+        for _, header in ipairs(frame.ruleSectionHeaders or {}) do header:Hide() end
+        if frame.rulesEmpty then frame.rulesEmpty:Hide() end
+    end
     if frame.category ~= "Guild Bank" then
         for _, row in ipairs(frame.bankSnapshotRows) do row:Hide() end
     end
@@ -1619,7 +2153,21 @@ function UI:Refresh()
     frame.scroll:ClearAllPoints()
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -82 or (frame.category == "Guild Bank" and -120 or -78))
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
+    frame.scroll:SetShown(not embeddedManagement)
+    frame.contentTitle:SetShown(not embeddedManagement)
+    frame.contentSubtitle:SetShown(not embeddedManagement)
     frame.cacheUpdating:SetShown(frame.category == "Race Overview" and iRC.RaceGrid and iRC.RaceGrid:IsCacheUpdating())
+    local connection = iRC:GetConnection()
+    if connection and iRC:IsGuildConnectionActive() then
+        frame.connectionStatus:SetText(iRC.Colors.Green .. "Connected" .. iRC.Colors.Reset)
+        frame.connectionGuild:SetText(connection.guildName or (GetGuildInfo and GetGuildInfo("player")) or "")
+    elseif connection then
+        frame.connectionStatus:SetText(iRC.Colors.Yellow .. "iRC disabled" .. iRC.Colors.Reset)
+        frame.connectionGuild:SetText((connection.guildName or "Guild") .. " · Shared rules and sync are inactive")
+    else
+        frame.connectionStatus:SetText(iRC.Colors.Red .. "Not connected" .. iRC.Colors.Reset)
+        frame.connectionGuild:SetText("Join a guild to use guild sync")
+    end
     local profile = getProfile(frame)
     local name = iRC:FormatPlayerName(profile and profile.name or frame.subjectName or iRC:GetPlayerName())
     local race, class, level = profile and profile.race or "Unknown", profile and profile.class or "Unknown", profile and profile.level or 1
@@ -1627,13 +2175,25 @@ function UI:Refresh()
     for category, tab in pairs(frame.tabs) do setTabAppearance(tab, frame.category == category) end
     if frame.category == "Guild Members" then
         updateMemberRows(frame)
+    elseif frame.category == "Guild Rules" then
+        frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
+            .. "  Guild connection and shared rules" .. iRC.Colors.Reset)
+        updateGuildRules(frame)
     elseif frame.category == "Guild Bank" then
         updateGuildBankSnapshot(frame)
+    elseif embeddedManagement then
+        frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
+            .. "  Delegated guild management" .. iRC.Colors.Reset)
     elseif frame.category == "Race Overview" then
-        local connection = iRC:GetConnection()
         frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray .. "  " .. iRC:Text("GUILD_STATS_HEADER_DESC") .. iRC.Colors.Reset)
         updateRaceOverview(frame)
     end
+end
+
+function UI:OpenCategory(category)
+    local frame = self:Create()
+    if frame.tabs[category] then frame.category = category end
+    return self:Open()
 end
 
 function UI:Open(subjectName, publishFromClick)

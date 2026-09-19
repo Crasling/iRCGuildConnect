@@ -7,7 +7,8 @@ iRC.RaceGrid = RaceGrid
 
 local PREFIX = "iRCGridV1"
 local CHANNEL_NAME = "iRCCommsV1"
-local WIRE_VERSION = "3"
+local WIRE_VERSION = "4"
+local REPORT_SCHEMA = 4
 local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
@@ -144,6 +145,10 @@ local function getServerStore()
         store = { guildReports = {} }
         iRCDB.globalRaceGrid.servers[serverKey] = store
     end
+    if store.reportSchema ~= REPORT_SCHEMA then
+        store.guildReports = {}
+        store.reportSchema = REPORT_SCHEMA
+    end
     store.guildReports = store.guildReports or {}
     store.guildActivity = store.guildActivity or {}
     return store
@@ -271,7 +276,7 @@ function RaceGrid:GetLocalReport()
         guid = profile.guid,
         guildName = guild.guildName, race = guild.race, faction = guild.faction,
         members = guild.members, activePlayers = guild.activePlayers,
-        membersLevel60 = guild.membersLevel60, activeLevel60 = guild.activeLevel60,
+        membersLevel60 = guild.membersLevel60, activeLevel20 = guild.activeLevel20,
         activeMembers = guild.activeMembers, averageLevel = guild.averageLevel,
         classes = guild.classes, guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
@@ -338,7 +343,7 @@ function RaceGrid:BuildOwnGuildReports()
         race = guildRace, faction = UnitFactionGroup and UnitFactionGroup("player")
             or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
         guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
-        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel60 = 0,
+        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel20 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
         rulesKnown = true,
@@ -379,6 +384,8 @@ function RaceGrid:BuildOwnGuildReports()
             local level, class = member.level or 1, member.class or "UNKNOWN"
             local recentlyOnline = member.online == true
                 or member.lastOnlineDays ~= nil and member.lastOnlineDays <= 30
+            local recentlyOnlineFiveDays = member.online == true
+                or member.lastOnlineDays ~= nil and member.lastOnlineDays <= 5
             group.members, group.totalLevel = group.members + 1, group.totalLevel + level
             if member.online then group.activePlayers = group.activePlayers + 1 end
             local inviteIndex = contactIndexes[key]
@@ -392,8 +399,8 @@ function RaceGrid:BuildOwnGuildReports()
             group.classTotals[class] = (group.classTotals[class] or 0) + level
             if level >= 60 then
                 group.membersLevel60 = group.membersLevel60 + 1
-                if recentlyOnline then group.activeLevel60 = group.activeLevel60 + 1 end
             end
+            if level >= 20 and recentlyOnlineFiveDays then group.activeLevel20 = group.activeLevel20 + 1 end
         end
     end
     if group.members == 0 then return {} end
@@ -441,7 +448,7 @@ local function serializeGuildReport(report, includeDescription)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 140)
     fields[#fields + 1] = tostring(report.addonVersion or iRC.Version or "")
-    fields[#fields + 1] = report.activeLevel60 ~= nil and tostring(report.activeLevel60) or ""
+    fields[#fields + 1] = report.activeLevel20 ~= nil and tostring(report.activeLevel20) or ""
     fields[#fields + 1] = report.activeMembers ~= nil and tostring(report.activeMembers) or ""
     fields[#fields + 1] = rules.guildMapEnabled and "1" or "0"
     fields[#fields + 1] = rules.raceLock == true and "1" or "0"
@@ -483,7 +490,7 @@ function RaceGrid:BroadcastReport(fromClick)
     if descriptionTimestamp > 0 and descriptionEditor ~= "" then
         send(PREFIX, table.concat({ "GUILD_DESC", WIRE_VERSION, tostring(descriptionTimestamp), descriptionEditor, description }, SEP), "CHANNEL", CHANNEL_NAME)
     end
-    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel60,
+    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel20,
         report.activeMembers, report.activePlayers, report.members), 3)
     return true
 end
@@ -562,11 +569,11 @@ local function parseGuildReport(parts)
     local guildContacts = tostring(parts[25] or "")
     if #guildContacts > 140 or guildContacts:find("[%c]") then return nil end
     local addonVersion = parts[26]
-    local activeLevel60, activeMembers
+    local activeLevel20, activeMembers
     if parts[27] ~= nil and parts[27] ~= "" or parts[28] ~= nil and parts[28] ~= "" then
-        activeLevel60 = validNumber(parts[27], 0, members)
+        activeLevel20 = validNumber(parts[27], 0, members)
         activeMembers = validNumber(parts[28], 0, members)
-        if not activeLevel60 or not activeMembers or activeLevel60 > level60 or activeLevel60 > activeMembers then return nil end
+        if not activeLevel20 or not activeMembers or activeLevel20 > activeMembers then return nil end
     end
     local rawOnlineMask = parts[31]
     local guildContactsOnlineMask = validNumber(rawOnlineMask or "0", 0, 31)
@@ -587,7 +594,7 @@ local function parseGuildReport(parts)
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
-        activeLevel60 = activeLevel60, activeMembers = activeMembers,
+        activeLevel20 = activeLevel20, activeMembers = activeMembers,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
         classes = classes, rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
@@ -968,7 +975,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     end
     iRC:CheckForNewVersion(report.addonVersion)
     storeIncomingReport(report)
-    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel60 or 0,
+    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel20 or 0,
         report.activeMembers or 0, report.activePlayers, report.members), 3)
 end
 
@@ -992,7 +999,7 @@ function iRC:GetGlobalRaceOverview()
 end
 
 local function guildRank(a, b)
-    if (a.activeLevel60 or -1) ~= (b.activeLevel60 or -1) then return (a.activeLevel60 or -1) > (b.activeLevel60 or -1) end
+    if (a.activeLevel20 or -1) ~= (b.activeLevel20 or -1) then return (a.activeLevel20 or -1) > (b.activeLevel20 or -1) end
     if (a.activeMembers or -1) ~= (b.activeMembers or -1) then return (a.activeMembers or -1) > (b.activeMembers or -1) end
     if (a.activePlayers or 0) ~= (b.activePlayers or 0) then return (a.activePlayers or 0) > (b.activePlayers or 0) end
     if (a.members or 0) ~= (b.members or 0) then return (a.members or 0) > (b.members or 0) end
