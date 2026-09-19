@@ -51,10 +51,6 @@ local function isFishingRod(itemID)
         local fishingSubclass = Enum and Enum.ItemWeaponSubclass and Enum.ItemWeaponSubclass.Fishingpole or 20
         if classID == 2 and subclassID == fishingSubclass then return true end
     end
-    if GetItemInfo then
-        local _, _, _, _, _, _, subclass = GetItemInfo(itemID)
-        if subclass and subclass:lower():find("fishing", 1, true) then return true end
-    end
     return false
 end
 
@@ -65,20 +61,14 @@ local function carriedFishingRod()
         equipped = link and tonumber(link:match("item:(%d+)"))
     end
     if isFishingRod(equipped) then return equipped end
-    if not (C_Container and C_Container.GetContainerNumSlots) and not GetContainerNumSlots then return nil end
+    if not (C_Container and C_Container.GetContainerNumSlots) then return nil end
     for bag = 0, NUM_BAG_SLOTS or 4 do
-        local slots = C_Container and C_Container.GetContainerNumSlots and C_Container.GetContainerNumSlots(bag)
-            or (GetContainerNumSlots and GetContainerNumSlots(bag)) or 0
+        local slots = C_Container.GetContainerNumSlots(bag) or 0
         for slot = 1, slots do
-            local itemID
-            if C_Container and C_Container.GetContainerItemID then itemID = C_Container.GetContainerItemID(bag, slot) end
-            if not itemID and C_Container and C_Container.GetContainerItemInfo then
+            local itemID = C_Container.GetContainerItemID and C_Container.GetContainerItemID(bag, slot)
+            if not itemID and C_Container.GetContainerItemInfo then
                 local info = C_Container.GetContainerItemInfo(bag, slot)
                 itemID = info and info.itemID
-            end
-            if not itemID and GetContainerItemLink then
-                local link = GetContainerItemLink(bag, slot)
-                itemID = link and tonumber(link:match("item:(%d+)"))
             end
             if isFishingRod(itemID) then return itemID end
         end
@@ -97,13 +87,6 @@ function Professions:CollectSkills()
                 local id = tonumber(skillLine) or byName[tostring(name or ""):lower()]
                 if id and byID[id] then found[id] = math.max(0, tonumber(rank) or 0) end
             end
-        end
-    end
-    if GetNumSkillLines and GetSkillLineInfo then
-        for index = 1, GetNumSkillLines() do
-            local name, isHeader, _, rank = GetSkillLineInfo(index)
-            local id = not isHeader and byName[tostring(name or ""):lower()]
-            if id then found[id] = math.max(0, tonumber(rank) or 0) end
         end
     end
     data.skills = found
@@ -182,38 +165,71 @@ function Professions:SendKnownRecipes()
     for id in pairs(data.recipes or {}) do sendRecipeChunks(id, data) end
 end
 
-function Professions:CollectOpenRecipes(isCraft)
-    local name = isCraft and GetCraftDisplaySkillLine and GetCraftDisplaySkillLine()
-        or (GetTradeSkillLine and GetTradeSkillLine())
-    local id = byName[tostring(name or ""):lower()]
-    if not id or id == 129 or id == 356 then return end
-    local count = isCraft and GetNumCrafts and GetNumCrafts() or (GetNumTradeSkills and GetNumTradeSkills())
-    if not count or count < 1 then return end
-    local recipes, seen = {}, {}
-    for index = 1, count do
-        local recipeName, recipeType
-        if isCraft and GetCraftInfo then recipeName, _, recipeType = GetCraftInfo(index)
-        elseif GetTradeSkillInfo then recipeName, recipeType = GetTradeSkillInfo(index) end
-        if recipeName and recipeType ~= "header" and recipeType ~= "subheader" then
-            local link = not isCraft and GetTradeSkillRecipeLink and GetTradeSkillRecipeLink(index)
-                or (isCraft and GetCraftItemLink and GetCraftItemLink(index))
-            local spellID = link and link:match("spell:(%d+)")
-            local key = spellID and ("S" .. spellID) or ("N" .. recipeName)
-            if not seen[key] then seen[key] = true; recipes[#recipes + 1] = key end
+local function knownProfessionID(value)
+    if type(value) == "table" then
+        local id = tonumber(value.professionID or value.parentProfessionID or value.skillLineID)
+        if byID[id] then return id end
+        return byName[tostring(value.professionName or value.name or ""):lower()]
+    end
+    local id = tonumber(value)
+    return byID[id] and id or nil
+end
+
+local function professionForRecipe(recipeID, recipeInfo)
+    local id = knownProfessionID(recipeInfo)
+    if id then return id end
+    if C_TradeSkillUI.GetProfessionInfoByRecipeID then
+        local first, second = C_TradeSkillUI.GetProfessionInfoByRecipeID(recipeID)
+        id = knownProfessionID(first) or knownProfessionID(second)
+        if id then return id end
+        id = byName[tostring(second or ""):lower()]
+        if id then return id end
+    end
+    if C_TradeSkillUI.GetTradeSkillLineForRecipe then
+        local first, second = C_TradeSkillUI.GetTradeSkillLineForRecipe(recipeID)
+        id = knownProfessionID(first) or knownProfessionID(second)
+        if id then return id end
+    end
+end
+
+function Professions:CollectOpenRecipes()
+    if not (C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs and C_TradeSkillUI.GetRecipeInfo) then return end
+    local grouped, seen = {}, {}
+    for _, recipeID in ipairs(C_TradeSkillUI.GetAllRecipeIDs() or {}) do
+        local recipeInfo = C_TradeSkillUI.GetRecipeInfo(recipeID)
+        if recipeInfo and recipeInfo.learned and not recipeInfo.isHeader then
+            local id = professionForRecipe(recipeID, recipeInfo)
+            if id and id ~= 129 and id ~= 356 then
+                grouped[id], seen[id] = grouped[id] or {}, seen[id] or {}
+                local key = "S" .. tostring(recipeID)
+                if not seen[id][key] then
+                    seen[id][key] = true
+                    grouped[id][#grouped[id] + 1] = key
+                end
+            end
         end
     end
     local data = localData()
-    local old = data.recipes[id] or {}
-    for _, recipe in ipairs(old) do
-        if not seen[recipe] then seen[recipe] = true; recipes[#recipes + 1] = recipe end
+    if not next(grouped) then return end
+    if data.recipeScanVersion ~= 2 then
+        data.recipes = {}
+        data.recipeUpdatedAt = {}
+        data.recipeScanVersion = 2
     end
-    table.sort(recipes)
-    if table.concat(old, "\t") == table.concat(recipes, "\t") then return end
-    data.recipes[id] = recipes
     data.recipeUpdatedAt = data.recipeUpdatedAt or {}
-    data.recipeUpdatedAt[id] = time()
+    local changed, now = {}, time()
+    for id, recipes in pairs(grouped) do
+        table.sort(recipes)
+        local old = data.recipes[id] or {}
+        if table.concat(old, "\t") ~= table.concat(recipes, "\t") then
+            data.recipes[id] = recipes
+            data.recipeUpdatedAt[id] = now
+            changed[#changed + 1] = id
+        end
+    end
+    if #changed == 0 then return end
     data.guid = UnitGUID("player") or ""
-    sendRecipeChunks(id, data)
+    for _, id in ipairs(changed) do sendRecipeChunks(id, data) end
 end
 
 local function validSender(sender, guid)
@@ -308,8 +324,8 @@ function Professions:DescribeRecipes(data)
                 lines[#lines + 1] = entry[2] .. " (" .. data.skills[id] .. ")"
             elseif id == 356 then
                 local rodName
-                if data.fishingRodID and GetItemInfo then
-                    local name, link = GetItemInfo(data.fishingRodID)
+                if data.fishingRodID and C_Item and C_Item.GetItemInfo then
+                    local name, link = C_Item.GetItemInfo(data.fishingRodID)
                     rodName = link or name
                 end
                 lines[#lines + 1] = entry[2] .. " (" .. data.skills[id] .. ") - Fishing rod: "
@@ -318,7 +334,7 @@ function Professions:DescribeRecipes(data)
                 local recipes = data.recipes and data.recipes[id]
                 lines[#lines + 1] = entry[2] .. " (" .. data.skills[id] .. ") - " .. (recipes and (#recipes .. " known recipes") or "recipes not scanned")
                 for _, recipe in ipairs(recipes or {}) do
-                    local name = recipe:sub(1, 1) == "S" and GetSpellInfo and GetSpellInfo(tonumber(recipe:sub(2))) or recipe:sub(2)
+                    local name = recipe:sub(1, 1) == "S" and iRC:GetSpellName(tonumber(recipe:sub(2))) or recipe:sub(2)
                     lines[#lines + 1] = "  " .. tostring(name or recipe:sub(2))
                 end
             end
@@ -328,14 +344,17 @@ function Professions:DescribeRecipes(data)
 end
 
 local eventFrame = CreateFrame("Frame")
-eventFrame:RegisterEvent("PLAYER_LOGIN")
-eventFrame:RegisterEvent("SKILL_LINES_CHANGED")
-eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
-eventFrame:RegisterEvent("TRADE_SKILL_SHOW")
-eventFrame:RegisterEvent("TRADE_SKILL_UPDATE")
-eventFrame:RegisterEvent("CRAFT_SHOW")
-eventFrame:RegisterEvent("CRAFT_UPDATE")
+local function registerSupportedEvent(event)
+    if C_EventUtils and C_EventUtils.IsEventValid and not C_EventUtils.IsEventValid(event) then return false end
+    return pcall(eventFrame.RegisterEvent, eventFrame, event)
+end
+
+for _, event in ipairs({
+    "PLAYER_LOGIN", "SKILL_LINES_CHANGED", "PLAYER_EQUIPMENT_CHANGED", "BAG_UPDATE_DELAYED",
+    "TRADE_SKILL_SHOW", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED",
+}) do
+    registerSupportedEvent(event)
+end
 eventFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         Professions:CollectSkills()
@@ -354,8 +373,7 @@ eventFrame:SetScript("OnEvent", function(_, event)
         if pendingUpdate then return end
         pendingUpdate = true
         C_Timer.After(2, function() pendingUpdate = false; Professions:SendSummary(false) end)
-    elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_UPDATE" or event == "CRAFT_SHOW" or event == "CRAFT_UPDATE" then
-        local isCraft = event == "CRAFT_SHOW" or event == "CRAFT_UPDATE"
-        if C_Timer and C_Timer.After then C_Timer.After(0.2, function() Professions:CollectOpenRecipes(isCraft) end) end
+    elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_LIST_UPDATE" or event == "TRADE_SKILL_DATA_SOURCE_CHANGED" then
+        if C_Timer and C_Timer.After then C_Timer.After(0.2, function() Professions:CollectOpenRecipes() end) end
     end
 end)

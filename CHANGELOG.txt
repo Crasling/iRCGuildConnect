@@ -2,6 +2,17 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.1 - WoW Forever 
+--------------------------------------------------------------------------------
+[IMPORTANT] iRC now targets WoW Forever build 16001 only. Public guild reports use the new iRCCommsV1 channel and report format, so older iRC releases cannot exchange Leaderboard data with 0.5.1
+[CHANGED] Character names support Forever's Firstname Lastname format, including the hyphenated form used by chat and addon messages, without relying on realms
+[ADDED] Skyborne is available as a guild race and public guild reports carry the guild's actual Alliance or Horde faction
+[CHANGED] Guild Leaderboard class breakdown uses Forever's class order and counts all level 1–60 guild members
+[FIX] Profession scanning supports Forever's combined professions tab and sorts each learned recipe into the correct profession
+[CHANGED] Updated aura, item, spell, container, addon-message, party, settings, and mouseover handling for the modern Forever API
+[FIX] Guild Verification, profession search, Guild Bank search, and Guild Map menus close correctly when clicking outside them
+[FIX] Chat icons automatically follow the chat window's font size
+
 v0.4.15 - Smoother Guild Updates and Chat Improvements
 --------------------------------------------------------------------------------
 [ADDED] A new option hides iRC icons in the chat messages you see without hiding your own icon from others. Death and level-60 announcement icons remain visible
@@ -144,7 +155,6 @@ v0.4.2 - Reliable Guild Sync
 
 v0.4.1 - Guild Connection
 --------------------------------------------------------------------------------
-[IMPORTANT] Renamed the addon folder, TOC, and Lua files from iRacelockConnection to iRC. Existing settings are not transferred; the Guild Master must configure and publish a new 0.4.1 ruleset
 [IMPORTANT] 0.4.1 rejects rulesets created by older addon versions. All participating iRC clients should update before the new ruleset is published
 [NEW] Added a dedicated Guild Found progression mode with verification and economy rules at every level
 [NEW] Made Race Lock an explicit guild rule. It starts disabled and controls race enforcement, native-language restrictions, and same-race group rules

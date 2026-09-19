@@ -455,8 +455,6 @@ local function leaveCurrentGroup(reason)
     iRC:Print(iRC.Colors.Red .. iRC:Text("GROUP_AUTO_LEFT_LOCAL", reason) .. iRC.Colors.Reset)
     if C_PartyInfo and C_PartyInfo.LeaveParty then
         C_PartyInfo.LeaveParty()
-    elseif LeaveParty then
-        LeaveParty()
     end
     clearUnsafeGroupWarning()
     if C_Timer and C_Timer.After then C_Timer.After(1, function() groupLeaving = false end) else groupLeaving = false end

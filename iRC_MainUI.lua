@@ -303,6 +303,9 @@ local MAIN_NAVIGATION = {
 }
 
 local function currentServerNavigationName()
+    if iRC:IsForeverClient() then
+        return iRC.GameVersionName or "Forever"
+    end
     local name = GetRealmName and GetRealmName()
     if not name or name == "" then return "Current Server" end
     return #name > 24 and (name:sub(1, 21) .. "...") or name
@@ -320,7 +323,7 @@ end
 
 local function getContainerSlots(bag)
     if C_Container and C_Container.GetContainerNumSlots then return C_Container.GetContainerNumSlots(bag) or 0 end
-    return GetContainerNumSlots and GetContainerNumSlots(bag) or 0
+    return 0
 end
 
 local function getContainerEntry(bag, slot)
@@ -329,12 +332,6 @@ local function getContainerEntry(bag, slot)
         if info then
             local link = info.hyperlink or (C_Container.GetContainerItemLink and C_Container.GetContainerItemLink(bag, slot))
             return link or (info.itemID and "Item #" .. info.itemID), info.stackCount or 1, info.itemID
-        end
-    elseif GetContainerItemLink then
-        local link = GetContainerItemLink(bag, slot)
-        if link then
-            local _, count = GetContainerItemInfo(bag, slot)
-            return link, count or 1, tonumber(link:match("item:(%d+)"))
         end
     end
 end
@@ -903,15 +900,15 @@ function UI:Create()
     outsideClickWatcher:SetScript("OnEvent", function()
         local professionSearch = frame.memberProfessionSearch
         if frame:IsShown() and frame.category == "Guild Members" and professionSearch.edit:HasFocus()
-            and not MouseIsOver(professionSearch.edit) and not MouseIsOver(professionSearch.suggestions) then
+            and not iRC:IsMouseOverFrame(professionSearch.edit) and not iRC:IsMouseOverFrame(professionSearch.suggestions) then
             professionSearch.edit:ClearFocus()
         end
         if frame:IsShown() and frame.category == "Guild Bank" and frame.bankSearch:HasFocus()
-            and not MouseIsOver(frame.bankSearch) and not MouseIsOver(frame.bankSuggestions) then
+            and not iRC:IsMouseOverFrame(frame.bankSearch) and not iRC:IsMouseOverFrame(frame.bankSuggestions) then
             frame.bankSearch:ClearFocus()
         end
-        if memberMenu:IsShown() and not MouseIsOver(memberMenu) then memberMenu:Hide() end
-        if professionReport:IsShown() and not MouseIsOver(professionReport) then professionReport:Hide() end
+        if memberMenu:IsShown() and not iRC:IsMouseOverFrame(memberMenu) then memberMenu:Hide() end
+        if professionReport:IsShown() and not iRC:IsMouseOverFrame(professionReport) then professionReport:Hide() end
     end)
     frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}
     frame.racePodium = makeRacePodium(content)
@@ -1042,7 +1039,7 @@ local function updateMemberRows(frame)
             for _, recipes in pairs(data.recipes or {}) do
                 for _, recipe in ipairs(recipes) do
                     if type(recipe) == "string" then
-                        local name = recipe:sub(1, 1) == "S" and GetSpellInfo and GetSpellInfo(tonumber(recipe:sub(2))) or recipe:sub(2)
+                        local name = recipe:sub(1, 1) == "S" and iRC:GetSpellName(tonumber(recipe:sub(2))) or recipe:sub(2)
                         add("recipe", name, profile)
                     end
                 end
@@ -1071,8 +1068,8 @@ local BANK_CATEGORY_BY_ID = {
 }
 
 local function bankItemCategory(itemID)
-    if GetItemInfo then
-        local _, _, _, _, _, itemType = GetItemInfo(itemID)
+    if C_Item and C_Item.GetItemInfo then
+        local _, _, _, _, _, itemType = C_Item.GetItemInfo(itemID)
         if itemType and itemType ~= "" then return itemType end
     end
     if C_Item and C_Item.GetItemInfoInstant then
@@ -1104,7 +1101,7 @@ local function groupedBankItems(snapshot)
         local category = bankItemCategory(item.itemID)
         groups[category] = groups[category] or {}
         local name, link
-        if GetItemInfo then name, link = GetItemInfo(item.itemID) end
+        if C_Item and C_Item.GetItemInfo then name, link = C_Item.GetItemInfo(item.itemID) end
         item.name = name or (item.link and item.link:match("%[(.-)%]")) or ("Item #" .. item.itemID)
         item.link = link or item.link
         groups[category][#groups[category] + 1] = item
@@ -1209,7 +1206,7 @@ local function updateGuildBankSnapshot(frame)
             for _, item in ipairs(matching) do
                 local row = addLine("x" .. item.count .. "  " .. item.name, 27, GameFontHighlightLarge, 16)
                 row.itemID, row.itemLink = item.itemID, item.link
-                local icon = (GetItemIcon and GetItemIcon(item.itemID)) or (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(item.itemID))
+                local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(item.itemID)
                 row.icon:SetSize(22, 22)
                 row.icon:ClearAllPoints()
                 row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
@@ -1255,7 +1252,7 @@ local CLASS_SHORT_NAMES = {
     WARRIOR = "War", PALADIN = "Pal", HUNTER = "Hun", ROGUE = "Rog", PRIEST = "Pri", SHAMAN = "Sha", MAGE = "Mag", WARLOCK = "Lock", DRUID = "Dru",
 }
 local CLASS_BREAKDOWN_ORDER = {
-    "WARRIOR", "PALADIN", "ROGUE", "HUNTER", "SHAMAN", "MAGE", "DRUID", "WARLOCK", "PRIEST",
+    "WARRIOR", "HUNTER", "MAGE", "ROGUE", "PRIEST", "WARLOCK", "PALADIN", "DRUID", "SHAMAN",
 }
 
 local function updateClassBreakdown(card, classes, totalMembers)

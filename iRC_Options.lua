@@ -8,7 +8,6 @@ local CHECKBOX_TEMPLATE = InterfaceOptionsCheckButtonTemplate and "InterfaceOpti
 
 local function IsAddonLoadedCompat(addonName)
     if C_AddOns and C_AddOns.IsAddOnLoaded then return C_AddOns.IsAddOnLoaded(addonName) end
-    if IsAddOnLoaded then return IsAddOnLoaded(addonName) end
     return false
 end
 
@@ -908,7 +907,7 @@ local function RefreshTradeExceptionPopup(groups)
         yOffset = yOffset + 22
         for _, itemId in ipairs(group.items) do
             local row = acquireRow(false)
-            local itemName = GetItemInfo and GetItemInfo(itemId)
+            local itemName = C_Item and C_Item.GetItemInfo and C_Item.GetItemInfo(itemId)
             row.text:SetText((itemName or iRC.GuildFoundTradeExceptionItemNames[itemId] or "Unknown item") .. " (" .. itemId .. ")")
             yOffset = yOffset + 23
         end
@@ -1497,7 +1496,7 @@ do
                     checkbox:SetEnabled(canEdit and categoryEnabled and true or false)
                     checkbox.rowBackground:SetColorTexture(selected and 0.08 or 0.055, selected and 0.18 or 0.05,
                         selected and 0.09 or 0.04, selected and 0.68 or 0.42)
-                    local cachedItemName = GetItemInfo and GetItemInfo(item.id)
+                    local cachedItemName = C_Item and C_Item.GetItemInfo and C_Item.GetItemInfo(item.id)
                     local itemName = cachedItemName or iRC.GuildFoundTradeExceptionItemNames[item.id] or "Unknown item"
                     checkbox.Text:SetText(itemName .. " (" .. item.id .. ")")
                     offset = offset + 23
@@ -2348,9 +2347,7 @@ stubButton:SetSize(180, 28)
 stubButton:SetPoint("TOPLEFT", stubDescription, "BOTTOMLEFT", 0, -15)
 stubButton:SetText("Open settings")
 stubButton:SetScript("OnClick", function() iRC:OpenOptions() end)
-if InterfaceOptions_AddCategory then
-    InterfaceOptions_AddCategory(stubPanel)
-elseif Settings and Settings.RegisterCanvasLayoutCategory then
+if Settings and Settings.RegisterCanvasLayoutCategory then
     local category = Settings.RegisterCanvasLayoutCategory(stubPanel, iRC.DisplayName)
     Settings.RegisterAddOnCategory(category)
 end

@@ -13,7 +13,6 @@ local SOURCE = "RaceLockedForkEU"
 
 local function registerPrefix(prefix)
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then return C_ChatInfo.RegisterAddonMessagePrefix(prefix) end
-    if RegisterAddonMessagePrefix then return RegisterAddonMessagePrefix(prefix) end
 end
 
 local function send(message)
@@ -59,7 +58,7 @@ function Compatibility:RequestPresenceCheck()
     -- Keep the small compatibility confirmation probe live in combat; its
     -- PONG response already sends without waiting for Low Traffic Mode.
     if not iRC:IsGuildConnectionActive() then return false end
-    if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
+    if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
     return self:BroadcastSelfFound("PING")
 end
 

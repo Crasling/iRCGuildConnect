@@ -6,8 +6,8 @@ local RaceGrid = {}
 iRC.RaceGrid = RaceGrid
 
 local PREFIX = "iRCGridV1"
-local CHANNEL_NAME = "iRacelockConnection"
-local WIRE_VERSION = "2"
+local CHANNEL_NAME = "iRCCommsV1"
+local WIRE_VERSION = "3"
 local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
@@ -31,9 +31,11 @@ end
 local SEP = "\t"
 local ALLIANCE_RACES = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HORDE_RACES = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
+local NEUTRAL_RACES = { SKYBORNE = true }
 local VALID_RACES = {}
 for race in pairs(ALLIANCE_RACES) do VALID_RACES[race] = true end
 for race in pairs(HORDE_RACES) do VALID_RACES[race] = true end
+for race in pairs(NEUTRAL_RACES) do VALID_RACES[race] = true end
 
 local function normalizeRaceToken(race)
     local token = tostring(race or ""):upper():gsub("%s+", "")
@@ -43,7 +45,6 @@ end
 
 local function registerPrefix(prefix)
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then return C_ChatInfo.RegisterAddonMessagePrefix(prefix) end
-    if RegisterAddonMessagePrefix then return RegisterAddonMessagePrefix(prefix) end
 end
 
 local function bytesToHex(value)
@@ -90,7 +91,7 @@ local function split(message)
 end
 
 local function fullNameKey(name)
-    return string.lower(tostring(name or ""))
+    return iRC:NormalizeName(name)
 end
 
 local ownGuildRoster, ownGuildKey, ownGuildSenders = nil, nil, {}
@@ -128,7 +129,12 @@ local function payloadChecksum(value)
 end
 
 local function getServerStore()
-    local realm = GetNormalizedRealmName and GetNormalizedRealmName() or (GetRealmName and GetRealmName()) or "Unknown"
+    local realm
+    if iRC:IsForeverClient() then
+        realm = "Forever"
+    else
+        realm = GetNormalizedRealmName and GetNormalizedRealmName() or (GetRealmName and GetRealmName()) or "Unknown"
+    end
     local serverKey = string.lower(tostring(realm):gsub("%s+", ""))
     iRCDB = iRCDB or {}
     iRCDB.globalRaceGrid = iRCDB.globalRaceGrid or {}
@@ -297,7 +303,9 @@ function RaceGrid:StoreGuildReport(report, silent)
     end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
-    report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
+    if report.faction ~= "Alliance" and report.faction ~= "Horde" then
+        report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
+    end
     report.lastSeen = time()
     reports[key] = report
     if not silent and iRC.MainUI then
@@ -327,7 +335,8 @@ function RaceGrid:BuildOwnGuildReports()
     local rules = iRC:GetConnectionRules() or {}
     local group = {
         name = profile.name, guid = profile.guid, addonVersion = iRC.Version,
-        race = guildRace, faction = ALLIANCE_RACES[guildRace] and "Alliance" or "Horde",
+        race = guildRace, faction = UnitFactionGroup and UnitFactionGroup("player")
+            or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
         guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
         classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel60 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
@@ -379,10 +388,8 @@ function RaceGrid:BuildOwnGuildReports()
             if recentlyOnline then group.activeMembers = group.activeMembers + 1 end
             if participation == "verified" then group.verifiedMembers = group.verifiedMembers + 1
             elseif participation == "compatible" then group.compatibleMembers = group.compatibleMembers + 1 end
-            if level >= 19 then
-                group.classes[class] = (group.classes[class] or 0) + 1
-                group.classTotals[class] = (group.classTotals[class] or 0) + level
-            end
+            group.classes[class] = (group.classes[class] or 0) + 1
+            group.classTotals[class] = (group.classTotals[class] or 0) + level
             if level >= 60 then
                 group.membersLevel60 = group.membersLevel60 + 1
                 if recentlyOnline then group.activeLevel60 = group.activeLevel60 + 1 end
@@ -441,6 +448,7 @@ local function serializeGuildReport(report, includeDescription)
     fields[#fields + 1] = tostring(math.max(0, math.min(31, math.floor(tonumber(report.guildContactsOnlineMask) or 0))))
     fields[#fields + 1] = rules.guildFoundOnly and "1" or "0"
     fields[#fields + 1] = tostring(math.max(0, math.min(#iRC.GuildHomepageIcons, math.floor(tonumber(report.guildHomepageIcon) or 0))))
+    fields[#fields + 1] = report.faction == "Alliance" and "Alliance" or "Horde"
     if includeDescription then
         fields[#fields + 1] = tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength)
         fields[#fields + 1] = tostring(math.floor(tonumber(report.guildDescriptionTimestamp) or 0))
@@ -566,7 +574,9 @@ local function parseGuildReport(parts)
     if rules then rules.guildFoundOnly = pureGuildFoundPresent and parts[32] == "1" or false end
     local iconField = pureGuildFoundPresent and validNumber(parts[33] or "", 0, #iRC.GuildHomepageIcons) or nil
     local guildHomepageIcon = iconField and math.floor(iconField) or 0
-    local descriptionStart = guildContactsOnlineMask ~= nil and (pureGuildFoundPresent and (iconField and 34 or 33) or 32) or 31
+    local faction = tostring(parts[34] or "")
+    if faction ~= "Alliance" and faction ~= "Horde" then return nil end
+    local descriptionStart = 35
     guildContactsOnlineMask = guildContactsOnlineMask or 0
     local guildDescription = tostring(parts[descriptionStart] or "")
     local guildDescriptionTimestamp = tonumber(parts[descriptionStart + 1]) or 0
@@ -585,6 +595,7 @@ local function parseGuildReport(parts)
         guildDescription = guildDescription, guildDescriptionTimestamp = guildDescriptionTimestamp,
         guildDescriptionEditedBy = guildDescriptionEditedBy,
         guildHomepageIcon = guildHomepageIcon,
+        faction = faction,
         addonVersion = addonVersion,
         source = "iRC guild report",
     }
@@ -1000,7 +1011,9 @@ function iRC:GetRaceGridOverview()
 
     local result = {}
     for _, group in pairs(groups) do
-        group.faction = ALLIANCE_RACES[group.race] and "Alliance" or "Horde"
+        if group.faction ~= "Alliance" and group.faction ~= "Horde" then
+            group.faction = ALLIANCE_RACES[group.race] and "Alliance" or "Horde"
+        end
         result[#result + 1] = group
     end
     table.sort(result, guildRank)

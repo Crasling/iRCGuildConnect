@@ -6,8 +6,8 @@ iRC.Name = addonName or "iRC"
 iRC.LDBroker = LibStub("LibDataBroker-1.1", true)
 iRC.LDBIcon = LibStub("LibDBIcon-1.0", true)
 
-local getAddOnInfo = C_AddOns and C_AddOns.GetAddOnInfo or GetAddOnInfo
-local getAddOnMetadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+local getAddOnInfo = C_AddOns and C_AddOns.GetAddOnInfo
+local getAddOnMetadata = C_AddOns and C_AddOns.GetAddOnMetadata
 local addOnTitle
 if getAddOnInfo then
     local ok, _, title = pcall(getAddOnInfo, iRC.Name)
@@ -26,24 +26,10 @@ iRC.TestAdminNames = {
     "Crasling-Soulseeker",
     "Crasjin-Soulseeker",
     "Crasblight-Soulseeker",
-    "Crasdrum-Soulseeker"
+    "Crasling Terot",
+    "Crasling Featherfried" -- New way of names. (Works with admin menu)
 }
 iRC.Frame = CreateFrame("Frame")
-iRC.LegacyAddonName = "iRacelockConnection"
-
-function iRC:DisableLegacyAddon()
-    if self.Name == self.LegacyAddonName then return false end
-    local getInfo = C_AddOns and C_AddOns.GetAddOnInfo or GetAddOnInfo
-    local disable = C_AddOns and C_AddOns.DisableAddOn or DisableAddOn
-    if not getInfo or not disable then return false end
-    local ok, installed = pcall(getInfo, self.LegacyAddonName)
-    if not ok or not installed then return false end
-    local isLoaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
-    self.LegacyAddonWasLoaded = isLoaded and isLoaded(self.LegacyAddonName) and true or false
-    pcall(disable, self.LegacyAddonName)
-    iRCDB.legacyAddonDisabled = true
-    return true
-end
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
 function iRC:IsOfficialHardcoreRealm()
     local hardcoreRule = Enum and Enum.GameRule and Enum.GameRule.HardcoreRuleset
@@ -63,7 +49,9 @@ elseif gameTocNumber >= 20500 and gameTocNumber < 30000 then
     iRC.GameVersionName = "Anniversary TBC"
 elseif gameTocNumber >= 20000 and gameTocNumber < 20500 then
     iRC.GameVersionName = "Classic TBC"
-elseif gameTocNumber > 10000 and gameTocNumber < 19999 then
+elseif gameTocNumber >= 16000 and gameTocNumber < 20000 then
+    iRC.GameVersionName = "Forever"
+elseif gameTocNumber > 10000 and gameTocNumber < 15999 then
     iRC.GameVersionName = "Classic Era"
 else
     iRC.GameVersionName = "Unknown Version"
@@ -98,7 +86,6 @@ function iRC:EnableIdleWindowFade(frame)
     frame.idleFadeOutsideFor = 0
     frame:HookScript("OnUpdate", function(self, elapsed)
         local mouseOver = self.IsMouseOver and self:IsMouseOver()
-            or (MouseIsOver and MouseIsOver(self))
         if mouseOver then
             self.idleFadeOutsideFor = 0
             if self:GetAlpha() ~= 1 then self:SetAlpha(1) end
@@ -115,6 +102,23 @@ function iRC:EnableIdleWindowFade(frame)
     end)
 end
 
+function iRC:IsMouseOverFrame(frame)
+    return frame and frame.IsMouseOver and frame:IsMouseOver() or false
+end
+
+function iRC:GetSpellName(spellID)
+    if not C_Spell then return nil end
+    if C_Spell.GetSpellName then return C_Spell.GetSpellName(spellID) end
+    if C_Spell.GetSpellInfo then
+        local info = C_Spell.GetSpellInfo(spellID)
+        return info and info.name
+    end
+end
+
+function iRC:GetItemInfo(itemID)
+    if C_Item and C_Item.GetItemInfo then return C_Item.GetItemInfo(itemID) end
+end
+
 local lowTrafficPending, lowTrafficPendingCount, lowTrafficGeneration = {}, 0, 0
 local LOW_TRAFFIC_QUEUE_LIMIT = 32
 
@@ -126,7 +130,7 @@ end
 function iRC:CanOpenPanel()
     if (UnitAffectingCombat and UnitAffectingCombat("player"))
         or (InCombatLockdown and InCombatLockdown()) then
-        self:Print(self:Text("PANEL_CANNOT_USE_IN_COMBAT"))
+        self:Print(self.Colors.iRC .. self:Text("PANEL_CANNOT_USE_IN_COMBAT") .. self.Colors.Reset)
         return false
     end
     return true
@@ -221,12 +225,8 @@ end
 local outgoingPerformanceQueue = {}
 local outgoingPerformanceScheduled = false
 local function sendAddonTrafficNow(prefix, message, distribution, target)
-    local sent
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-        sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
-    elseif SendAddonMessage then
-        sent = SendAddonMessage(prefix, message, distribution, target)
-    end
+    if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
+    local sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
     if sent and iRC.TrafficMonitorEnabled then iRC:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
     return sent or false
 end
@@ -358,7 +358,7 @@ function iRC:SetTrafficMonitorEnabled(enabled)
             elseif event == "CHAT_MSG_CHANNEL" then
                 local message, sender = ...
                 local channelName = select(9, ...)
-                if type(message) == "string" and channelName == "iRacelockConnection"
+                if type(message) == "string" and channelName == "iRCCommsV1"
                     and message:sub(1, #"iRCGridV1:") == "iRCGridV1:"
                     and iRC:NormalizeName(sender) ~= iRC:NormalizeName(iRC:GetPlayerName()) then
                     iRC:RecordTrafficBytes("in", #message, "iRCGridV1", "CHANNEL")
@@ -530,7 +530,7 @@ iRC.GuildFoundTradeExceptionItemNames = {
     [13918] = "Reinforced Locked Chest",
 }
 
-iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL" }
+iRC.GuildRaceOrder = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL", "SKYBORNE" }
 iRC.GuildRaceTBCOrder = { "DRAENEI", "BLOODELF" }
 local GuildRaceLookup = {}
 for _, race in ipairs(iRC.GuildRaceOrder) do GuildRaceLookup[race] = true end
@@ -627,19 +627,29 @@ end
 
 function iRC:NormalizeName(name)
     if type(name) ~= "string" or name == "" then return "" end
+    name = name:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+    if self:IsForeverClient() then
+        name = name:gsub("%-", " "):gsub("%s+", " ")
+        return string.lower(name)
+    end
     return string.lower((name:match("^([^-]+)") or name))
 end
 
+function iRC:IsForeverClient()
+    local toc = tonumber(self.GameTocVersion) or 0
+    return toc >= 16000 and toc < 20000
+end
+
 function iRC:SupportsTBCPlayableRaces()
-    return (tonumber(self.GameTocVersion) or 0) >= 20000
+    return self:IsForeverClient() or (tonumber(self.GameTocVersion) or 0) >= 20000
 end
 
 function iRC:GetSelfFoundState()
-    if not UnitBuff then return false end
+    if not (C_UnitAuras and C_UnitAuras.GetBuffDataByIndex) then return false end
     for index = 1, 40 do
-        local auraName, _, _, _, _, _, _, _, _, spellId = UnitBuff("player", index)
-        if not auraName then break end
-        if spellId == 431567 then return true end
+        local aura = C_UnitAuras.GetBuffDataByIndex("player", index, "HELPFUL")
+        if not aura then break end
+        if aura.spellId == 431567 then return true end
     end
     return false
 end
@@ -672,7 +682,7 @@ function iRC:RecordSelfFoundState()
         history.firstSelfFoundLevel = history.firstSelfFoundLevel or level
         history.lastSelfFoundAt = now
     elseif history.firstSelfFoundAt and not history.firstEndedAt and self.SelfFoundAuraReady and not history.pendingEndAt then
-        -- UnitBuff can briefly return an incomplete aura list while entering
+        -- Aura data can briefly be incomplete while entering
         -- the world.  Require a delayed, second absent reading before the
         -- irreversible history flag is written.
         history.pendingEndAt = now
@@ -725,6 +735,15 @@ function iRC:GetSelfFoundEvidence()
 end
 
 function iRC:GetPlayerName()
+    if self:IsForeverClient() and UnitName then
+        local firstName, lastName = UnitName("player")
+        if type(firstName) == "string" and firstName ~= "" then
+            if type(lastName) == "string" and lastName ~= "" and not firstName:find(" ", 1, true) then
+                return firstName .. " " .. lastName
+            end
+            return firstName
+        end
+    end
     if GetUnitName then return GetUnitName("player", true) or UnitName("player") end
     return UnitName("player")
 end
@@ -732,6 +751,7 @@ end
 function iRC:GetGuildKey()
     local guildName = GetGuildInfo and GetGuildInfo("player")
     if type(guildName) ~= "string" or guildName == "" then return nil end
+    if self:IsForeverClient() then return string.lower(guildName) end
     local realmName = GetRealmName and GetRealmName() or ""
     return string.lower(guildName .. "@" .. realmName)
 end
@@ -951,7 +971,9 @@ function iRC:IsTestGuildMasterName(name)
 
     local configuredName = self.TestGuildMasterName
     if type(configuredName) ~= "string" or configuredName == "" then return false end
-    if string.lower(name) == string.lower(configuredName) then return true end
+    if self:NormalizeName(name) == self:NormalizeName(configuredName) then return true end
+
+    if self:IsForeverClient() then return false end
 
     -- The local player name can omit the realm. Only accept that short form when
     -- it resolves to the exact configured realm, never just a matching name.
@@ -972,10 +994,12 @@ function iRC:IsTestAdminName(name)
     end
     for _, configuredName in ipairs(configuredNames) do
         if type(configuredName) == "string" and configuredName ~= "" then
-            if string.lower(name) == string.lower(configuredName) then return true end
-            local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
-            if testName and not name:find("-", 1, true) and string.lower(name) == string.lower(testName)
-                and GetRealmName and string.lower(GetRealmName()) == string.lower(testRealm) then return true end
+            if self:NormalizeName(name) == self:NormalizeName(configuredName) then return true end
+            if not self:IsForeverClient() then
+                local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
+                if testName and not name:find("-", 1, true) and string.lower(name) == string.lower(testName)
+                    and GetRealmName and string.lower(GetRealmName()) == string.lower(testRealm) then return true end
+            end
         end
     end
     return false
@@ -1235,6 +1259,7 @@ end
 local function normalizeFullPlayerName(name, defaultRealm)
     name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if name == "" then return "" end
+    if iRC:IsForeverClient() then return iRC:NormalizeName(name) end
     local character, realm = name:match("^([^-]+)%-(.+)$")
     character = character or name
     realm = realm or defaultRealm
@@ -1244,7 +1269,7 @@ end
 
 function iRC:ResolveGuildMemberFullName(name)
     if type(name) ~= "string" or name == "" or not GetNumGuildMembers or not GetGuildRosterInfo then return nil end
-    local hasRealm = name:find("-", 1, true) ~= nil
+    local hasRealm = not self:IsForeverClient() and name:find("-", 1, true) ~= nil
     local wantedFull = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
     local wantedShort, match
     if not hasRealm then wantedShort = self:NormalizeName(name) end
@@ -1291,6 +1316,9 @@ end
 
 function iRC:FormatPlayerName(name)
     name = tostring(name or "")
+    if self:IsForeverClient() then
+        return (name:gsub("%-", " "):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", ""))
+    end
     local character, realm = name:match("^([^-]+)%-(.+)$")
     if character then
         local currentRealm = GetNormalizedRealmName and GetNormalizedRealmName() or ""
@@ -1535,7 +1563,6 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRCDB.connections = iRCDB.connections or {}
         iRC:GetSettings()
         iRCCharDB = iRCCharDB or {}
-        iRC:DisableLegacyAddon()
     elseif event == "PLAYER_LOGIN" then
         iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
@@ -1543,15 +1570,12 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         C_Timer.After(10, function()
             local settings = iRC:GetSettings()
             if settings.raceLockedForkReminderShown then return end
-            local isLoaded = C_AddOns and C_AddOns.IsAddOnLoaded or IsAddOnLoaded
+            local isLoaded = C_AddOns and C_AddOns.IsAddOnLoaded
             if isLoaded and isLoaded("RaceLockedForkEU") then
                 settings.raceLockedForkReminderShown = true
                 iRC:Print(iRC:Text("RACELOCKED_FORK_DISABLE_REMINDER"))
             end
         end)
-        if iRC.LegacyAddonWasLoaded then
-            iRC:Print(iRC.Colors.Yellow .. "The old iRacelockConnection addon was disabled. Please /reload before using iRC." .. iRC.Colors.Reset)
-        end
     elseif event == "PLAYER_REGEN_DISABLED" then
         iRC:EnterLowTrafficMode()
         iRC:CloseAllWindows()

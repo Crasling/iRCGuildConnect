@@ -53,15 +53,13 @@ local function showPinMenu(pin)
         pinMenu.invite = addAction(-30, "Invite ", function(name)
             if C_PartyInfo and C_PartyInfo.InviteUnit then
                 C_PartyInfo.InviteUnit(name)
-            elseif InviteUnit then
-                InviteUnit(name)
             end
         end)
         pinMenu:Hide()
         local outsideClickWatcher = CreateFrame("Frame")
         outsideClickWatcher:RegisterEvent("GLOBAL_MOUSE_DOWN")
         outsideClickWatcher:SetScript("OnEvent", function()
-            if pinMenu:IsShown() and not MouseIsOver(pinMenu) then hidePinMenu() end
+            if pinMenu:IsShown() and not iRC:IsMouseOverFrame(pinMenu) then hidePinMenu() end
         end)
     end
     pinMenu.playerName = pin.playerName

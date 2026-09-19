@@ -27,6 +27,10 @@ local rosterReference, rosterGuildKey, rosterRanks = nil, nil, {}
 
 local function publicNameKey(name)
     if type(name) ~= "string" or name == "" then return nil end
+    if iRC:IsForeverClient() then
+        local key = iRC:NormalizeName(name)
+        return key ~= "" and key or nil
+    end
     local character, realm = name:match("^([^-]+)%-(.+)$")
     if not character then character, realm = name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName() end
     realm = tostring(realm or ""):gsub("%s+", "")
@@ -227,8 +231,8 @@ local ICON_HELP = {
     violation = { "CHAT_ICON_VIOLATION_TITLE", "CHAT_ICON_VIOLATION_DESC" },
 }
 
-local function iconLink(kind, icon, size)
-    return string.format("|Haddon:iRCIcon:%s|h|T%s:%d:%d|t|h", kind, icon, size, size)
+local function iconLink(kind, icon)
+    return string.format("|Haddon:iRCIcon:%s|h|T%s:0:0|t|h", kind, icon)
 end
 
 local hookedChatFrames = {}
@@ -306,11 +310,6 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
     elseif message == iRC:Text("CHAT_ANNOUNCE_LEVEL60") or message == iRC:Text("CHAT_ANNOUNCE_TEST_LEVEL60") then icon, iconKind = Announcements.Icons.level60, "level60" end
     local hideAll = iRCCharDB and iRCCharDB.hideAllChatIcons == true
     if hideAll and not icon then return false end
-    local size = 16
-    if chatFrame and chatFrame.GetFont then
-        local _, fontSize = chatFrame:GetFont()
-        size = math.max(12, math.floor((tonumber(fontSize) or 14) * 1.2))
-    end
     local badge, badgeKind
     if not hideAll then
         badge, badgeKind = Announcements:GetDefaultChatIcon(author)
@@ -318,8 +317,8 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
             badge, badgeKind = Announcements:GetPublicChatIcon(author)
         end
     end
-    if icon and iconKind ~= badgeKind then message = message .. " " .. iconLink(iconKind, icon, size) end
-    if badge then message = iconLink(badgeKind, badge, size) .. " " .. message end
+    if icon and iconKind ~= badgeKind then message = message .. " " .. iconLink(iconKind, icon) end
+    if badge then message = iconLink(badgeKind, badge) .. " " .. message end
     if not icon and not badge then return false end
     hookChatTooltip(chatFrame)
     return false, message, author, ...
@@ -350,8 +349,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
             C_ChatInfo.RegisterAddonMessagePrefix(ICON_PREFIX)
-        elseif RegisterAddonMessagePrefix then
-            RegisterAddonMessagePrefix(ICON_PREFIX)
         end
         if ChatFrame_AddMessageEventFilter then
             for _, chatEvent in ipairs({

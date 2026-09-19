@@ -79,14 +79,6 @@ local function connection()
     if not iRC:IsGuildConnectionActive() then return nil end
     local db = iRC:GetConnection()
     db.guildFoundRoster = db.guildFoundRoster or {}
-    if not db.legacyRaceLockedRosterCleared then
-        for key, entry in pairs(db.guildFoundRoster) do
-            local source = type(entry) == "table" and tostring(entry.source or "") or ""
-            local overrideSource = type(entry) == "table" and tostring(entry.overrideSource or "") or ""
-            if source:find("^RaceLocked") or overrideSource:find("^RaceLocked") then db.guildFoundRoster[key] = nil end
-        end
-        db.legacyRaceLockedRosterCleared = true
-    end
     db.raceDeaths = db.raceDeaths or {}
     db.deathReports = db.deathReports or {}
     return db
@@ -611,8 +603,9 @@ frame:RegisterEvent("TIME_PLAYED_MSG")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
-        local register = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix or RegisterAddonMessagePrefix
-        if register then register(IRC_ROSTER) end
+        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+            C_ChatInfo.RegisterAddonMessagePrefix(IRC_ROSTER)
+        end
         if ChatFrame_AddMessageEventFilter then
             ChatFrame_AddMessageEventFilter("TIME_PLAYED_MSG", hideAutomaticTimePlayed)
         end

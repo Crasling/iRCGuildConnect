@@ -52,7 +52,6 @@ end
 
 local function registerPrefix(prefix)
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then return C_ChatInfo.RegisterAddonMessagePrefix(prefix) end
-    if RegisterAddonMessagePrefix then return RegisterAddonMessagePrefix(prefix) end
 end
 
 local function send(prefix, message, distribution, target)
@@ -1028,7 +1027,7 @@ function iRC:RequestGuildPresence(isOfficerPoll, isStartup)
     -- Presence probes and their small HELLO replies remain live in combat;
     -- deferring either side would make an active client appear missing.
     if not self:IsGuildConnectionActive() then return false end
-    if not ((C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage) then return false end
+    if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
     local result = send(self.Prefix, table.concat({ "PRESENCE_REQUEST", WIRE_VERSION,
         isOfficerPoll and "OFFICER_POLL" or "REQUEST", isStartup and "STARTUP" or "" }, SEP), "GUILD")
     if result == false or type(result) == "number" and result ~= 0 then return false end

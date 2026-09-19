@@ -330,10 +330,10 @@ function Dashboard:Create()
     local outsideClickWatcher = CreateFrame("Frame")
     outsideClickWatcher:RegisterEvent("GLOBAL_MOUSE_DOWN")
     outsideClickWatcher:SetScript("OnEvent", function()
-        if frame.memberMenu:IsShown() and not MouseIsOver(frame.memberMenu) then
+        if frame.memberMenu:IsShown() and not iRC:IsMouseOverFrame(frame.memberMenu) then
             frame.memberMenu:Hide()
         end
-        if frame.memberReport and frame.memberReport:IsShown() and not MouseIsOver(frame.memberReport) then
+        if frame.memberReport and frame.memberReport:IsShown() and not iRC:IsMouseOverFrame(frame.memberReport) then
             frame.memberReport:Hide()
         end
     end)
