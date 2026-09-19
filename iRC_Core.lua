@@ -23,11 +23,10 @@ iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 iRC.Prefix = "iRCConnV1"
 -- Testing-only controls are restricted to these exact character/realm pairs.
 iRC.TestAdminNames = {
-    "Wandy Nimsprocket",
     "Crasjin-Soulseeker",
     "Crasblight-Soulseeker",
     "Crasling Terot",
-    "Crasling Featherfried" -- New way of names. (Works with admin menu)
+    "Crasling Featherfried"
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -217,7 +216,7 @@ function iRC:QueuePerformanceIncoming(message, callback)
     if kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
         or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
         or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
-        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" or kind == "MAP_LAYER" then return false end
+        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" then return false end
     if #incomingPerformanceQueue >= 256 then
         if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "incoming", kind, #incomingPerformanceQueue) end
         return false
@@ -274,7 +273,7 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
     local urgent = kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
         or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
         or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
-        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" or kind == "MAP_LAYER"
+        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS"
     if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After
         and #outgoingPerformanceQueue < 256 then
         outgoingPerformanceQueue[#outgoingPerformanceQueue + 1] = { prefix, message, distribution, target }
@@ -469,7 +468,7 @@ local DEFAULT_SETTINGS = {
     showTrafficMonitorForTesting = false,
     showFunctionProfilerForTesting = false,
     showOfficerSettingsForTesting = false,
-    hideAttentionReminders = true,
+    showAttentionReminders = false,
     showGuildMap = true,
     guildMapPinSize = 8,
     shareGuildMapPosition = true,
@@ -529,6 +528,12 @@ iRC.GuildHomepageIcons = {
     "Interface\\Icons\\Spell_Holy_PrayerOfHealing", "Interface\\Icons\\Spell_Shadow_RaiseDead", "Interface\\Icons\\Spell_Nature_ProtectionformNature",
     "Interface\\Icons\\Ability_Warrior_BattleShout", "Interface\\Icons\\Ability_Rogue_MasterOfSubtlety", "Interface\\Icons\\Ability_Hunter_BeastCall",
     "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", "Interface\\Icons\\Achievement_GuildPerk_HastyHearth",
+    "Interface\\Icons\\INV_Sword_39", "Interface\\Icons\\INV_Axe_04", "Interface\\Icons\\INV_Hammer_05",
+    "Interface\\Icons\\INV_Staff_13", "Interface\\Icons\\INV_Misc_TabardPVP_02", "Interface\\Icons\\INV_Helmet_01",
+    "Interface\\Icons\\INV_Helmet_08", "Interface\\Icons\\INV_Misc_Gem_Ruby_02", "Interface\\Icons\\INV_Misc_Orb_01",
+    "Interface\\Icons\\INV_Misc_Book_09", "Interface\\Icons\\INV_Misc_Map_01", "Interface\\Icons\\INV_Misc_Key_03",
+    "Interface\\Icons\\Spell_Holy_HolyProtection", "Interface\\Icons\\Spell_Nature_StoneClawTotem",
+    "Interface\\Icons\\Spell_Fire_Fire", "Interface\\Icons\\Spell_Frost_FrostBolt02",
 }
 
 iRC.DefaultGuildFoundTradeExceptions = {
@@ -1515,7 +1520,11 @@ function iRC:FormatPlayerName(name)
 end
 
 function iRC:FormatInviteContactName(name)
-    return (self:FormatPlayerName(name):gsub("^%l", string.upper))
+    local formatted = self:FormatPlayerName(name)
+    formatted = formatted:gsub("^%l", string.upper)
+    return (formatted:gsub("([%s%-])(%l)", function(separator, letter)
+        return separator .. letter:upper()
+    end))
 end
 
 function iRC:GetWhisperTargetName(name)
@@ -1622,7 +1631,7 @@ function iRC:SetProgressionMode(mode)
         connection.rules.guildFoundTradeExceptions = false
     end
     if mode == "SELF_FOUND" or mode == "GUILD_FOUND" or mode == "SELF_FOUND_OR_GUILD_FOUND" then
-        self:GetSettings().hideAttentionReminders = true
+        self:GetSettings().showAttentionReminders = false
     end
     if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     self:StampConnectionRules(connection)

@@ -238,14 +238,14 @@ local function makeRaceCard(parent)
     card.classText:SetJustifyH("CENTER")
     card.classText:SetWordWrap(false)
     card.classBar = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.classBar:SetPoint("TOPLEFT", 16, -123)
-    card.classBar:SetPoint("TOPRIGHT", -16, -123)
-    card.classBar:SetHeight(12)
+    card.classBar:SetPoint("TOPLEFT", 16, -126)
+    card.classBar:SetPoint("TOPRIGHT", -16, -126)
+    card.classBar:SetHeight(14)
     createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
     card.classSegments = {}
     card.classLabels = {}
     card.expandHint = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.expandHint:SetPoint("TOPRIGHT", -16, -138)
+    card.expandHint:SetPoint("TOPRIGHT", -16, -143)
     card.expandHint:SetWidth(630)
     card.expandHint:SetJustifyH("RIGHT")
     card.rulesSeparator = card:CreateTexture(nil, "ARTWORK")
@@ -724,11 +724,15 @@ function UI:Create()
                 tab.label:SetText((item.child or item.grandchild) and "- " .. item.label or item.label)
                 tab.category = item.id
                 tab:SetScript("OnClick", function(self)
+                    local previousCategory = frame.category
                     frame.category = self.category
                     if self.category == "Guild Rules" and frame.scroll then frame.scroll:SetVerticalScroll(0) end
                     if self.category == "Race Overview" then
                         guildStatsFilter = getCurrentGuildStatsFilter()
                         UI.preservedRaceScroll = 0
+                        if previousCategory ~= self.category and iRC.RaceGrid then
+                            iRC.RaceGrid:RequestGuildCacheFromOpen()
+                        end
                     end
                     if self.category == "Guild Members" then iRC:RefreshGuildRoster() end
                     if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
@@ -1444,8 +1448,8 @@ local function updateGuildRules(frame)
         if canEdit or entry.active or entry.activation then visible[#visible + 1] = entry end
     end
     local sectionOrder = {
-        ["Guild Connection"] = 1, ["Race-Locked"] = 2, ["Self-Found"] = 3,
-        ["Guild-Found"] = 4, ["Group Rules"] = 5, ["Guild Features"] = 6, Announcements = 7,
+        ["Guild Connection"] = 1, ["Guild Features"] = 2, Announcements = 3,
+        ["Race-Locked"] = 4, ["Group Rules"] = 5, ["Self-Found"] = 6, ["Guild-Found"] = 7,
     }
     table.sort(visible, function(a, b)
         local aOrder, bOrder = sectionOrder[a.section] or 99, sectionOrder[b.section] or 99
@@ -1558,7 +1562,8 @@ local function updateGuildRules(frame)
     else
         frame.contentSubtitle:SetText(connectionActive
             and "Active guild rules. Only the Guild Master can change this ruleset."
-            or "iRC is not currently enabled for this guild.")
+            or iRC:Text("CONNECTION_DETAIL_INACTIVE",
+                connection and connection.guildName or (GetGuildInfo and GetGuildInfo("player")) or "this guild"))
     end
 end
 
@@ -1776,12 +1781,22 @@ local function updateClassBreakdown(card, classes, totalMembers)
         local segment = card.classSegments[index]
         if not segment then
             segment = CreateFrame("Frame", nil, card.classBar, "BackdropTemplate")
-            segment:SetHeight(8)
+            segment:SetHeight(10)
             segment:SetBackdrop({
                 bgFile = "Interface\\Buttons\\WHITE8X8",
                 edgeFile = "Interface\\Buttons\\WHITE8X8",
                 edgeSize = 1,
             })
+            segment:EnableMouse(true)
+            segment:SetScript("OnEnter", function(self)
+                if not GameTooltip or not self.className then return end
+                GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                GameTooltip:SetText(self.className, self.red or 1, self.green or 1, self.blue or 1)
+                GameTooltip:AddLine(iRC:Text("GUILD_STATS_CLASS_MEMBERS", self.count or 0), 1, 1, 1)
+                GameTooltip:AddLine(iRC:Text("GUILD_STATS_CLASS_SHARE", self.percent or 0), 0.75, 0.75, 0.75)
+                GameTooltip:Show()
+            end)
+            segment:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
             card.classSegments[index] = segment
         end
         segment:ClearAllPoints()
@@ -1791,6 +1806,11 @@ local function updateClassBreakdown(card, classes, totalMembers)
         local red, green, blue = getClassColor(group.class)
         segment:SetBackdropColor(red, green, blue, 1)
         segment:SetBackdropBorderColor(0.02, 0.02, 0.02, 1)
+        segment.className = _G["LOCALIZED_CLASS_NAMES_MALE"] and _G["LOCALIZED_CLASS_NAMES_MALE"][group.class]
+            or group.class:sub(1, 1) .. group.class:sub(2):lower()
+        segment.count = group.count
+        segment.percent = share * 100
+        segment.red, segment.green, segment.blue = red, green, blue
         segment:Show()
         local label = card.classLabels[index]
         if not label then
@@ -1799,9 +1819,11 @@ local function updateClassBreakdown(card, classes, totalMembers)
             card.classLabels[index] = label
         end
         label:ClearAllPoints()
-        label:SetPoint("BOTTOM", segment, "TOP", 0, 2)
-        label:SetText((CLASS_SHORT_NAMES[group.class] or group.class) .. " " .. percent .. "%")
-        label:Show()
+        label:SetPoint("BOTTOMLEFT", card.classBar, "TOPLEFT", 2 + usedWidth, 2)
+        label:SetWidth(math.max(1, width))
+        label:SetText((CLASS_SHORT_NAMES[group.class] or group.class) .. " " .. (percent == 0 and "<1" or percent) .. "%")
+        label:SetTextColor(red, green, blue)
+        label:SetShown(share >= 0.10)
         usedWidth = usedWidth + width
     end
     for index = #classGroups + 1, #card.classSegments do card.classSegments[index]:Hide() end
@@ -2193,10 +2215,10 @@ end
 function UI:OpenCategory(category)
     local frame = self:Create()
     if frame.tabs[category] then frame.category = category end
-    return self:Open()
+    return self:Open(nil, category == "Race Overview")
 end
 
-function UI:Open(subjectName, publishFromClick)
+function UI:Open(subjectName, requestCacheFromOpen)
     if not iRC:CanOpenPanel() then return false end
     local frame = self:Create()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
@@ -2211,16 +2233,18 @@ function UI:Open(subjectName, publishFromClick)
     self:Refresh()
     frame:Show()
     frame:Raise()
-    if publishFromClick and iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
+    if requestCacheFromOpen and frame.category == "Race Overview" and iRC.RaceGrid then
+        iRC.RaceGrid:RequestGuildCacheFromOpen()
+    end
     return true
 end
 
-function UI:Toggle(publishFromClick)
+function UI:Toggle(requestCacheFromOpen)
     local frame = self.frame
     if frame and frame:IsShown() then
         frame:Hide()
     else
-        return self:Open(nil, publishFromClick)
+        return self:Open(nil, requestCacheFromOpen)
     end
 end
 

@@ -157,6 +157,7 @@ local function CreateSettingsDropdown(frameName, parent, label, description, yOf
     dropdown.Refresh = function()
         UIDropDownMenu_SetText(dropdown, getOptionLabel(getValue()))
     end
+    dropdown.title = title
     UIDropDownMenu_Initialize(dropdown, function(_, level)
         for _, value in ipairs(getOptions()) do
             local info = UIDropDownMenu_CreateInfo()
@@ -180,6 +181,7 @@ local function CreateSettingsDropdown(frameName, parent, label, description, yOf
         desc:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -18, nextY)
         desc:SetJustifyH("LEFT")
         desc:SetText(description)
+        dropdown.description = desc
         nextY = nextY - math.max(desc:GetStringHeight(), 12) - 6
     end
     return dropdown, nextY
@@ -218,7 +220,7 @@ end
 local function CreateInfoText(parent, text, yOffset, fontObject)
     local info = parent:CreateFontString(nil, "OVERLAY", fontObject or "GameFontHighlight")
     info:SetPoint("TOPLEFT", parent, "TOPLEFT", 25, yOffset)
-    info:SetWidth(490)
+    info:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -25, yOffset)
     info:SetJustifyH("LEFT")
     info:SetText(text)
     local height = math.max(info:GetStringHeight(), 14)
@@ -227,7 +229,7 @@ end
 
 local function CreateConnectionStatusCard(parent, yOffset)
     local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    card:SetHeight(128)
+    card:SetHeight(112)
     card:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, yOffset)
     card:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -12, yOffset)
     card:SetBackdrop({
@@ -254,10 +256,10 @@ local function CreateConnectionStatusCard(parent, yOffset)
 
     local detail = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     detail:SetPoint("TOPLEFT", status, "BOTTOMLEFT", 0, -5)
-    detail:SetWidth(470)
+    detail:SetPoint("RIGHT", card, "RIGHT", -18, 0)
     detail:SetJustifyH("LEFT")
 
-    return { status = status, detail = detail }, yOffset - 138
+    return { status = status, detail = detail }, yOffset - 122
 end
 
 local function CreateManagementSettingsCard(parent, title, description, yOffset)
@@ -290,6 +292,164 @@ local function CreateManagementSettingsCard(parent, title, description, yOffset)
     body:SetText(description or "")
 
     return card, -48 - math.max(body:GetStringHeight(), 12)
+end
+
+local function CreateCompactManagementRow(parent, yOffset, height)
+    local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    row:SetHeight(height)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, yOffset)
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -12, yOffset)
+    row:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 },
+    })
+    row:SetBackdropColor(0.065, 0.055, 0.045, 0.96)
+    row:SetBackdropBorderColor(0.34, 0.28, 0.20, 0.92)
+    local accent = row:CreateTexture(nil, "ARTWORK")
+    accent:SetWidth(2)
+    accent:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -5)
+    accent:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 5)
+    accent:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.72)
+    return row
+end
+
+local function CreateCompactManagementToggle(parent, label, description, yOffset, getValue, setValue, synced)
+    local rowHeight = 54
+    local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    row:SetHeight(rowHeight)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, yOffset)
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -12, yOffset)
+    row:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 },
+    })
+    row.highlight = row:CreateTexture(nil, "HIGHLIGHT")
+    row.highlight:SetPoint("TOPLEFT", 4, -4)
+    row.highlight:SetPoint("BOTTOMRIGHT", -4, 4)
+    row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.08)
+    row.accent = row:CreateTexture(nil, "ARTWORK")
+    row.accent:SetWidth(3)
+    row.accent:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -5)
+    row.accent:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 5)
+
+    local scopeDivider = row:CreateTexture(nil, "ARTWORK")
+    scopeDivider:SetWidth(1)
+    scopeDivider:SetPoint("TOPLEFT", row, "TOPLEFT", 72, -7)
+    scopeDivider:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 72, 7)
+    scopeDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
+
+    local scopeBadge = CreateSyncBadge(row, 0)
+    scopeBadge:ClearAllPoints()
+    scopeBadge:SetPoint("CENTER", row, "LEFT", 37, 0)
+    if synced then
+        scopeBadge:SetSize(44, 19)
+        scopeBadge.text:SetText(iRC:Text("MANAGEMENT_SCOPE_SYNC"))
+        SetSimpleTooltip(scopeBadge, iRC:Text("MANAGEMENT_SCOPE_SYNC"), iRC:Text("MANAGEMENT_SCOPE_SYNC_DESC"))
+    else
+        scopeBadge:SetSize(54, 19)
+        scopeBadge:SetBackdropColor(0.025, 0.14, 0.055, 0.92)
+        scopeBadge:SetBackdropBorderColor(0.20, 0.78, 0.32, 1)
+        scopeBadge.text:SetText(iRC:Text("MANAGEMENT_SCOPE_PERSONAL"))
+        scopeBadge.text:SetTextColor(0.38, 1, 0.48)
+        SetSimpleTooltip(scopeBadge, iRC:Text("MANAGEMENT_SCOPE_PERSONAL"), iRC:Text("MANAGEMENT_SCOPE_PERSONAL_DESC"))
+    end
+
+    local left = 86
+    row.title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    row.title:SetPoint("TOPLEFT", row, "TOPLEFT", left, -9)
+    row.title:SetPoint("RIGHT", row, "RIGHT", -112, 0)
+    row.title:SetJustifyH("LEFT")
+    row.title:SetText(label)
+    row.description = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.description:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -4)
+    row.description:SetPoint("RIGHT", row, "RIGHT", -112, 0)
+    row.description:SetHeight(24)
+    row.description:SetJustifyH("LEFT")
+    row.description:SetJustifyV("TOP")
+    row.description:SetWordWrap(true)
+    if row.description.SetMaxLines then row.description:SetMaxLines(2) end
+    row.description:SetText(description or "")
+    row.stateBackground = row:CreateTexture(nil, "ARTWORK")
+    row.stateBackground:SetSize(88, 25)
+    row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+    row.state = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.state:SetPoint("CENTER", row.stateBackground, "CENTER", 0, 0)
+
+    row.Refresh = function(self)
+        local active = getValue() and true or false
+        self.state:SetText(iRC:Text(active and "GUILDFOUND_STATUS_ENABLED" or "GUILDFOUND_STATUS_DISABLED"):upper())
+        self.state:SetTextColor(active and 0.25 or 0.65, active and 1 or 0.65, active and 0.35 or 0.65)
+        self.stateBackground:SetColorTexture(active and 0.04 or 0.10, active and 0.24 or 0.085, active and 0.08 or 0.06, 0.86)
+        self.accent:SetColorTexture(active and 0.20 or ORANGE[1], active and 0.86 or ORANGE[2], active and 0.30 or ORANGE[3], 0.90)
+        self:SetBackdropColor(active and 0.045 or 0.075, active and 0.12 or 0.065, active and 0.055 or 0.05, 0.98)
+        self:SetBackdropBorderColor(active and 0.20 or 0.34, active and 0.72 or 0.28, active and 0.27 or 0.20, 1)
+    end
+    row:SetScript("OnClick", function(self)
+        if not self:IsEnabled() then return end
+        setValue(not (getValue() and true or false))
+        self:Refresh()
+    end)
+    SetSimpleTooltip(row, label, description)
+    row.managementRow = row
+    row:Refresh()
+    return row, yOffset - rowHeight - 7
+end
+
+local function CreateCompactManagementDropdown(frameName, parent, label, yOffset, getValue, setValue, getOptions, getOptionLabel)
+    local rowHeight = 54
+    local row = CreateCompactManagementRow(parent, yOffset, rowHeight)
+    local scopeDivider = row:CreateTexture(nil, "ARTWORK")
+    scopeDivider:SetWidth(1)
+    scopeDivider:SetPoint("TOPLEFT", row, "TOPLEFT", 72, -7)
+    scopeDivider:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 72, 7)
+    scopeDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
+    local scopeBadge = CreateSyncBadge(row, 0)
+    scopeBadge:ClearAllPoints()
+    scopeBadge:SetPoint("CENTER", row, "LEFT", 37, 0)
+    scopeBadge:SetSize(44, 19)
+    scopeBadge.text:SetText(iRC:Text("MANAGEMENT_SCOPE_SYNC"))
+
+    local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    title:SetPoint("TOPLEFT", row, "TOPLEFT", 86, -10)
+    title:SetPoint("RIGHT", row, "RIGHT", -245, 0)
+    title:SetJustifyH("LEFT")
+    title:SetText(label)
+    local description = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+    description:SetPoint("RIGHT", row, "RIGHT", -245, 0)
+    description:SetJustifyH("LEFT")
+    description:SetText("Lowest permitted rank and every rank above it.")
+
+    local dropdown = CreateFrame("Frame", frameName, row, "UIDropDownMenuTemplate")
+    dropdown:SetPoint("RIGHT", row, "RIGHT", -4, -1)
+    UIDropDownMenu_SetWidth(dropdown, 205)
+    UIDropDownMenu_JustifyText(dropdown, "LEFT")
+    dropdown.Refresh = function()
+        UIDropDownMenu_SetText(dropdown, getOptionLabel(getValue()))
+    end
+    UIDropDownMenu_Initialize(dropdown, function(_, level)
+        if level ~= 1 then return end
+        for _, value in ipairs(getOptions()) do
+            local selectedValue = value
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = getOptionLabel(selectedValue)
+            info.value = selectedValue
+            info.checked = selectedValue == getValue()
+            info.func = function()
+                setValue(selectedValue)
+                dropdown:Refresh()
+                CloseDropDownMenus()
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+    dropdown:Refresh()
+    dropdown.managementRow = row
+    return dropdown, yOffset - rowHeight - 7
 end
 
 local function FormatRulesetTime(timestamp)
@@ -1245,18 +1405,27 @@ local function RefreshRulesView(canSwitchRulesView)
     end
 end
 
+(function()
 local homepageY = -12
-_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_HOMEPAGE_ICON_HEADER, homepageY)
+_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_CONTACTS_HEADER, homepageY)
 managementConnectionCards.homepage, homepageY = CreateConnectionStatusCard(guildHomepageContent, homepageY)
-_, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_HOMEPAGE_ICON_DESC, homepageY, "GameFontDisableSmall")
+local iconCard, iconY = CreateManagementSettingsCard(guildHomepageContent,
+    L.GUILD_HOMEPAGE_ICON_HEADER, L.GUILD_HOMEPAGE_ICON_DESC, homepageY - 2)
 homepageDescriptionUI.iconButtons = {}
-CreateSyncBadge(guildHomepageContent, homepageY)
+local iconSyncBadge = CreateSyncBadge(iconCard, 0)
+iconSyncBadge:ClearAllPoints()
+iconSyncBadge:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 15, iconY - 54)
+local iconDivider = iconCard:CreateTexture(nil, "ARTWORK")
+iconDivider:SetWidth(1)
+iconDivider:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 72, iconY + 5)
+iconDivider:SetPoint("BOTTOMLEFT", iconCard, "BOTTOMLEFT", 72, 10)
+iconDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
 for iconIndex, texture in ipairs(iRC.GuildHomepageIcons) do
     local selectedIndex = iconIndex
-    local button = CreateFrame("Button", nil, guildHomepageContent, "BackdropTemplate")
+    local button = CreateFrame("Button", nil, iconCard, "BackdropTemplate")
     button:SetSize(38, 38)
-    button:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48 + ((iconIndex - 1) % 10) * 44,
-        homepageY - math.floor((iconIndex - 1) / 10) * 44)
+    button:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 86 + ((iconIndex - 1) % 12) * 44,
+        iconY - math.floor((iconIndex - 1) / 12) * 44)
     button:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     button:SetBackdropColor(0.03, 0.03, 0.03, 0.9)
@@ -1269,9 +1438,20 @@ for iconIndex, texture in ipairs(iRC.GuildHomepageIcons) do
     button:SetScript("OnLeave", function() GameTooltip:Hide() end)
     homepageDescriptionUI.iconButtons[iconIndex] = button
 end
-homepageY = homepageY - 94
-_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_DESCRIPTION_HEADER, homepageY)
-_, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_DESCRIPTION_DESC, homepageY, "GameFontDisableSmall")
+local iconRows = 3
+local iconCardHeight = math.abs(iconY) + iconRows * 44 + 8
+iconCard:SetHeight(iconCardHeight)
+homepageY = homepageY - iconCardHeight - 12
+local descriptionCard, descriptionY = CreateManagementSettingsCard(guildHomepageContent,
+    L.GUILD_DESCRIPTION_HEADER, L.GUILD_DESCRIPTION_DESC, homepageY)
+local descriptionSyncBadge = CreateSyncBadge(descriptionCard, 0)
+descriptionSyncBadge:ClearAllPoints()
+descriptionSyncBadge:SetPoint("LEFT", descriptionCard, "LEFT", 15, -18)
+local descriptionDivider = descriptionCard:CreateTexture(nil, "ARTWORK")
+descriptionDivider:SetWidth(1)
+descriptionDivider:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 72, -58)
+descriptionDivider:SetPoint("BOTTOMLEFT", descriptionCard, "BOTTOMLEFT", 72, 10)
+descriptionDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
 local homepagePresets = {
     { name = L.GUILD_DESCRIPTION_PRESET_RACE, text = L.GUILD_DESCRIPTION_TEXT_RACE },
     { name = L.GUILD_DESCRIPTION_PRESET_SF, text = L.GUILD_DESCRIPTION_TEXT_SF },
@@ -1279,8 +1459,9 @@ local homepagePresets = {
     { name = L.GUILD_DESCRIPTION_PRESET_COMMUNITY, text = L.GUILD_DESCRIPTION_TEXT_COMMUNITY },
 }
 homepageDescriptionUI.selectedPreset = 0
-homepageDescriptionUI.dropdown, homepageY = CreateSettingsDropdown("iRCGuildDescriptionPreset", guildHomepageContent,
-    L.GUILD_DESCRIPTION_PRESET_LABEL, L.GUILD_DESCRIPTION_PRESET_DESC, homepageY,
+local presetY = descriptionY
+homepageDescriptionUI.dropdown, descriptionY = CreateSettingsDropdown("iRCGuildDescriptionPreset", descriptionCard,
+    L.GUILD_DESCRIPTION_PRESET_LABEL, L.GUILD_DESCRIPTION_PRESET_DESC, descriptionY,
     function() return homepageDescriptionUI.selectedPreset end,
     function(value)
         homepageDescriptionUI.selectedPreset = value
@@ -1293,10 +1474,20 @@ homepageDescriptionUI.dropdown, homepageY = CreateSettingsDropdown("iRCGuildDesc
     end,
     function() return { 0, 1, 2, 3, 4 } end,
     function(value) return value == 0 and L.GUILD_DESCRIPTION_PRESET_CUSTOM or homepagePresets[value].name end)
-homepageDescriptionUI.edit = CreateFrame("EditBox", nil, guildHomepageContent, "BackdropTemplate")
-CreateSyncBadge(guildHomepageContent, homepageY)
-homepageDescriptionUI.edit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48, homepageY)
-homepageDescriptionUI.edit:SetSize(442, 72)
+homepageDescriptionUI.dropdown.title:ClearAllPoints()
+homepageDescriptionUI.dropdown.title:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 86, presetY)
+homepageDescriptionUI.dropdown:ClearAllPoints()
+homepageDescriptionUI.dropdown:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 74, presetY - 15)
+UIDropDownMenu_SetWidth(homepageDescriptionUI.dropdown, 300)
+if homepageDescriptionUI.dropdown.description then
+    homepageDescriptionUI.dropdown.description:ClearAllPoints()
+    homepageDescriptionUI.dropdown.description:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 86, presetY - 48)
+    homepageDescriptionUI.dropdown.description:SetPoint("RIGHT", descriptionCard, "RIGHT", -18, 0)
+end
+homepageDescriptionUI.edit = CreateFrame("EditBox", nil, descriptionCard, "BackdropTemplate")
+homepageDescriptionUI.edit:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 86, descriptionY)
+homepageDescriptionUI.edit:SetPoint("RIGHT", descriptionCard, "RIGHT", -18, 0)
+homepageDescriptionUI.edit:SetHeight(72)
 homepageDescriptionUI.edit:SetMultiLine(true); homepageDescriptionUI.edit:SetAutoFocus(false)
 homepageDescriptionUI.edit:SetFontObject(GameFontHighlight); homepageDescriptionUI.edit:SetTextInsets(8, 8, 7, 7)
 homepageDescriptionUI.edit:SetMaxLetters(iRC.GuildHomepageDescriptionMaxLength)
@@ -1305,39 +1496,50 @@ homepageDescriptionUI.edit:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8"
 homepageDescriptionUI.edit:SetBackdropColor(0.03, 0.03, 0.03, 0.85)
 homepageDescriptionUI.edit:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
 homepageDescriptionUI.edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-homepageDescriptionUI.counter = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+homepageDescriptionUI.counter = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 homepageDescriptionUI.counter:SetPoint("TOPRIGHT", homepageDescriptionUI.edit, "BOTTOMRIGHT", 0, -3)
 homepageDescriptionUI.edit:SetScript("OnTextChanged", function(self)
     homepageDescriptionUI.counter:SetFormattedText("%d / %d", #self:GetText(), iRC.GuildHomepageDescriptionMaxLength)
     homepageDescriptionUI.selectedPreset = 0
     if homepageDescriptionUI.dropdown then homepageDescriptionUI.dropdown:Refresh() end
 end)
-homepageDescriptionUI.save = CreateFrame("Button", nil, guildHomepageContent, "UIPanelButtonTemplate")
+homepageDescriptionUI.save = CreateFrame("Button", nil, descriptionCard, "UIPanelButtonTemplate")
 homepageDescriptionUI.save:SetSize(100, 24); homepageDescriptionUI.save:SetPoint("TOPLEFT", homepageDescriptionUI.edit, "BOTTOMLEFT", 0, -20)
 homepageDescriptionUI.save:SetText(L.GUILD_DESCRIPTION_SAVE)
 homepageDescriptionUI.save:SetScript("OnClick", function()
     if iRC:SetGuildHomepageDescription(homepageDescriptionUI.edit:GetText()) then homepageDescriptionUI.edit:ClearFocus() end
 end)
-homepageDescriptionUI.meta = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+homepageDescriptionUI.meta = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 homepageDescriptionUI.meta:SetPoint("LEFT", homepageDescriptionUI.save, "RIGHT", 12, 0); homepageDescriptionUI.meta:SetWidth(350); homepageDescriptionUI.meta:SetJustifyH("LEFT")
-homepageY = homepageY - 128
+local descriptionCardHeight = math.abs(descriptionY) + 96
+descriptionCard:SetHeight(descriptionCardHeight)
+homepageY = homepageY - descriptionCardHeight - 12
 
-_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_CONTACTS_HEADER, homepageY)
-_, homepageY = CreateInfoText(guildHomepageContent, L.GUILD_CONTACTS_DESC, homepageY, "GameFontDisableSmall")
-local guildContactsLabel = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-CreateSyncBadge(guildHomepageContent, homepageY)
-guildContactsLabel:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48, homepageY)
+local contactsCard, contactsY = CreateManagementSettingsCard(guildHomepageContent,
+    L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC, homepageY)
+local contactsSyncBadge = CreateSyncBadge(contactsCard, 0)
+contactsSyncBadge:ClearAllPoints()
+contactsSyncBadge:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 15, contactsY - 2)
+local contactsDivider = contactsCard:CreateTexture(nil, "ARTWORK")
+contactsDivider:SetWidth(1)
+contactsDivider:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 72, contactsY + 5)
+contactsDivider:SetPoint("BOTTOMLEFT", contactsCard, "BOTTOMLEFT", 72, 10)
+contactsDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
+local guildContactsLabel = contactsCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+guildContactsLabel:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 86, contactsY)
 guildContactsLabel:SetText(L.GUILD_CONTACTS_LABEL)
-guildContactsEdit = CreateFrame("EditBox", nil, guildHomepageContent, "InputBoxTemplate")
-guildContactsEdit:SetSize(285, 24)
-guildContactsEdit:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 48, homepageY - 22)
+guildContactsEdit = CreateFrame("EditBox", nil, contactsCard, "InputBoxTemplate")
+guildContactsEdit:SetHeight(24)
+guildContactsEdit:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 86, contactsY - 22)
+guildContactsEdit:SetPoint("TOPRIGHT", contactsCard, "TOPRIGHT", -118, contactsY - 22)
 guildContactsEdit:SetAutoFocus(false)
 guildContactsEdit:SetMaxLetters(60)
-guildContactSuggestionFrame = CreateFrame("Frame", nil, guildHomepageContent, "BackdropTemplate")
-guildContactSuggestionFrame:SetSize(285, 128)
+guildContactSuggestionFrame = CreateFrame("Frame", nil, contactsCard, "BackdropTemplate")
+guildContactSuggestionFrame:SetHeight(128)
 guildContactSuggestionFrame:SetPoint("TOPLEFT", guildContactsEdit, "BOTTOMLEFT", 0, -2)
+guildContactSuggestionFrame:SetPoint("TOPRIGHT", guildContactsEdit, "BOTTOMRIGHT", 0, -2)
 guildContactSuggestionFrame:SetFrameStrata("DIALOG")
-guildContactSuggestionFrame:SetFrameLevel(guildHomepageContent:GetFrameLevel() + 20)
+guildContactSuggestionFrame:SetFrameLevel(contactsCard:GetFrameLevel() + 20)
 guildContactSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
 guildContactSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
@@ -1346,8 +1548,9 @@ guildContactSuggestionFrame:Hide()
 guildContactSuggestionButtons = {}
 for index = 1, 5 do
     local button = CreateFrame("Button", nil, guildContactSuggestionFrame)
-    button:SetSize(267, 23)
+    button:SetHeight(23)
     button:SetPoint("TOPLEFT", guildContactSuggestionFrame, "TOPLEFT", 7, -6 - (index - 1) * 23)
+    button:SetPoint("RIGHT", guildContactSuggestionFrame, "RIGHT", -7, 0)
     button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
     button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
@@ -1430,15 +1633,16 @@ guildContactsEdit:SetScript("OnTabPressed", function(self)
 end)
 guildContactsEdit:SetScript("OnEscapePressed", function(self) guildContactSuggestionFrame:Hide(); self:ClearFocus() end)
 SetSimpleTooltip(guildContactsEdit, L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC)
-guildContactsSave = CreateFrame("Button", nil, guildHomepageContent, "UIPanelButtonTemplate")
+guildContactsSave = CreateFrame("Button", nil, contactsCard, "UIPanelButtonTemplate")
 guildContactsSave:SetSize(90, 24)
 guildContactsSave:SetPoint("LEFT", guildContactsEdit, "RIGHT", 10, 0)
 guildContactsSave:SetText(L.GUILD_CONTACTS_ADD)
 guildContactsSave:SetScript("OnClick", addGuildContact)
 SetSimpleTooltip(guildContactsSave, L.GUILD_CONTACTS_ADD, L.GUILD_CONTACTS_DESC)
-local contactsListFrame = CreateFrame("Frame", nil, guildHomepageContent, "BackdropTemplate")
-contactsListFrame:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 20, homepageY - 55)
-contactsListFrame:SetSize(470, 130)
+local contactsListFrame = CreateFrame("Frame", nil, contactsCard, "BackdropTemplate")
+contactsListFrame:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 86, contactsY - 55)
+contactsListFrame:SetPoint("RIGHT", contactsCard, "RIGHT", -18, 0)
+contactsListFrame:SetHeight(130)
 contactsListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
 contactsListFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
@@ -1446,23 +1650,29 @@ contactsListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
 local contactHeaderName = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 contactHeaderName:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 12, -9); contactHeaderName:SetText(L.GUILD_BANK_COLUMN_NAME)
 local contactHeaderNote = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderNote:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 145, -9); contactHeaderNote:SetText(L.GUILD_BANK_COLUMN_NOTE)
+contactHeaderNote:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 175, -9); contactHeaderNote:SetText(L.GUILD_BANK_COLUMN_NOTE)
 local contactHeaderAdded = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderAdded:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 270, -9); contactHeaderAdded:SetWidth(85); contactHeaderAdded:SetJustifyH("CENTER"); contactHeaderAdded:SetText(L.GUILD_BANK_COLUMN_ADDED_BY)
+contactHeaderAdded:SetPoint("TOPRIGHT", contactsListFrame, "TOPRIGHT", -104, -9); contactHeaderAdded:SetWidth(120); contactHeaderAdded:SetJustifyH("CENTER"); contactHeaderAdded:SetText(L.GUILD_BANK_COLUMN_ADDED_BY)
 local contactHeaderActions = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderActions:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 370, -9); contactHeaderActions:SetText(L.GUILD_BANK_COLUMN_ACTIONS)
+contactHeaderActions:SetPoint("TOPRIGHT", contactsListFrame, "TOPRIGHT", -15, -9); contactHeaderActions:SetWidth(75); contactHeaderActions:SetJustifyH("CENTER"); contactHeaderActions:SetText(L.GUILD_BANK_COLUMN_ACTIONS)
 local contactsScroll = CreateFrame("ScrollFrame", nil, contactsListFrame, "UIPanelScrollFrameTemplate")
 contactsScroll:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 8, -27)
 contactsScroll:SetPoint("BOTTOMRIGHT", contactsListFrame, "BOTTOMRIGHT", -28, 8)
 guildContactsListContent = CreateFrame("Frame", nil, contactsScroll)
-guildContactsListContent:SetWidth(425)
+guildContactsListContent:SetWidth(1)
 guildContactsListContent:SetHeight(1)
 contactsScroll:SetScrollChild(guildContactsListContent)
+contactsListFrame:SetScript("OnSizeChanged", function(_, width)
+    guildContactsListContent:SetWidth(math.max(1, width - 40))
+end)
 guildContactsListEmpty = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
 guildContactsListEmpty:SetPoint("CENTER", contactsListFrame, "CENTER", 0, 0)
 guildContactsListEmpty:SetText(L.GUILD_CONTACTS_EMPTY)
-homepageY = homepageY - 195
+local contactsCardHeight = math.abs(contactsY) + 195
+contactsCard:SetHeight(contactsCardHeight)
+homepageY = homepageY - contactsCardHeight - 12
 guildHomepageContent:SetHeight(math.abs(homepageY) + 20)
+end)()
 
 y = -12
 _, y = CreateSectionHeader(roleplayContent, "Player Settings", y)
@@ -1618,37 +1828,59 @@ local guildFoundTradeExceptionChecks = {}
 local guildFoundTradeItemControls = {}
 local refreshGuildFoundTradeItemList
 do
+    (function()
     local y = -12
     _, y = CreateSectionHeader(guildFoundContent, L.GUILDFOUND_TOOLS_TITLE, y)
     _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_TOOLS_DESC, y, "GameFontDisableSmall")
     managementConnectionCards.guildFound, y = CreateConnectionStatusCard(guildFoundContent, y)
     local statusPanel = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
-    statusPanel:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 3)
-    statusPanel:SetSize(470, 54)
+    statusPanel:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 12, y - 3)
+    statusPanel:SetPoint("TOPRIGHT", guildFoundContent, "TOPRIGHT", -12, y - 3)
+    statusPanel:SetHeight(54)
     statusPanel:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     statusPanel:SetBackdropColor(0.035, 0.03, 0.025, 0.88)
     statusPanel:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.50)
     guildFoundStatus.protection = statusPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    guildFoundStatus.protection:SetPoint("LEFT", statusPanel, "LEFT", 12, 0)
-    guildFoundStatus.protection:SetWidth(145)
-    guildFoundStatus.protection:SetJustifyH("LEFT")
+    guildFoundStatus.protection:SetJustifyH("CENTER")
     guildFoundStatus.exceptions = statusPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    guildFoundStatus.exceptions:SetPoint("CENTER", statusPanel, "CENTER", 0, 0)
-    guildFoundStatus.exceptions:SetWidth(145)
     guildFoundStatus.exceptions:SetJustifyH("CENTER")
     guildFoundStatus.access = statusPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    guildFoundStatus.access:SetPoint("RIGHT", statusPanel, "RIGHT", -12, 0)
-    guildFoundStatus.access:SetWidth(145)
-    guildFoundStatus.access:SetJustifyH("RIGHT")
+    guildFoundStatus.access:SetJustifyH("CENTER")
+    local statusDividers = {}
+    for index = 1, 2 do
+        local divider = statusPanel:CreateTexture(nil, "ARTWORK")
+        divider:SetWidth(1)
+        divider:SetPoint("TOP", statusPanel, "TOP", 0, -9)
+        divider:SetPoint("BOTTOM", statusPanel, "BOTTOM", 0, 9)
+        divider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
+        statusDividers[index] = divider
+    end
+    local function layoutStatusPanel(_, width)
+        local columnWidth = width / 3
+        for index, text in ipairs({ guildFoundStatus.protection, guildFoundStatus.exceptions, guildFoundStatus.access }) do
+            text:ClearAllPoints()
+            text:SetPoint("CENTER", statusPanel, "LEFT", columnWidth * (index - 0.5), 0)
+            text:SetWidth(math.max(1, columnWidth - 24))
+        end
+        for index, divider in ipairs(statusDividers) do
+            divider:ClearAllPoints()
+            divider:SetPoint("TOPLEFT", statusPanel, "TOPLEFT", columnWidth * index, -9)
+            divider:SetPoint("BOTTOMLEFT", statusPanel, "BOTTOMLEFT", columnWidth * index, 9)
+        end
+    end
+    statusPanel:SetScript("OnSizeChanged", layoutStatusPanel)
+    layoutStatusPanel(statusPanel, statusPanel:GetWidth())
+    statusPanel:EnableMouse(true)
+    SetSimpleTooltip(statusPanel, L.GUILDFOUND_SETTINGS_HEADER, L.GUILDFOUND_ENFORCEMENT_LOCKED)
     y = y - 62
-    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_SETTINGS_HEADER, y - 4)
-    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_ENFORCEMENT_LOCKED, y, "GameFontHighlight")
-    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILD_FOUND_TRADE_EXCEPTIONS_HEADER, y - 4)
-    _, y = CreateInfoText(guildFoundContent, L.GUILD_FOUND_TRADE_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
-    local itemListFrame = CreateFrame("Frame", nil, guildFoundContent, "BackdropTemplate")
-    itemListFrame:SetPoint("TOPLEFT", guildFoundContent, "TOPLEFT", 20, y - 2)
-    itemListFrame:SetSize(470, 285)
+    local exceptionTop = y - 4
+    local exceptionCard, exceptionY = CreateManagementSettingsCard(guildFoundContent,
+        L.GUILD_FOUND_TRADE_EXCEPTIONS_HEADER, L.GUILD_FOUND_TRADE_EXCEPTIONS_DESC, exceptionTop)
+    local itemListFrame = CreateFrame("Frame", nil, exceptionCard, "BackdropTemplate")
+    itemListFrame:SetPoint("TOPLEFT", exceptionCard, "TOPLEFT", 12, exceptionY - 2)
+    itemListFrame:SetPoint("TOPRIGHT", exceptionCard, "TOPRIGHT", -12, exceptionY - 2)
+    itemListFrame:SetHeight(285)
     itemListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     itemListFrame:SetBackdropColor(0.045, 0.038, 0.028, 0.92)
@@ -1657,9 +1889,12 @@ do
     itemScroll:SetPoint("TOPLEFT", 8, -8)
     itemScroll:SetPoint("BOTTOMRIGHT", -28, 8)
     local itemContent = CreateFrame("Frame", nil, itemScroll)
-    itemContent:SetWidth(425)
+    itemContent:SetWidth(1)
     itemContent:SetHeight(1)
     itemScroll:SetScrollChild(itemContent)
+    itemListFrame:SetScript("OnSizeChanged", function(_, width)
+        itemContent:SetWidth(math.max(1, width - 40))
+    end)
     local expandedCategories = {}
     local categories = {
         { key = "conjured", setting = "conjured", label = L.GUILD_FOUND_EXCEPTION_CONJURED,
@@ -1676,9 +1911,16 @@ do
     for _, category in ipairs(categories) do
         local categoryKey, itemCategoryKey, categorySetting = category.setting, category.key, category.setting
         local header = CreateFrame("Button", nil, itemContent, "BackdropTemplate")
-        header:SetSize(410, 26)
-        header:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
+        header:SetHeight(34)
+        header:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8, insets = { left = 2, right = 2, top = 2, bottom = 2 } })
         header:SetBackdropColor(0.10, 0.075, 0.04, 0.72)
+        header:SetBackdropBorderColor(0.34, 0.28, 0.20, 0.92)
+        header.accent = header:CreateTexture(nil, "ARTWORK")
+        header.accent:SetWidth(3)
+        header.accent:SetPoint("TOPLEFT", header, "TOPLEFT", 4, -5)
+        header.accent:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 4, 5)
+        header.accent:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.85)
         header.check = CreateFrame("CheckButton", nil, header, CHECKBOX_TEMPLATE)
         header.check:SetSize(22, 22)
         header.syncBadge = CreateSyncBadge(header, -3)
@@ -1695,7 +1937,7 @@ do
         guildFoundTradeExceptionChecks[category.setting] = header.check
         header.text = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         header.text:SetPoint("LEFT", 73, 0)
-        header.text:SetWidth(222)
+        header.text:SetPoint("RIGHT", header, "RIGHT", -150, 0)
         header.text:SetJustifyH("LEFT")
         header.count = header:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         header.count:SetPoint("RIGHT", header, "RIGHT", -9, 0)
@@ -1751,6 +1993,7 @@ do
             end
             category.header:ClearAllPoints()
             category.header:SetPoint("TOPLEFT", itemContent, "TOPLEFT", 2, -offset)
+            category.header:SetPoint("TOPRIGHT", itemContent, "TOPRIGHT", -2, -offset)
             category.header.text:SetText((expandedCategories[category.setting] and "-  " or "+  ") .. category.label)
             category.header.text:SetTextColor(categoryEnabled and 1 or 0.65, categoryEnabled and 0.82 or 0.65, categoryEnabled and 0 or 0.65)
             category.header.count:SetText(iRC:Text("GUILD_FOUND_EXCEPTION_ITEMS_SELECTED", selectedCount))
@@ -1758,7 +2001,7 @@ do
                 selectedCount > 0 and 0.62 or 0.48)
             category.header:SetBackdropColor(categoryEnabled and 0.13 or 0.075, categoryEnabled and 0.09 or 0.065,
                 categoryEnabled and 0.035 or 0.055, expandedCategories[category.setting] and 0.96 or 0.68)
-            offset = offset + 27
+            offset = offset + 36
             for _, item in ipairs(category.items) do
                 local checkbox = item.checkbox
                 checkbox:SetShown(expandedCategories[category.setting] == true)
@@ -1768,6 +2011,9 @@ do
                     local selected = settings.items and settings.items[category.key] and settings.items[category.key][item.id]
                     checkbox:SetChecked(selected == true)
                     checkbox:SetEnabled(canEdit and categoryEnabled and true or false)
+                    checkbox.rowBackground:ClearAllPoints()
+                    checkbox.rowBackground:SetPoint("TOPLEFT", checkbox, "TOPLEFT", -5, 0)
+                    checkbox.rowBackground:SetPoint("RIGHT", itemContent, "RIGHT", -5, 0)
                     checkbox.rowBackground:SetColorTexture(selected and 0.08 or 0.055, selected and 0.18 or 0.05,
                         selected and 0.09 or 0.04, selected and 0.68 or 0.42)
                     local cachedItemName = C_Item and C_Item.GetItemInfo and C_Item.GetItemInfo(item.id)
@@ -1780,28 +2026,42 @@ do
         itemContent:SetHeight(math.max(1, offset))
     end
     refreshGuildFoundTradeItemList()
-    y = y - 295
-    _, y = CreateSubcategoryHeader(guildFoundContent, L.GUILDFOUND_AUDIT_HEADER, y - 4)
-    _, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_DESC, y, "GameFontDisableSmall")
-    guildFoundAuditText, y = CreateInfoText(guildFoundContent, L.GUILDFOUND_AUDIT_EMPTY, y, "GameFontHighlightSmall")
-    guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
+    local exceptionCardHeight = math.abs(exceptionY) + 297
+    exceptionCard:SetHeight(exceptionCardHeight)
+    y = exceptionTop - exceptionCardHeight - 12
 
-    y = -12
+    local auditCard, auditY = CreateManagementSettingsCard(guildFoundContent,
+        L.GUILDFOUND_AUDIT_HEADER, L.GUILDFOUND_AUDIT_DESC, y)
+    guildFoundAuditText, auditY = CreateInfoText(auditCard, L.GUILDFOUND_AUDIT_EMPTY, auditY, "GameFontHighlightSmall")
+    guildFoundAuditText:ClearAllPoints()
+    guildFoundAuditText:SetPoint("TOPLEFT", auditCard, "TOPLEFT", 18, auditY + 16)
+    guildFoundAuditText:SetPoint("RIGHT", auditCard, "RIGHT", -18, 0)
+    local auditCardHeight = math.max(math.abs(auditY) + 24, 105)
+    auditCard:SetHeight(auditCardHeight)
+    guildFoundAuditText.managementCard = auditCard
+    guildFoundAuditText.cardTop = y
+    y = y - auditCardHeight - 12
+    guildFoundContent:SetHeight(math.max(math.abs(y) + 20, 450))
+    end)()
+
+    local y = -12
     _, y = CreateSectionHeader(guildBanksContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y)
-    _, y = CreateInfoText(guildBanksContent, L.GUILD_BANK_EXCEPTIONS_DESC, y, "GameFontDisableSmall")
     managementConnectionCards.guildBanks, y = CreateConnectionStatusCard(guildBanksContent, y)
-    _, y = CreateSubcategoryHeader(guildBanksContent, L.GUILD_BANK_EXCEPTIONS_TITLE, y - 4)
-    guildBankEdit = CreateFrame("EditBox", nil, guildBanksContent, "InputBoxTemplate")
-    CreateSyncBadge(guildBanksContent, y - 22)
-    guildBankEdit:SetSize(285, 24)
-    guildBankEdit:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 48, y - 22)
+    local bankCard, bankY = CreateManagementSettingsCard(guildBanksContent,
+        L.GUILD_BANK_EXCEPTIONS_TITLE, L.GUILD_BANK_EXCEPTIONS_DESC, y - 2)
+    guildBankEdit = CreateFrame("EditBox", nil, bankCard, "InputBoxTemplate")
+    CreateSyncBadge(bankCard, bankY - 18)
+    guildBankEdit:SetHeight(24)
+    guildBankEdit:SetPoint("TOPLEFT", bankCard, "TOPLEFT", 86, bankY - 18)
+    guildBankEdit:SetPoint("RIGHT", bankCard, "RIGHT", -300, 0)
     guildBankEdit:SetAutoFocus(false)
     guildBankEdit:SetMaxLetters(60)
-    guildBankSuggestionFrame = CreateFrame("Frame", nil, guildBanksContent, "BackdropTemplate")
-    guildBankSuggestionFrame:SetSize(285, 128)
+    guildBankSuggestionFrame = CreateFrame("Frame", nil, bankCard, "BackdropTemplate")
+    guildBankSuggestionFrame:SetHeight(128)
+    guildBankSuggestionFrame:SetPoint("RIGHT", guildBankEdit, "RIGHT", 0, 0)
     guildBankSuggestionFrame:SetPoint("TOPLEFT", guildBankEdit, "BOTTOMLEFT", 0, -2)
     guildBankSuggestionFrame:SetFrameStrata("DIALOG")
-    guildBankSuggestionFrame:SetFrameLevel(guildBanksContent:GetFrameLevel() + 20)
+    guildBankSuggestionFrame:SetFrameLevel(bankCard:GetFrameLevel() + 20)
     guildBankSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     guildBankSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
@@ -1810,15 +2070,16 @@ do
     guildBankSuggestionButtons = {}
     for index = 1, 5 do
         local button = CreateFrame("Button", nil, guildBankSuggestionFrame)
-        button:SetSize(267, 23)
+        button:SetHeight(23)
         button:SetPoint("TOPLEFT", guildBankSuggestionFrame, "TOPLEFT", 7, -6 - (index - 1) * 23)
+        button:SetPoint("RIGHT", guildBankSuggestionFrame, "RIGHT", -7, 0)
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
         button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
         button.highlight:SetAllPoints()
         button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
         button:SetScript("OnClick", function(self)
-            guildBankEdit:SetText(iRC:FormatPlayerName(self.fullName or ""))
+            guildBankEdit:SetText(iRC:FormatInviteContactName(self.fullName or ""))
             guildBankEdit:SetCursorPosition(#guildBankEdit:GetText())
             guildBankSuggestionFrame:Hide()
             guildBankEdit:SetFocus()
@@ -1831,7 +2092,7 @@ do
         if text ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
             for rosterIndex = 1, GetNumGuildMembers(true) do
                 local rosterName = GetGuildRosterInfo(rosterIndex)
-                local displayName = rosterName and iRC:FormatPlayerName(rosterName)
+                local displayName = rosterName and iRC:FormatInviteContactName(rosterName)
                 if displayName and not iRC:IsGuildBankException(rosterName)
                     and displayName:lower():find(text, 1, true) then
                     matches[#matches + 1] = { fullName = rosterName, displayName = displayName }
@@ -1856,11 +2117,11 @@ do
         guildBankSuggestionFrame:SetShown(matches[1] ~= nil)
     end
     local selectedNewBankType = "GUILD"
-    local bankTypeLabel = guildBanksContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    bankTypeLabel:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 48, y - 56)
+    local bankTypeLabel = bankCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    bankTypeLabel:SetPoint("TOPLEFT", bankCard, "TOPLEFT", 86, bankY - 52)
     bankTypeLabel:SetText("Bank type:")
-    local bankTypeDropdown = CreateFrame("Frame", "iRCNewBankTypeDropdown", guildBanksContent, "UIDropDownMenuTemplate")
-    bankTypeDropdown:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 105, y - 45)
+    local bankTypeDropdown = CreateFrame("Frame", "iRCNewBankTypeDropdown", bankCard, "UIDropDownMenuTemplate")
+    bankTypeDropdown:SetPoint("LEFT", bankTypeLabel, "RIGHT", -8, 0)
     UIDropDownMenu_SetWidth(bankTypeDropdown, 145)
     UIDropDownMenu_JustifyText(bankTypeDropdown, "LEFT")
     UIDropDownMenu_SetText(bankTypeDropdown, "Guild Bank")
@@ -1899,7 +2160,7 @@ do
     guildBankEdit:SetScript("OnTabPressed", function(self)
         local first = guildBankSuggestionButtons[1]
         if first and first:IsShown() and first.fullName then
-            self:SetText(iRC:FormatPlayerName(first.fullName))
+            self:SetText(iRC:FormatInviteContactName(first.fullName))
             self:SetCursorPosition(#self:GetText())
             guildBankSuggestionFrame:Hide()
         end
@@ -1907,7 +2168,7 @@ do
     guildBankEdit:SetScript("OnEnterPressed", addGuildBank)
     guildBankEdit:SetScript("OnEscapePressed", function(self) guildBankSuggestionFrame:Hide(); self:ClearFocus() end)
     SetSimpleTooltip(guildBankEdit, L.GUILD_BANK_EXCEPTIONS_TITLE, L.GUILD_BANK_EXCEPTIONS_DESC)
-    guildBankSave = CreateFrame("Button", nil, guildBanksContent, "UIPanelButtonTemplate")
+    guildBankSave = CreateFrame("Button", nil, bankCard, "UIPanelButtonTemplate")
     guildBankSave:SetSize(90, 24)
     guildBankSave:SetPoint("LEFT", guildBankEdit, "RIGHT", 10, 0)
     guildBankSave:SetText(L.GUILD_BANK_ADD)
@@ -1915,9 +2176,10 @@ do
     guildBankSave:SetScript("OnClick", addGuildBank)
     SetSimpleTooltip(guildBankSave, L.GUILD_BANK_ADD, L.GUILD_BANK_SAVE_DESC)
 
-    local listFrame = CreateFrame("Frame", nil, guildBanksContent, "BackdropTemplate")
-    listFrame:SetPoint("TOPLEFT", guildBanksContent, "TOPLEFT", 20, y - 90)
-    listFrame:SetSize(470, 150)
+    local listFrame = CreateFrame("Frame", nil, bankCard, "BackdropTemplate")
+    listFrame:SetPoint("TOPLEFT", bankCard, "TOPLEFT", 18, bankY - 88)
+    listFrame:SetPoint("TOPRIGHT", bankCard, "TOPRIGHT", -18, bankY - 88)
+    listFrame:SetHeight(178)
     listFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
         insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     listFrame:SetBackdropColor(0.045, 0.038, 0.028, 0.92)
@@ -1932,30 +2194,37 @@ do
     headerName:SetText(L.GUILD_BANK_COLUMN_NAME)
     headerName:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local headerNote = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    headerNote:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 145, -9)
+    headerNote:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 180, -9)
     headerNote:SetText(L.GUILD_BANK_COLUMN_NOTE)
     headerNote:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local headerAddedBy = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    headerAddedBy:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 270, -9)
-    headerAddedBy:SetWidth(85)
+    headerAddedBy:SetPoint("TOPRIGHT", listFrame, "TOPRIGHT", -112, -9)
+    headerAddedBy:SetWidth(90)
     headerAddedBy:SetJustifyH("CENTER")
     headerAddedBy:SetText("Type")
     headerAddedBy:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local headerActions = listFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    headerActions:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 370, -9)
+    headerActions:SetPoint("TOPRIGHT", listFrame, "TOPRIGHT", -18, -9)
+    headerActions:SetWidth(74)
+    headerActions:SetJustifyH("CENTER")
     headerActions:SetText(L.GUILD_BANK_COLUMN_ACTIONS)
     headerActions:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
     local listScroll = CreateFrame("ScrollFrame", nil, listFrame, "UIPanelScrollFrameTemplate")
     listScroll:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 8, -27)
     listScroll:SetPoint("BOTTOMRIGHT", listFrame, "BOTTOMRIGHT", -28, 8)
     guildBankListContent = CreateFrame("Frame", nil, listScroll)
-    guildBankListContent:SetWidth(425)
+    guildBankListContent:SetWidth(1)
     guildBankListContent:SetHeight(1)
     listScroll:SetScrollChild(guildBankListContent)
     guildBankListEmpty = listFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     guildBankListEmpty:SetPoint("CENTER", listFrame, "CENTER", 0, 0)
     guildBankListEmpty:SetText(L.GUILD_BANK_EMPTY)
-    y = y - 250
+    listFrame:SetScript("OnSizeChanged", function(_, width)
+        guildBankListContent:SetWidth(math.max(1, width - 36))
+    end)
+    local bankCardHeight = math.abs(bankY) + 280
+    bankCard:SetHeight(bankCardHeight)
+    y = y - bankCardHeight - 14
     guildBankConflictText, y = CreateInfoText(guildBanksContent, "", y - 2, "GameFontNormal")
     guildBankConflictMerge, y = CreateSettingsButton(guildBanksContent, L.MANAGEMENT_CONFLICT_MERGE, 120, y, function()
         iRC:ResolveManagementConflict("BANKS", "merge")
@@ -1973,37 +2242,41 @@ do
     guildBanksContent:SetHeight(math.max(math.abs(y) + 20, 450))
 end
 
-local newMemberWelcomeCheck, hideAttentionRemindersCheck, automaticWarningChecks, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
+local newMemberWelcomeCheck, showAttentionRemindersCheck, automaticWarningChecks, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
+local notificationCard, permissionCard, notificationBaseHeight, notificationConflictHeight, permissionCardHeight, notificationCardTop
 local rankPermissionDropdowns = {}
 do
     local y = -12
     _, y = CreateSectionHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_TITLE, y)
     managementConnectionCards.notifications, y = CreateConnectionStatusCard(guildNotificationsContent, y)
 
-    local notificationCard, notificationY = CreateManagementSettingsCard(guildNotificationsContent,
-        L.GUILD_NOTIFICATIONS_CATEGORY, L.GUILD_NOTIFICATIONS_DESC, y - 2)
-    newMemberWelcomeCheck, notificationY = CreateSettingsCheckbox(notificationCard,
+    notificationCardTop = y - 2
+    local notificationY
+    notificationCard, notificationY = CreateManagementSettingsCard(guildNotificationsContent,
+        L.GUILD_NOTIFICATIONS_CATEGORY, L.GUILD_NOTIFICATIONS_DESC, notificationCardTop)
+    newMemberWelcomeCheck, notificationY = CreateCompactManagementToggle(notificationCard,
         L.NEW_MEMBER_WELCOME_OPTION, L.NEW_MEMBER_WELCOME_OPTION_DESC, notificationY - 4,
         function() return iRC:IsNewMemberWelcomeEnabled() end,
-        function(value) iRC:SetNewMemberWelcomeEnabled(value) end, nil, true)
+        function(value) iRC:SetNewMemberWelcomeEnabled(value) end, true)
     automaticWarningChecks = {}
     for _, entry in ipairs({
         { "OFFICER", L.DISABLE_OFFICER_WARNINGS }, { "WHISPER", L.DISABLE_WHISPER_WARNINGS }, { "GUILD", L.DISABLE_GUILD_WARNINGS },
     }) do
         local channel = entry[1]
-        automaticWarningChecks[channel], notificationY = CreateSettingsCheckbox(notificationCard, entry[2], L.DISABLE_AUTOMATIC_WARNINGS_DESC, notificationY,
+        automaticWarningChecks[channel], notificationY = CreateCompactManagementToggle(notificationCard, entry[2], L.DISABLE_AUTOMATIC_WARNINGS_DESC, notificationY,
             function() return iRC:IsAutomaticWarningDisabled(channel) end,
-            function(value) iRC:SetAutomaticWarningDisabled(channel, value) end, nil, true)
+            function(value) iRC:SetAutomaticWarningDisabled(channel, value) end, true)
     end
-    hideAttentionRemindersCheck, notificationY = CreateSettingsCheckbox(notificationCard,
-        L.HIDE_ATTENTION_REMINDERS_OPTION, L.HIDE_ATTENTION_REMINDERS_OPTION_DESC, notificationY,
-        function() return iRC:GetSettings().hideAttentionReminders == true end,
+    showAttentionRemindersCheck, notificationY = CreateCompactManagementToggle(notificationCard,
+        L.SHOW_ATTENTION_REMINDERS_OPTION, L.SHOW_ATTENTION_REMINDERS_OPTION_DESC, notificationY,
+        function() return iRC:GetSettings().showAttentionReminders == true end,
         function(value)
-            iRC:GetSettings().hideAttentionReminders = value and true or false
+            iRC:GetSettings().showAttentionReminders = value and true or false
             if iRC.ConnectionDashboard and iRC.ConnectionDashboard.CheckAttentionReminder then
                 iRC.ConnectionDashboard:CheckAttentionReminder(false)
             end
-        end)
+        end, false)
+    notificationBaseHeight = math.abs(notificationY) + 6
     welcomeConflictText, notificationY = CreateInfoText(notificationCard, "", notificationY - 2, "GameFontNormal")
     welcomeConflictAccept, notificationY = CreateSettingsButton(notificationCard, L.MANAGEMENT_CONFLICT_ACCEPT, 130, notificationY, function()
         iRC:ResolveManagementConflict("WELCOME", true)
@@ -2013,13 +2286,14 @@ do
     end)
     welcomeConflictKeep:ClearAllPoints()
     welcomeConflictKeep:SetPoint("LEFT", welcomeConflictAccept, "RIGHT", 8, 0)
-    local notificationHeight = math.abs(notificationY) + 18
-    notificationCard:SetHeight(notificationHeight)
-    y = y - notificationHeight - 12
+    notificationConflictHeight = math.abs(notificationY) + 18
+    notificationCard:SetHeight(notificationBaseHeight)
+    y = notificationCardTop - notificationBaseHeight - 12
 
-    local permissionCard, permissionY = CreateManagementSettingsCard(guildNotificationsContent,
+    local permissionStartY
+    permissionCard, permissionStartY = CreateManagementSettingsCard(guildNotificationsContent,
         L.DELEGATED_PERMISSIONS_CATEGORY,
-        "Only the Guild Master can change these limits. Each selection includes that rank and every rank above it.", y)
+        "Choose the lowest rank allowed to use each management tool. That rank and every rank above it are included.", y)
     local permissionLabels = {
         verification = "Verification decisions", presence = "Presence checks and automatic warnings",
         incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions", guildBanks = "Guild Banks",
@@ -2032,24 +2306,38 @@ do
         return values
     end
     local function rankLabel(value)
-        if value == 0 then return "Guild Master" end
         for _, rank in ipairs(iRC:GetGuildRankOptions()) do
-            if rank.index == value then return rank.name .. " (Rank " .. value .. ")" end
+            if rank.index == value then
+                return value == 0 and (rank.name .. " (Guild Master)") or (rank.name .. " (Rank " .. value .. ")")
+            end
         end
+        if value == 0 then return "Guild Master" end
         return "Rank " .. tostring(value)
     end
+    local permissionY = permissionStartY
     for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "guildBanks", "notifications", "homepage" }) do
         local permissionKey = permission
-        rankPermissionDropdowns[permission], permissionY = CreateSettingsDropdown("iRCRankPermission" .. permission,
-            permissionCard, permissionLabels[permission], "Lowest guild rank allowed to use this feature. Every higher rank is also included.", permissionY,
+        rankPermissionDropdowns[permission], permissionY = CreateCompactManagementDropdown("iRCRankPermission" .. permission,
+            permissionCard, permissionLabels[permission], permissionY,
             function() return iRC:GetGuildRankPermission(permissionKey) end,
             function(value) iRC:SetGuildRankPermission(permissionKey, value) end,
-            rankValues, rankLabel, true)
+            rankValues, rankLabel)
     end
-    local permissionHeight = math.abs(permissionY) + 18
-    permissionCard:SetHeight(permissionHeight)
-    y = y - permissionHeight - 12
+    permissionCardHeight = math.abs(permissionY) + 12
+    permissionCard:SetHeight(permissionCardHeight)
+    y = y - permissionCardHeight - 12
     guildNotificationsContent:SetHeight(math.max(math.abs(y) + 8, 300))
+end
+
+local function LayoutGuildNotificationCards(showConflict)
+    local notificationHeight = showConflict and notificationConflictHeight or notificationBaseHeight
+    notificationCard:SetHeight(notificationHeight)
+    local permissionTop = notificationCardTop - notificationHeight - 12
+    permissionCard:ClearAllPoints()
+    permissionCard:SetPoint("TOPLEFT", guildNotificationsContent, "TOPLEFT", 12, permissionTop)
+    permissionCard:SetPoint("TOPRIGHT", guildNotificationsContent, "TOPRIGHT", -12, permissionTop)
+    local contentBottom = permissionTop - permissionCardHeight - 12
+    guildNotificationsContent:SetHeight(math.max(math.abs(contentBottom) + 8, 300))
 end
 
 local testGuildMasterCheck, suppressWarningsCheck, suppressRulesCheck, testAdminStatus, testGuildStatus, testActivateGuildButton
@@ -2193,7 +2481,8 @@ local function RefreshGuildBankTools()
         local row = guildBankRows[index]
         if not row then
             row = CreateFrame("Frame", nil, guildBankListContent, "BackdropTemplate")
-            row:SetSize(420, 27)
+            row:SetHeight(27)
+            row:SetPoint("RIGHT", guildBankListContent, "RIGHT", 0, 0)
             row:EnableMouse(true)
             row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
             row:SetBackdropColor(0.09, 0.075, 0.05, index % 2 == 0 and 0.72 or 0.48)
@@ -2202,24 +2491,26 @@ local function RefreshGuildBankTools()
             row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.08)
             row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             row.name:SetPoint("LEFT", row, "LEFT", 8, 0)
-            row.name:SetWidth(130)
+            row.name:SetWidth(160)
             row.name:SetJustifyH("LEFT")
             row.noteHit = CreateFrame("Button", nil, row)
-            row.noteHit:SetSize(150, 27)
-            row.noteHit:SetPoint("LEFT", row, "LEFT", 135, 0)
+            row.noteHit:SetHeight(27)
+            row.noteHit:SetPoint("LEFT", row, "LEFT", 170, 0)
+            row.noteHit:SetPoint("RIGHT", row, "RIGHT", -190, 0)
             row.noteText = row.noteHit:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             row.noteText:SetAllPoints()
             row.noteText:SetJustifyH("LEFT")
             row.author = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.author:SetPoint("LEFT", row, "LEFT", 270, 0)
-            row.author:SetWidth(85)
+            row.author:SetPoint("RIGHT", row, "RIGHT", -96, 0)
+            row.author:SetWidth(90)
             row.author:SetJustifyH("CENTER")
             row.typeHit = CreateFrame("Button", nil, row)
-            row.typeHit:SetSize(85, 27)
-            row.typeHit:SetPoint("LEFT", row, "LEFT", 270, 0)
+            row.typeHit:SetSize(90, 27)
+            row.typeHit:SetPoint("RIGHT", row, "RIGHT", -96, 0)
             row.note = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-            row.note:SetSize(145, 22)
-            row.note:SetPoint("LEFT", row, "LEFT", 138, 0)
+            row.note:SetHeight(22)
+            row.note:SetPoint("LEFT", row, "LEFT", 170, 0)
+            row.note:SetPoint("RIGHT", row, "RIGHT", -190, 0)
             row.note:SetAutoFocus(false)
             row.note:SetMaxLetters(80)
             row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
@@ -2233,7 +2524,7 @@ local function RefreshGuildBankTools()
             guildBankRows[index] = row
         end
         row:SetPoint("TOPLEFT", guildBankListContent, "TOPLEFT", 0, -(index - 1) * 29)
-        row.name:SetText(iRC:FormatPlayerName(rowName))
+        row.name:SetText(iRC:FormatInviteContactName(rowName))
         local detail = iRC:GetGuildBankExceptionDetails(rowName) or {}
         local note = detail.note or ""
         row.noteText:SetText(note ~= "" and (#note > 18 and (note:sub(1, 15) .. "...") or note) or iRC:Text("GUILD_BANK_NO_NOTE"))
@@ -2338,21 +2629,29 @@ local function RefreshGeneralNotificationAndAdminOptions()
     end
     minimapCheck:Refresh()
     newMemberWelcomeCheck:Refresh()
-    newMemberWelcomeCheck:SetEnabled(iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive())
+    local notificationsEnabled = iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive()
+    newMemberWelcomeCheck:SetEnabled(notificationsEnabled)
+    if newMemberWelcomeCheck.managementRow then newMemberWelcomeCheck.managementRow:SetAlpha(notificationsEnabled and 1 or 0.48) end
     for _, checkbox in pairs(automaticWarningChecks) do
         checkbox:Refresh()
-        checkbox:SetEnabled(iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive())
+        checkbox:SetEnabled(notificationsEnabled)
+        if checkbox.managementRow then checkbox.managementRow:SetAlpha(notificationsEnabled and 1 or 0.48) end
     end
-    hideAttentionRemindersCheck:Refresh()
-    hideAttentionRemindersCheck:SetEnabled(iRC:HasGuildPermission("verification") and iRC:IsGuildConnectionActive())
+    showAttentionRemindersCheck:Refresh()
+    local remindersEnabled = iRC:HasGuildPermission("verification") and iRC:IsGuildConnectionActive()
+    showAttentionRemindersCheck:SetEnabled(remindersEnabled)
+    if showAttentionRemindersCheck.managementRow then showAttentionRemindersCheck.managementRow:SetAlpha(remindersEnabled and 1 or 0.48) end
+    local guildMaster = iRC:IsGuildMaster()
     for _, dropdown in pairs(rankPermissionDropdowns) do
         dropdown:Refresh()
-        if iRC:IsGuildMaster() then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
+        if guildMaster then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
+        if dropdown.managementRow then dropdown.managementRow:SetAlpha(guildMaster and 1 or 0.48) end
     end
     local welcomeConflict = iRC:GetPendingManagementConflict("WELCOME")
     welcomeConflictText:SetText(welcomeConflict and iRC:Text("MANAGEMENT_CONFLICT_INLINE", iRC:FormatPlayerName(welcomeConflict.source)) or "")
     welcomeConflictAccept:SetShown(welcomeConflict ~= nil)
     welcomeConflictKeep:SetShown(welcomeConflict ~= nil)
+    LayoutGuildNotificationCards(welcomeConflict ~= nil)
     slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
     verificationScaleSlider:SetValue(iRC:GetSettings().verificationWindowScale or 1)
 end
@@ -2374,6 +2673,9 @@ local function Refresh()
                 iRC:Text("GUILDFOUND_AUDIT_ACTION_" .. tostring(record.action)), record.target or "-")
         end
         guildFoundAuditText:SetText(#lines > 0 and table.concat(lines, "\n") or L.GUILDFOUND_AUDIT_EMPTY)
+        local auditHeight = math.max(105, guildFoundAuditText:GetStringHeight() + 82)
+        guildFoundAuditText.managementCard:SetHeight(auditHeight)
+        guildFoundContent:SetHeight(math.max(math.abs(guildFoundAuditText.cardTop) + auditHeight + 20, 450))
         RefreshGuildBankTools()
     end
     RefreshGeneralNotificationAndAdminOptions()
@@ -2448,23 +2750,24 @@ local function Refresh()
         local row = guildContactRows[index]
         if not row then
             row = CreateFrame("Frame", nil, guildContactsListContent, "BackdropTemplate")
-            row:SetSize(420, 27)
+            row:SetHeight(27)
             row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
             row:SetBackdropColor(0.10, 0.08, 0.05, index % 2 == 0 and 0.55 or 0.35)
             row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             row.name:SetPoint("LEFT", row, "LEFT", 8, 0)
-            row.name:SetWidth(130)
+            row.name:SetWidth(155)
             row.name:SetJustifyH("LEFT")
             row.noteHit = CreateFrame("Button", nil, row)
-            row.noteHit:SetSize(125, 27)
-            row.noteHit:SetPoint("LEFT", row, "LEFT", 135, 0)
+            row.noteHit:SetHeight(27)
+            row.noteHit:SetPoint("LEFT", row, "LEFT", 165, 0)
+            row.noteHit:SetPoint("RIGHT", row, "RIGHT", -230, 0)
             row.noteText = row.noteHit:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             row.noteText:SetAllPoints(); row.noteText:SetJustifyH("LEFT")
             row.note = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-            row.note:SetSize(120, 22); row.note:SetPoint("LEFT", row, "LEFT", 138, 0)
+            row.note:SetHeight(22); row.note:SetPoint("LEFT", row, "LEFT", 165, 0); row.note:SetPoint("RIGHT", row, "RIGHT", -230, 0)
             row.note:SetAutoFocus(false); row.note:SetMaxLetters(80)
             row.author = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.author:SetPoint("LEFT", row, "LEFT", 270, 0); row.author:SetWidth(85); row.author:SetJustifyH("CENTER")
+            row.author:SetPoint("RIGHT", row, "RIGHT", -76, 0); row.author:SetWidth(145); row.author:SetJustifyH("CENTER")
             row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
             row.remove:SetSize(60, 22)
             row.remove:SetPoint("RIGHT", row, "RIGHT", -4, 0)
@@ -2475,12 +2778,14 @@ local function Refresh()
             row.highlight:Hide()
             guildContactRows[index] = row
         end
+        row:ClearAllPoints()
         row:SetPoint("TOPLEFT", guildContactsListContent, "TOPLEFT", 0, -(index - 1) * 29)
+        row:SetPoint("TOPRIGHT", guildContactsListContent, "TOPRIGHT", -5, -(index - 1) * 29)
         row.name:SetText(iRC:FormatInviteContactName(rowName))
         local detail = iRC:GetGuildContactDetails(rowName) or {}
         local note = detail.note or ""
         row.noteText:SetText(note ~= "" and (#note > 18 and note:sub(1, 15) .. "..." or note) or iRC:Text("GUILD_BANK_NO_NOTE"))
-        row.author:SetText(iRC:FormatPlayerName(detail.addedBy or "Unknown"))
+        row.author:SetText(iRC:FormatInviteContactName(detail.addedBy or "Unknown"))
         local function showContactTooltip(owner)
             row.highlight:Show()
             local metadata = iRC:GetGuildContactDetails(rowName) or {}

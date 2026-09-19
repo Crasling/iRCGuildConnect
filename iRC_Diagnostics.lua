@@ -196,7 +196,9 @@ function Diagnostics:BuildHealthReport()
         lines[#lines + 1] = "-- Ruleset --"
         lines[#lines + 1] = "Guild: " .. tostring(connection.guildName)
         lines[#lines + 1] = "Timestamp: " .. tostring(connection.rulesTimestampHex)
-        lines[#lines + 1] = "Fingerprint: " .. tostring(connection.receivedRulesChecksum)
+        local fingerprint = iRC.GetConnectionRulesFingerprint and iRC:GetConnectionRulesFingerprint(connection)
+            or connection.receivedRulesChecksum
+        lines[#lines + 1] = "Fingerprint: " .. tostring(fingerprint or "Unavailable")
         lines[#lines + 1] = "Created by: " .. tostring(connection.rulesTimestampSource)
         lines[#lines + 1] = "Relayed by: " .. tostring(connection.rulesRelayedBy)
         lines[#lines + 1] = "Received at: " .. tostring(connection.rulesReceivedAt)

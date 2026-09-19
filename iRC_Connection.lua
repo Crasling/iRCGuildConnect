@@ -325,6 +325,14 @@ local function rulesBackupChecksum(value)
     return string.format("%04x%04x", second, first)
 end
 
+function iRC:GetConnectionRulesFingerprint(connection)
+    connection = connection or self:GetConnection()
+    if not connection then return nil end
+    local rules = connection.rules or self:GetConnectionRules()
+    return rulesBackupChecksum(rulesBackupFingerprint(
+        rules, connection.rulesTimestampHex, connection.rulesTimestampSource))
+end
+
 local function guildSettingsChecksum(enabled, timestamp, source)
     return rulesBackupChecksum(table.concat({ enabled and "1" or "0", tostring(timestamp or 0), tostring(source or "") }, SEP))
 end

@@ -839,7 +839,7 @@ local attentionReminderLastAt = 0
 local ATTENTION_REMINDER_COOLDOWN = 300
 
 function Dashboard:CheckAttentionReminder(periodic)
-    if iRC:GetSettings().hideAttentionReminders
+    if not iRC:GetSettings().showAttentionReminders
         or not iRC:HasGuildPermission("verification") or not iRC:IsGuildConnectionActive() then
         attentionReminderMembers = {}
         attentionReminderPending = false

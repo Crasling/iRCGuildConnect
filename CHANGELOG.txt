@@ -2,6 +2,17 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.4 - Guild Management Polish & Smoother Leaderboard Sharing
+--------------------------------------------------------------------------------
+[CHANGED] Guild Settings, Guild Homepage, Guild Found, and Guild Banks use clearer full-width management cards with improved spacing, controls, and responsive lists
+[CHANGED] Guild Leaderboard class labels appear above their matching bars when the class represents at least 10% of the guild; every class remains available through its bar tooltip
+[CHANGED] Opening Guild Leaderboard requests cached reports without automatically publishing reports to other guild members
+[CHANGED] Cached Leaderboard reports are processed gradually, and only the selected client with the newest snapshot responds for each requested guild
+[FIX] Invite Contacts and Guild Banks keep their column headings aligned and display both parts of Forever character names with capital letters
+[CHANGED] Guild Rules shows the current guild name and asks members to contact their Guild Master when iRC is not connected
+[REMOVED] Obsolete layer detection, layer tooltips, and MAP_LAYER traffic have been removed from Guild Map
+[FIX] Diagnostics calculates the active ruleset fingerprint locally, including for the Guild Master who created the rules
+
 v0.5.3 - Guild Management & Forever Stability
 --------------------------------------------------------------------------------
 [ADDED] The main iRC panel now includes Guild Rules and authorized Management pages for verification, incidents, guild settings, homepage, Guild-Found tools, and guild banks

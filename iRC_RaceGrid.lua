@@ -15,12 +15,14 @@ local STALE_AFTER = 900
 local REPORT_MAX_AGE = 5 * 86400
 local RECENT_REPORT_WINDOW = 60
 local CACHE_REQUEST_WINDOW = 5
+local CACHE_OPEN_REQUEST_COOLDOWN = 30
 local CACHE_TRANSFER_TIMEOUT = 15
 local CACHE_CHUNK_SIZE = 100
 local MAX_CHANNEL_PAYLOAD = 1024
 local MAX_CACHE_PARTS = 16
 local MAX_CACHE_PACKAGES = 32
 local cacheUpdatingUntil = 0
+local lastCacheOpenRequestAt
 
 local function setCacheUpdating(active)
     cacheUpdatingUntil = active and ((GetTime and GetTime() or 0) + CACHE_TRANSFER_TIMEOUT) or 0
@@ -512,7 +514,6 @@ function RaceGrid:PublishFromClick()
     end
     lastRefreshActivityAt = GetTime()
     self:BroadcastReport(true)
-    self:RequestGuildCache()
     return true
 end
 
@@ -660,7 +661,7 @@ local function processNextReportWork()
 end
 
 local function queueReportWork(key, callback, timestamp)
-    if not iRC:IsPerformanceMode() or not C_Timer or not C_Timer.After then
+    if not C_Timer or not C_Timer.After then
         callback()
         return
     end
@@ -756,19 +757,26 @@ local function sendCacheOffers(requestId, requester)
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or 0
         local hasSenderIdentity = type(report) == "table" and type(report.name) == "string" and report.name ~= ""
             and type(report.guid) == "string" and report.guid ~= ""
-        if hasSenderIdentity and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE and (tonumber(report.cacheHop) or 0) == 0 then
+        if hasSenderIdentity and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE then
             local payload = serializeGuildReport(report, true)
             local checksum, guildName = payloadChecksum(payload), report.guildName
+            local cacheHop = math.max(0, math.min(1, math.floor(tonumber(report.cacheHop) or 0)))
             local function offer()
                 if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(requester) then return end
                 local observed = observedCacheOffers[requestId]
                 local best = observed and observed.guilds[normalizeGuildName(guildName)]
                 if best and (best.timestamp > timestamp
-                    or (best.timestamp == timestamp and fullNameKey(best.sender) < fullNameKey(iRC:GetPlayerName()))) then return end
-                if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, timestamp, checksum }, SEP), "GUILD") then
-                    local offered = offeredCachePayloads[requestId] or { startedAt = GetTime(), guilds = {} }
+                    or (best.timestamp == timestamp and (best.cacheHop or 1) < cacheHop)
+                    or (best.timestamp == timestamp and (best.cacheHop or 1) == cacheHop
+                        and fullNameKey(best.sender) < fullNameKey(iRC:GetPlayerName()))) then return end
+                if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, timestamp, checksum, cacheHop }, SEP), "GUILD") then
+                    local offered = offeredCachePayloads[requestId]
+                        or { startedAt = GetTime(), requester = requester, guilds = {} }
                     offeredCachePayloads[requestId] = offered
-                    offered.guilds[normalizeGuildName(guildName)] = { payload = payload, timestamp = timestamp, checksum = checksum }
+                    offered.requester = requester
+                    offered.guilds[normalizeGuildName(guildName)] = {
+                        payload = payload, timestamp = timestamp, checksum = checksum, cacheHop = cacheHop,
+                    }
                     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
                 end
             end
@@ -786,9 +794,9 @@ local function requestBestCacheOffers(requestId)
         local localReport = getServerStore().guildReports[guildKey]
         local localTimestamp = localReport and (tonumber(localReport.timestamp) or 0) or 0
         local recentlyReceived = localReport and (tonumber(localReport.lastSeen) or 0) > time() - RECENT_REPORT_WINDOW
-        local shouldRequest = not recentlyReceived and (offer.timestamp > localTimestamp
-            or (offer.timestamp == localTimestamp and localReport and (tonumber(localReport.cacheHop) or 0) > 0)
-        )
+        local localCacheHop = localReport and math.max(0, math.min(1, math.floor(tonumber(localReport.cacheHop) or 0))) or 1
+        local shouldRequest = offer.timestamp > localTimestamp
+            or (not recentlyReceived and offer.timestamp == localTimestamp and (offer.cacheHop or 1) < localCacheHop)
         if shouldRequest then
             request.selected[guildKey] = offer
             requested = requested + 1
@@ -818,6 +826,14 @@ function RaceGrid:RequestGuildCache()
     return true
 end
 
+function RaceGrid:RequestGuildCacheFromOpen()
+    local now = GetTime and GetTime() or 0
+    if lastCacheOpenRequestAt and now - lastCacheOpenRequestAt < CACHE_OPEN_REQUEST_COOLDOWN then return false end
+    if not self:RequestGuildCache() then return false end
+    lastCacheOpenRequestAt = now
+    return true
+end
+
 local function handleCacheMessage(parts, sender, distribution)
     local kind, requestId = parts[1], parts[3]
     if parts[2] ~= WIRE_VERSION or type(requestId) ~= "string" or not requestId:match("^[0-9a-f]+$")
@@ -831,20 +847,31 @@ local function handleCacheMessage(parts, sender, distribution)
         if not cacheRequests[requestId] and not observedCacheOffers[requestId] then return true end
         local requester, guildName = parts[4], tostring(parts[5] or "")
         local timestamp, checksum = validNumber(parts[6], 0, time() + 300), tostring(parts[7] or ""):lower()
-        if guildName == "" or #guildName > 80 or not timestamp or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") then return true end
+        local cacheHop = validNumber(parts[8] or "0", 0, 1)
+        if guildName == "" or #guildName > 80 or not timestamp or not cacheHop
+            or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") then return true end
         local guildKey = normalizeGuildName(guildName)
         local observed = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
         observedCacheOffers[requestId] = observed
         local current = observed.guilds[guildKey]
-        if not current or timestamp > current.timestamp or (timestamp == current.timestamp and fullNameKey(sender) < fullNameKey(current.sender)) then
-            observed.guilds[guildKey] = { timestamp = timestamp, sender = sender }
+        if not current or timestamp > current.timestamp
+            or (timestamp == current.timestamp and cacheHop < (current.cacheHop or 1))
+            or (timestamp == current.timestamp and cacheHop == (current.cacheHop or 1)
+                and fullNameKey(sender) < fullNameKey(current.sender)) then
+            observed.guilds[guildKey] = { timestamp = timestamp, cacheHop = cacheHop, sender = sender }
         end
         if iRC:NormalizeName(requester) == iRC:NormalizeName(iRC:GetPlayerName()) then
             local request = cacheRequests[requestId]
             if request then
                 local offer = request.offers[guildKey]
-                if not offer or timestamp > offer.timestamp or (timestamp == offer.timestamp and fullNameKey(sender) < fullNameKey(offer.sender)) then
-                    request.offers[guildKey] = { guildName = guildName, timestamp = timestamp, checksum = checksum, sender = sender }
+                if not offer or timestamp > offer.timestamp
+                    or (timestamp == offer.timestamp and cacheHop < (offer.cacheHop or 1))
+                    or (timestamp == offer.timestamp and cacheHop == (offer.cacheHop or 1)
+                        and fullNameKey(sender) < fullNameKey(offer.sender)) then
+                    request.offers[guildKey] = {
+                        guildName = guildName, timestamp = timestamp, checksum = checksum,
+                        cacheHop = cacheHop, sender = sender,
+                    }
                 end
             end
         end
@@ -855,6 +882,7 @@ local function handleCacheMessage(parts, sender, distribution)
         end) then return true end
         local guildName, timestamp, checksum = tostring(parts[4] or ""), tonumber(parts[5]), tostring(parts[6] or ""):lower()
         local offered = offeredCachePayloads[requestId]
+        if not offered or iRC:NormalizeName(offered.requester) ~= iRC:NormalizeName(sender) then return true end
         local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]
         if not snapshot or snapshot.timestamp ~= timestamp or snapshot.checksum ~= checksum then return true end
         local payload = snapshot.payload
@@ -923,7 +951,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     if distribution == "CHANNEL" and isOwnGuildSender(sender) then return end
     if not queued and distribution == "WHISPER" and message:match("^CACHE_DATA\t")
-        and iRC:IsPerformanceMode() and C_Timer and C_Timer.After then
+        and C_Timer and C_Timer.After then
         queueCacheChunk(prefix, message, sender, distribution)
         return
     end
@@ -934,13 +962,20 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         if guildKey ~= "" then
             local existing = getServerStore().guildReports[guildKey]
             if existing and (tonumber(existing.lastSeen) or 0) > time() - RECENT_REPORT_WINDOW then return end
-            if not queued and iRC:IsPerformanceMode() and C_Timer and C_Timer.After then
+            if not queued and C_Timer and C_Timer.After then
                 queueReportWork("public:" .. guildKey, function()
                     handleMessage(prefix, message, sender, distribution, true)
                 end, tonumber(publicParts[11]) or 0)
                 return
             end
         end
+    end
+    if not queued and distribution == "CHANNEL" and message:match("^GUILD_DESC\t")
+        and C_Timer and C_Timer.After then
+        queueReportWork("public-description:" .. fullNameKey(sender), function()
+            handleMessage(prefix, message, sender, distribution, true)
+        end, tonumber((split(message))[3]) or 0)
+        return
     end
     if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC"))
         and iRC:DeferLowTraffic("traffic:racegrid-report:" .. iRC:NormalizeName(sender), function()
