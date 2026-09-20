@@ -221,7 +221,7 @@ function Sync:IsGuildFoundSubject()
 end
 
 function Sync:IsMoneyMonitoringActive()
-    return iRC:IsGuildConnectionActive()
+    return self:IsGuildFoundSubject()
 end
 
 function Sync:RefreshMoneyMonitoring()

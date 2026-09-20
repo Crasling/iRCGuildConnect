@@ -6,6 +6,8 @@ local UI = {}
 iRC.MainUI = UI
 local expandedGuildCards = {}
 local guildStatsFilter = "ALL"
+local collapsedFactionSections = {}
+local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
 
 local function getGuildCardTag(group)
     local rules = group and group.rulesKnown and group.rules
@@ -73,6 +75,7 @@ local RACE_LABELS = {
 local FACTION_STYLES = {
     Horde = { border = { 0.72, 0.18, 0.15, 1 }, background = { 0.13, 0.035, 0.03, 0.92 } },
     Alliance = { border = { 0.18, 0.42, 0.80, 1 }, background = { 0.025, 0.07, 0.16, 0.92 } },
+    MyGuild = { border = { 0.92, 0.62, 0.12, 1 }, background = { 0.12, 0.075, 0.02, 0.92 } },
 }
 
 local PODIUM_COLORS = {
@@ -269,21 +272,6 @@ local function makeRaceCard(parent)
     card.contactsLabel:SetTextColor(unpack(COLORS.gold))
     card.contactButtons = {}
     card:EnableMouse(true)
-    card:SetScript("OnEnter", function(self)
-        if not GameTooltip or not self.report then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(self.report.guildName or "—")
-        if self.report.timestamp and self.report.timestamp > 0 then GameTooltip:AddLine(iRC:Text("RL_GRID_UPDATED", date("%Y-%m-%d %H:%M", self.report.timestamp))) end
-        if self.report.source then GameTooltip:AddLine(iRC:Text("RL_GRID_SOURCE", self.report.source)) end
-        GameTooltip:AddLine(iRC:Text("GUILD_STATS_POPULATION", self.report.activeLevel20 or 0,
-            self.report.activePlayers or 0, self.report.activeMembers or 0, self.report.members or 0), 1, 1, 1, true)
-        if self.report.cached then GameTooltip:AddLine(iRC:Text("RL_GRID_CACHED"), 1, 0.65, 0) end
-        for class, average in pairs(self.report.classAverageLevels or {}) do
-            GameTooltip:AddLine(iRC:Text("RL_GRID_CLASS_LEVEL", class, average))
-        end
-        GameTooltip:Show()
-    end)
-    card:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     card:SetScript("OnMouseUp", function(self, button)
         if button ~= "LeftButton" or not self.guildKey then return end
         expandedGuildCards[self.guildKey] = not expandedGuildCards[self.guildKey]
@@ -294,14 +282,31 @@ local function makeRaceCard(parent)
     return card
 end
 
-local function makeFactionSection(parent, faction)
-    local style = FACTION_STYLES[faction]
+local function makeFactionSection(parent, sectionKey, title)
+    local style = FACTION_STYLES[sectionKey]
     local section = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     createBackdrop(section, style.background, style.border)
-    section.title = section:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    section.title:SetPoint("TOPLEFT", 14, -10)
-    section.title:SetText(faction)
+    section.header = CreateFrame("Button", nil, section)
+    section.header:SetPoint("TOPLEFT", 1, -1)
+    section.header:SetPoint("TOPRIGHT", -1, -1)
+    section.header:SetHeight(34)
+    section.header:RegisterForClicks("LeftButtonUp")
+    section.title = section.header:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    section.title:SetPoint("LEFT", 13, 0)
+    section.title:SetText(title or sectionKey)
     section.title:SetTextColor(unpack(style.border))
+    section.header:SetScript("OnClick", function()
+        collapsedFactionSections[sectionKey] = not collapsedFactionSections[sectionKey]
+        if UI.frame and UI.frame.scroll then UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll() end
+        UI:Refresh()
+    end)
+    section.header:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(iRC:Text(collapsedFactionSections[sectionKey] and "GUILD_STATS_EXPAND_FACTION" or "GUILD_STATS_COLLAPSE_FACTION", title or sectionKey))
+        GameTooltip:Show()
+    end)
+    section.header:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     return section
 end
 
@@ -345,6 +350,7 @@ local MAIN_NAVIGATION = {
     { id = "Guild Members", label = "Guild Members", child = true },
     { id = "Guild Bank", label = "Guild Bank", child = true },
     { id = "Management", header = true, managementHeader = true },
+    { id = "Former Members", label = "Former Members", child = true, anyPermission = true },
     { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, permission = "verification", dashboardTab = "Verification" },
     { id = "Incident Management", label = iRC:Text("INCIDENT_TAB"), grandchild = true, permission = "incidents", dashboardTab = "Incidents" },
     { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications" },
@@ -485,7 +491,9 @@ local function updateMemberSuggestions(frame)
             end
         end
         table.sort(matches, function(a, b)
-            if a.entry.kind ~= b.entry.kind then return a.entry.kind == "profession" end
+            if a.entry.kind ~= b.entry.kind then
+                return (MEMBER_SEARCH_PRIORITY[a.entry.kind] or 9) < (MEMBER_SEARCH_PRIORITY[b.entry.kind] or 9)
+            end
             if a.starts ~= b.starts then return a.starts end
             return a.entry.lower < b.entry.lower
         end)
@@ -512,7 +520,7 @@ local function createMemberProfessionSearch(main, frame)
     search.edit:SetText("")
     search.hint = search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     search.hint:SetPoint("LEFT", search.edit, "LEFT", 6, 0)
-    search.hint:SetText("Search professions or recipes")
+    search.hint:SetText("Search characters, professions, or recipes")
     search.suggestions = CreateFrame("Frame", nil, search, "BackdropTemplate")
     search.suggestions:SetSize(235, 128)
     search.suggestions:SetPoint("TOPLEFT", search.edit, "BOTTOMLEFT", 0, -2)
@@ -603,7 +611,7 @@ function UI:Create()
         if not self.dragging then return end
         local x, y = GetCursorPosition()
         local delta = ((x - self.startX) - (y - self.startY)) / (2 * (UIParent:GetEffectiveScale() or 1))
-        frame:SetScale(math.max(0.6, math.min(1.2, self.startScale + delta / 815)))
+        frame:SetScale(math.max(0.6, math.min(2.0, self.startScale + delta / 815)))
     end)
     resize:SetScript("OnMouseUp", function(self)
         self.dragging = false
@@ -744,7 +752,7 @@ function UI:Create()
         end
     end
     frame.LayoutNavigation = function()
-        local showManagement = false
+        local showManagement = iRC:HasAnyManagementPermission()
         for _, navigationItem in ipairs(MAIN_NAVIGATION) do
             if navigationItem.permission and iRC:HasGuildPermission(navigationItem.permission) then
                 showManagement = true
@@ -756,6 +764,7 @@ function UI:Create()
             local visible = not item.hidden
                 and (not item.managementHeader or showManagement)
                 and (not item.permission or iRC:HasGuildPermission(item.permission))
+                and (not item.anyPermission or showManagement)
             local widget = item.widget
             if widget then
                 widget:SetShown(visible)
@@ -769,7 +778,8 @@ function UI:Create()
             end
         end
         for _, item in ipairs(MAIN_NAVIGATION) do
-            if item.id == frame.category and item.permission and not iRC:HasGuildPermission(item.permission) then
+            if item.id == frame.category and ((item.permission and not iRC:HasGuildPermission(item.permission))
+                or (item.anyPermission and not showManagement)) then
                 frame.category = "Guild Members"
                 break
             end
@@ -889,6 +899,27 @@ function UI:Create()
         button.filterKey = filterKey
         frame.guildStatsFilters[index] = button
     end
+
+    frame.guildStatsSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
+    frame.guildStatsSearch:SetSize(300, 22)
+    frame.guildStatsSearch:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -84)
+    frame.guildStatsSearch:SetAutoFocus(false)
+    frame.guildStatsSearch:SetMaxLetters(80)
+    frame.guildStatsSearch:SetTextInsets(5, 5, 0, 0)
+    frame.guildStatsSearch:SetFontObject(GameFontHighlight)
+    frame.guildStatsSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    frame.guildStatsSearch:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    frame.guildStatsSearch:SetScript("OnTextChanged", function(self)
+        self.hint:SetShown(self:GetText() == "")
+        if self.suppressRefresh then return end
+        UI.preservedRaceScroll = 0
+        UI:Refresh()
+    end)
+    frame.guildStatsSearch.hint = frame.guildStatsSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.guildStatsSearch.hint:SetPoint("LEFT", 7, 0)
+    frame.guildStatsSearch.hint:SetText(iRC:Text("GUILD_STATS_SEARCH_HINT"))
+    frame.guildStatsSearch.hint:SetTextColor(0.55, 0.55, 0.55)
+    frame.guildStatsSearch:Hide()
 
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 15, -78)
@@ -1032,7 +1063,7 @@ function UI:Create()
     professionReport:Hide()
     frame.professionReport = professionReport
     local memberMenu = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    memberMenu:SetSize(270, 132)
+    memberMenu:SetSize(270, 166)
     memberMenu:SetFrameStrata("DIALOG")
     memberMenu:SetFrameLevel(frame:GetFrameLevel() + 30)
     memberMenu:SetClampedToScreen(true)
@@ -1076,6 +1107,60 @@ function UI:Create()
         memberMenu:Hide()
         if profile then iRC:OpenWhisper(profile.name) end
     end)
+    memberMenu.alts = CreateFrame("Button", nil, memberMenu, "BackdropTemplate")
+    memberMenu.alts:SetSize(238, 29)
+    memberMenu.alts:SetPoint("TOPLEFT", 16, -116)
+    createBackdrop(memberMenu.alts, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.alts.text = memberMenu.alts:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.alts.text:SetPoint("LEFT", 12, 0)
+    memberMenu.alts.text:SetText("Alts")
+    memberMenu.alts.arrow = memberMenu.alts:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.alts.arrow:SetPoint("RIGHT", -12, 0)
+    memberMenu.alts.arrow:SetText(">")
+    memberMenu.alts:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+
+    memberMenu.altMenu = CreateFrame("Frame", nil, memberMenu, "BackdropTemplate")
+    memberMenu.altMenu:SetSize(220, 82)
+    memberMenu.altMenu:SetPoint("TOPLEFT", memberMenu, "TOPRIGHT", 3, -104)
+    memberMenu.altMenu:SetFrameLevel(memberMenu:GetFrameLevel() + 5)
+    memberMenu.altMenu:SetClampedToScreen(true)
+    createBackdrop(memberMenu.altMenu, { 0.035, 0.028, 0.02, 0.99 }, { COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1 })
+    memberMenu.altMenu.add = CreateFrame("Button", nil, memberMenu.altMenu, "BackdropTemplate")
+    memberMenu.altMenu.add:SetSize(194, 29)
+    memberMenu.altMenu.add:SetPoint("TOPLEFT", 13, -10)
+    createBackdrop(memberMenu.altMenu.add, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.altMenu.add.text = memberMenu.altMenu.add:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.altMenu.add.text:SetPoint("LEFT", 10, 0)
+    memberMenu.altMenu.add.text:SetText("Add to my characters")
+    memberMenu.altMenu.add:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    memberMenu.altMenu.add:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if not profile or not iRC.Identity then return end
+        iRC.Identity:RegisterCharacter(profile.name)
+        UI:RefreshIfShown()
+    end)
+    memberMenu.altMenu.main = CreateFrame("Button", nil, memberMenu.altMenu, "BackdropTemplate")
+    memberMenu.altMenu.main:SetSize(194, 29)
+    memberMenu.altMenu.main:SetPoint("TOPLEFT", 13, -43)
+    createBackdrop(memberMenu.altMenu.main, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.altMenu.main.text = memberMenu.altMenu.main:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.altMenu.main.text:SetPoint("LEFT", 10, 0)
+    memberMenu.altMenu.main.text:SetText("Set as my Main")
+    memberMenu.altMenu.main:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    memberMenu.altMenu.main:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if profile and iRC.Identity then
+            iRC.Identity:RegisterCharacter(profile.name)
+            iRC.Identity:SetMain(profile.name)
+            UI:RefreshIfShown()
+        end
+    end)
+    memberMenu.altMenu:Hide()
+    memberMenu.alts:SetScript("OnClick", function()
+        memberMenu.altMenu:SetShown(not memberMenu.altMenu:IsShown())
+    end)
     memberMenu:Hide()
     frame.memberMenu = memberMenu
     frame:HookScript("OnHide", function()
@@ -1098,7 +1183,7 @@ function UI:Create()
             and not iRC:IsMouseOverFrame(frame.bankSearch) and not iRC:IsMouseOverFrame(frame.bankSuggestions) then
             frame.bankSearch:ClearFocus()
         end
-        if memberMenu:IsShown() and not iRC:IsMouseOverFrame(memberMenu) then memberMenu:Hide() end
+        if memberMenu:IsShown() and not iRC:IsMouseOverFrame(memberMenu) and not iRC:IsMouseOverFrame(memberMenu.altMenu) then memberMenu:Hide() end
         if professionReport:IsShown() and not iRC:IsMouseOverFrame(professionReport) then professionReport:Hide() end
     end)
     frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}
@@ -1133,7 +1218,9 @@ function UI:RenderMemberRows()
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
         local memberTag, tagColor
-        if profile.selfFound == true then
+        if iRC:IsOfficialHardcoreRealm() and profile.dead == true then
+            memberTag, tagColor = "Dead", { 1.00, 0.50, 0.50 }
+        elseif profile.selfFound == true then
             memberTag, tagColor = "Self-Found", { 1.00, 0.55, 0.55 }
         elseif profile.raceLockedStatus and profile.raceLockedStatus.verified == true then
             memberTag, tagColor = "Guild-Found", { 0.30, 1, 0.35 }
@@ -1148,6 +1235,8 @@ function UI:RenderMemberRows()
         row.tag:SetShown(memberTag ~= nil)
         row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
         row.detail:SetText((profile.race or "Unknown") .. " · " .. (profile.class or "Unknown") .. " · Level " .. (profile.level or 1))
+        local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(profile.name)
+        if identityLabel then row.detail:SetText(row.detail:GetText() .. " | " .. identityLabel) end
         row.profileName = profile.name
         local professionData = profile.professionData
         local professionNames = {}
@@ -1179,6 +1268,10 @@ function UI:RenderMemberRows()
             local cursorX, cursorY = GetCursorPosition()
             menu.profile = profile
             menu.title:SetText(iRC:FormatPlayerName(profile.name))
+            local registered = iRC.Identity and iRC.Identity:IsPersonalCharacter(profile.name)
+            menu.altMenu.add:SetEnabled(not registered)
+            menu.altMenu.main:SetEnabled(not registered or iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
+            menu.altMenu:Hide()
             menu:ClearAllPoints()
             menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / UIParent:GetEffectiveScale(), cursorY / UIParent:GetEffectiveScale())
             menu:Show()
@@ -1231,6 +1324,7 @@ local function updateMemberRows(frame)
         entry.members[profile] = true
     end
     for _, profile in ipairs(profiles) do
+        add("name", iRC:FormatPlayerName(profile.name), profile)
         local data = profile.professionData
         if data then
             for _, option in ipairs(iRC.Professions:GetOptions()) do
@@ -1257,6 +1351,49 @@ local function updateMemberRows(frame)
     updateMemberSuggestions(frame)
     frame.contentTitle:SetText("Guild Members")
     frame.contentSubtitle:SetText("Current guild roster and live addon information.")
+end
+
+local function updateFormerMembers(frame)
+    for _, card in ipairs(frame.raceCards) do card:Hide() end
+    for _, section in pairs(frame.factionSections) do section:Hide() end
+    frame.racePodium:Hide()
+    frame.bankSnapshotText:Hide()
+    for _, row in ipairs(frame.bankSnapshotRows) do row:Hide() end
+    local records = iRC.Identity and iRC.Identity:GetFormerMembers() or {}
+    for index, record in ipairs(records) do
+        local row = frame.memberRows[index]
+        if not row then
+            row = makeMemberRow(frame.scrollContent, index)
+            frame.memberRows[index] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
+        row.name:SetText(record.name or "Unknown")
+        row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
+        row.name:SetTextColor(unpack(COLORS.gold))
+        row.onlineTag:Hide()
+        row.tag:ClearAllPoints()
+        row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
+        row.tag:SetText(record.currentMember and "[Rejoined]" or "[Former]")
+        row.tag:SetTextColor(record.currentMember and 0.30 or 1.00, record.currentMember and 1.00 or 0.55, 0.35)
+        row.tag:Show()
+        local departed = record.departedAt and date("%Y-%m-%d %H:%M", record.departedAt) or "Unknown"
+        local detail = (record.departureType or "Left or removed") .. " · " .. departed
+        if record.lastRankIndex ~= nil then detail = detail .. " · Last rank index " .. record.lastRankIndex end
+        if record.identity then detail = detail .. " · " .. record.identity end
+        if (record.rejoinCount or 0) > 0 then detail = detail .. " · Rejoined " .. record.rejoinCount .. " time(s)" end
+        row.detail:SetText(detail)
+        row:SetScript("OnClick", nil)
+        row:SetScript("OnEnter", nil)
+        row:SetScript("OnLeave", nil)
+        row:Show()
+    end
+    for index = #records + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
+    frame.scrollContent:SetHeight(math.max(1, #records * 60))
+    frame.contentTitle:SetText("Former Members")
+    frame.contentSubtitle:SetText(#records > 0 and "Departure history retained for this guild, including later rejoins and linked characters."
+        or "No former guild members have been recorded yet.")
 end
 
 local function updateGuildRules(frame)
@@ -1908,7 +2045,11 @@ local function setRaceCard(card, group, rank)
     card.report = group
     card.guildKey = guildCardKey(group)
     local expanded = expandedGuildCards[card.guildKey]
-    card.freshness:SetText(group.source and iRC:Text(group.cached and "RL_GRID_CACHED" or "RL_GRID_RECENT") or "")
+    local reportTime = tonumber(group.timestamp) and group.timestamp > 0
+        and date("%Y-%m-%d %H:%M", group.timestamp) or iRC:Text("RULESET_METADATA_UNKNOWN")
+    local reportSender = iRC:FormatPlayerName(group.relayedBy or group.name or iRC:Text("RULESET_METADATA_UNKNOWN"))
+    card.freshness:SetText(iRC:Text("GUILD_STATS_REPORT_META", reportTime, reportSender)
+        .. (group.cached and (" · " .. iRC:Text("RL_GRID_CACHED")) or ""))
     card.expandHint:SetText(iRC:Text(expanded and "GUILD_STATS_COLLAPSE_RULES" or "GUILD_STATS_EXPAND_RULES"))
     card.rulesSeparator:SetShown(expanded and true or false)
     card.rulesTitle:SetShown(expanded and true or false)
@@ -2049,6 +2190,17 @@ local function updateRaceOverview(frame)
         end
         allGroups = filtered
     end
+    local searchText = frame.guildStatsSearch and frame.guildStatsSearch:GetText() or ""
+    searchText = searchText:match("^%s*(.-)%s*$"):lower()
+    if searchText ~= "" then
+        local filtered = {}
+        for _, group in ipairs(allGroups) do
+            if tostring(group.guildName or ""):lower():find(searchText, 1, true) then
+                filtered[#filtered + 1] = group
+            end
+        end
+        allGroups = filtered
+    end
     local ranks = {}
     for index, group in ipairs(allGroups) do ranks[group.guildName] = index end
 
@@ -2058,24 +2210,38 @@ local function updateRaceOverview(frame)
 
     local playerFaction = UnitFactionGroup and UnitFactionGroup("player") or "Horde"
     local factionOrder = playerFaction == "Alliance" and { "Alliance", "Horde" } or { "Horde", "Alliance" }
-    for _, faction in ipairs(factionOrder) do
-        local section = frame.factionSections[faction]
-        if not section then
-            section = makeFactionSection(frame.scrollContent, faction)
-            frame.factionSections[faction] = section
+    local ownGuildName = GetGuildInfo and GetGuildInfo("player") or ""
+    local ownGuildKey = ownGuildName:match("^%s*(.-)%s*$"):lower()
+    local ownGuilds = {}
+    if ownGuildKey ~= "" then
+        for _, group in ipairs(allGroups) do
+            if tostring(group.guildName or ""):match("^%s*(.-)%s*$"):lower() == ownGuildKey then
+                ownGuilds[1] = group
+                break
+            end
         end
-        local guilds = {}
-        for _, group in ipairs(allGroups) do if group.faction == faction then guilds[#guilds + 1] = group end end
+    end
+
+    local function renderGuildSection(sectionKey, title, guilds)
+        local section = frame.factionSections[sectionKey]
+        if not section then
+            section = makeFactionSection(frame.scrollContent, sectionKey, title)
+            frame.factionSections[sectionKey] = section
+        end
+        local collapsed = collapsedFactionSections[sectionKey] == true
+        section.title:SetText((collapsed and "+ " or "- ") .. title .. " (" .. #guilds .. ")")
         local cardsHeight = 0
-        for index, group in ipairs(guilds) do cardsHeight = cardsHeight + guildCardHeight(group) + (index > 1 and gap or 0) end
-        local sectionHeight = 44 + cardsHeight + 10
+        if not collapsed then
+            for index, group in ipairs(guilds) do cardsHeight = cardsHeight + guildCardHeight(group) + (index > 1 and gap or 0) end
+        end
+        local sectionHeight = collapsed and 36 or (44 + cardsHeight + 10)
         section:ClearAllPoints()
         section:SetSize(contentWidth, sectionHeight)
         section:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
         section:Show()
         local cardWidth = contentWidth - 24
         local cardOffset = 36
-        for _, group in ipairs(guilds) do
+        for _, group in ipairs(collapsed and {} or guilds) do
             usedCards = usedCards + 1
             local card = frame.raceCards[usedCards]
             if not card then
@@ -2092,6 +2258,20 @@ local function updateRaceOverview(frame)
             cardOffset = cardOffset + cardHeight + gap
         end
         yOffset = yOffset + sectionHeight + gap
+    end
+
+    if #ownGuilds > 0 then
+        renderGuildSection("MyGuild", iRC:Text("GUILD_STATS_MY_GUILD"), ownGuilds)
+    elseif frame.factionSections.MyGuild then
+        frame.factionSections.MyGuild:Hide()
+    end
+    for _, faction in ipairs(factionOrder) do
+        local guilds = {}
+        for _, group in ipairs(allGroups) do
+            local groupKey = tostring(group.guildName or ""):match("^%s*(.-)%s*$"):lower()
+            if group.faction == faction and groupKey ~= ownGuildKey then guilds[#guilds + 1] = group end
+        end
+        renderGuildSection(faction, faction, guilds)
     end
     for index = usedCards + 1, #frame.raceCards do frame.raceCards[index]:Hide() end
     for _, row in ipairs(frame.memberRows) do row:Hide() end
@@ -2142,6 +2322,7 @@ function UI:Refresh()
     end
     frame.memberProfessionSearch:SetShown(not embeddedManagement and frame.category == "Guild Members")
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
+    frame.guildStatsSearch:SetShown(not embeddedManagement and frame.category == "Race Overview")
     frame.bankSave:SetShown(not embeddedManagement and frame.category == "Guild Bank" and bankAccess)
     frame.bankSearch:SetShown(not embeddedManagement and frame.category == "Guild Bank")
     if frame.category ~= "Guild Bank" then frame.bankSuggestions:Hide() end
@@ -2173,7 +2354,7 @@ function UI:Refresh()
         end
     end
     frame.scroll:ClearAllPoints()
-    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -82 or (frame.category == "Guild Bank" and -120 or -78))
+    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -112 or (frame.category == "Guild Bank" and -120 or -78))
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
     frame.contentTitle:SetShown(not embeddedManagement)
@@ -2197,6 +2378,8 @@ function UI:Refresh()
     for category, tab in pairs(frame.tabs) do setTabAppearance(tab, frame.category == category) end
     if frame.category == "Guild Members" then
         updateMemberRows(frame)
+    elseif frame.category == "Former Members" then
+        updateFormerMembers(frame)
     elseif frame.category == "Guild Rules" then
         frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
             .. "  Guild connection and shared rules" .. iRC.Colors.Reset)

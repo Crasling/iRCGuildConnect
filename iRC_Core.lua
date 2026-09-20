@@ -194,10 +194,12 @@ local incomingPerformanceQueue = {}
 local outgoingPerformanceQueue = {}
 local incomingPerformanceScheduled = false
 local function drainIncomingPerformanceQueue()
-    local callback = table.remove(incomingPerformanceQueue, 1)
-    if callback then
-        local ok, err = pcall(callback)
+    local packet = table.remove(incomingPerformanceQueue, 1)
+    if packet and packet.guildKey == iRC:GetGuildKey() then
+        local ok, err = pcall(packet.callback)
         if not ok and geterrorhandler then geterrorhandler()(err) end
+    elseif packet and iRC.Diagnostics then
+        iRC.Diagnostics:Trace("QUEUE_DROP", "stale incoming", packet.kind or "other")
     end
     if #incomingPerformanceQueue > 0 then
         C_Timer.After(0.05, drainIncomingPerformanceQueue)
@@ -219,9 +221,13 @@ function iRC:QueuePerformanceIncoming(message, callback)
         or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" then return false end
     if #incomingPerformanceQueue >= 256 then
         if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "incoming", kind, #incomingPerformanceQueue) end
-        return false
+        -- The packet was deliberately handled by dropping it. Returning false
+        -- would make the caller process it synchronously and defeat throttling.
+        return true
     end
-    incomingPerformanceQueue[#incomingPerformanceQueue + 1] = callback
+    incomingPerformanceQueue[#incomingPerformanceQueue + 1] = {
+        callback = callback, guildKey = self:GetGuildKey(), kind = kind,
+    }
     if self.Diagnostics then self.Diagnostics:Trace("QUEUE_IN", kind, #message, #incomingPerformanceQueue) end
     if not incomingPerformanceScheduled then
         incomingPerformanceScheduled = true
@@ -242,9 +248,13 @@ end
 local function drainOutgoingPerformanceQueue()
     local packet = table.remove(outgoingPerformanceQueue, 1)
     if packet then
-        local ok, err
+        local ok, err = true, nil
         if type(packet) == "function" then ok, err = pcall(packet)
-        else ok, err = pcall(sendAddonTrafficNow, packet[1], packet[2], packet[3], packet[4]) end
+        elseif packet.guildKey == iRC:GetGuildKey() then
+            ok, err = pcall(sendAddonTrafficNow, packet.prefix, packet.message, packet.distribution, packet.target)
+        elseif iRC.Diagnostics then
+            iRC.Diagnostics:Trace("QUEUE_DROP", "stale outgoing", packet.prefix, packet.kind or "other")
+        end
         if not ok and geterrorhandler then geterrorhandler()(err) end
     end
     if #outgoingPerformanceQueue > 0 then
@@ -262,10 +272,11 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         return false
     end
     local now = GetTime and GetTime() or 0
+    local guildKey = self:GetGuildKey()
     local readyAt = tonumber(self.StartupTrafficReadyAt) or 0
     if readyAt > now and C_Timer and C_Timer.After then
         C_Timer.After(readyAt - now, function()
-            iRC:SendAddonTraffic(prefix, message, distribution, target)
+            if iRC:GetGuildKey() == guildKey then iRC:SendAddonTraffic(prefix, message, distribution, target) end
         end)
         return true
     end
@@ -274,9 +285,15 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
         or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
         or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS"
-    if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After
-        and #outgoingPerformanceQueue < 256 then
-        outgoingPerformanceQueue[#outgoingPerformanceQueue + 1] = { prefix, message, distribution, target }
+    if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After then
+        if #outgoingPerformanceQueue >= 256 then
+            if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "outgoing", prefix, kind, #outgoingPerformanceQueue) end
+            return false
+        end
+        outgoingPerformanceQueue[#outgoingPerformanceQueue + 1] = {
+            prefix = prefix, message = message, distribution = distribution, target = target,
+            guildKey = guildKey, kind = kind,
+        }
         if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, #outgoingPerformanceQueue) end
         if not outgoingPerformanceScheduled then
             outgoingPerformanceScheduled = true
@@ -459,7 +476,6 @@ end
 
 local DEFAULT_SETTINGS = {
     mainWindowScale = 1,
-    verificationWindowScale = 1,
     shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,
@@ -952,6 +968,7 @@ function iRC:EnsureConnectionRulesTimestamp(connection)
 end
 
 local initializedConnections = setmetatable({}, { __mode = "k" })
+local pendingAutomaticActivation = setmetatable({}, { __mode = "k" })
 
 function iRC:GetConnection()
     local key = self:GetGuildKey()
@@ -974,8 +991,9 @@ function iRC:GetConnection()
     if savedActive ~= nil then
         connection.active = savedActive == true
     else
-        connection.active = connection.active == true
+        connection.active = false
         iRCCharDB.guildConnectionActive[key] = connection.active
+        pendingAutomaticActivation[connection] = true
     end
     if connection.activationTimestamp == nil then
         connection.activationTimestamp = decodeRulesTimestamp(connection.rulesTimestampHex)
@@ -1793,11 +1811,18 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRCDB = iRCDB or {}
         iRCCharDB = iRCCharDB or {}
         ensureCharacterConnectionStore()
-        iRC:GetSettings()
+        local settings = iRC:GetSettings()
+        if iRC:IsTestAdmin() then settings.testGuildMasterOverride = true end
     elseif event == "PLAYER_LOGIN" then
         iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()
+        C_Timer.After(3, function()
+            local connection = iRC:GetConnection()
+            if not connection or not pendingAutomaticActivation[connection] then return end
+            pendingAutomaticActivation[connection] = nil
+            if iRC:IsGuildMaster() then iRC:SetGuildConnectionActive(true) end
+        end)
         C_Timer.After(10, function()
             local settings = iRC:GetSettings()
             if settings.raceLockedForkReminderShown then return end

@@ -2,7 +2,19 @@
 local accepted, sentMail, inboxItems, inboxMoney, autoLoot = 0, 0, 0, 0, 0
 local tradePartner = "Outside"
 
+local function control()
+    return { enabled = true, SetEnabled = function(self, value) self.enabled = value and true or false end }
+end
+
 UIParent = {}
+TradeFrameTradeButton = control()
+SendMailMailButton = control()
+SendMailNameEditBox = { text = "", GetText = function(self) return self.text end, HookScript = function(self, _, callback) self.onTextChanged = callback end }
+OpenMailFrame = {}
+OpenMailMoneyButton = control()
+OpenMailPackageButton = control()
+OpenMailAttachmentButton1 = control()
+ATTACHMENTS_MAX_RECEIVE = 1
 function UnitLevel() return 60 end
 function CreateFrame()
     local frame = {}
@@ -35,7 +47,12 @@ local notices = {}
 local iRC = {
     Colors = { Red = "", Reset = "", Yellow = "" },
     IsGuildConnectionActive = function() return true end,
-    GetConnectionRules = function() return { selfFoundOnly = true, level60GuildFound = true } end,
+    IsGuildFoundRequired = function() return true end,
+    GetProgressionMode = function() return "GUILD_FOUND" end,
+    IsGuildBankException = function() return false end,
+    IsGuildMemberName = function(_, name) return name == "Guildie" end,
+    GetConnectionRules = function() return { guildFoundOnly = true, guildFoundTradeExceptions = false } end,
+    GetGuildFoundTradeExceptionSettings = function() return { items = {} } end,
     GetSelfFoundState = function() return false end,
     GetGuildFoundTradeStatus = function(_, name) return name == "Guildie", name == "Guildie" and nil or "outside guild" end,
     FindConnectionProfile = function() end,
@@ -51,27 +68,33 @@ local iRC = {
 local private = { iRC = iRC }
 assert(loadfile("iRC_Enforcement.lua"))("iRC", private)
 local enforcement = assert(iRC.Enforcement)
-enforcement:InstallTradeAPIGuard()
 enforcement:InstallMailAPIGuards()
 
-AcceptTrade()
-assert(accepted == 0, "external trade acceptance is blocked")
+enforcement:UpdateTradeRestriction()
+assert(TradeFrameTradeButton.enabled == false, "external trade acceptance control is disabled")
 assert(#notices == 1, "blocked trade explains the restriction in local chat")
 tradePartner = "Guildie"
-AcceptTrade()
-assert(accepted == 1, "verified guild trade acceptance remains available")
+enforcement:UpdateTradeRestriction()
+assert(TradeFrameTradeButton.enabled == true, "verified guild trade acceptance remains available")
 
-SendMail("Outside", "Subject", "Body")
+SendMailNameEditBox.text = "Outside"
+enforcement:UpdateMailRestriction()
+assert(SendMailMailButton.enabled == false, "external outgoing mail control is disabled")
 assert(#notices == 2, "blocked outgoing mail explains the restriction in local chat")
-SendMail("Guildie", "Subject", "Body")
-assert(sentMail == 1, "only verified guild outgoing mail reaches the game API")
+SendMailNameEditBox.text = "Guildie"
+enforcement:UpdateMailRestriction()
+assert(SendMailMailButton.enabled == true, "verified guild outgoing mail remains available")
 
-TakeInboxItem(1, 1); TakeInboxMoney(1); AutoLootMailItem(1)
-assert(inboxItems == 0 and inboxMoney == 0 and autoLoot == 0, "external player mail value is blocked")
-assert(#notices == 5, "every blocked inbox collection explains the restriction in local chat")
-TakeInboxMoney(2); TakeInboxItem(3, 1)
-assert(inboxMoney == 1 and inboxItems == 1, "guild and game-generated mail remain collectible")
-TakeInboxMoney(4)
-assert(inboxMoney == 1, "Auction House proceeds are blocked")
-assert(#notices == 6, "blocked Auction House mail explains the restriction in local chat")
+OpenMailFrame.openMailID = 1
+enforcement:UpdateInboxRestriction()
+assert(OpenMailMoneyButton.enabled == false and OpenMailPackageButton.enabled == false
+    and OpenMailAttachmentButton1.enabled == false, "external player mail controls are disabled")
+
+OpenMailFrame.openMailID = 2
+enforcement:UpdateInboxRestriction()
+assert(OpenMailMoneyButton.enabled == true and OpenMailPackageButton.enabled == true
+    and OpenMailAttachmentButton1.enabled == true, "guild mail controls remain available")
+
+assert(AcceptTrade ~= nil and SendMail ~= nil and TakeInboxItem ~= nil and TakeInboxMoney ~= nil
+    and AutoLootMailItem ~= nil, "Blizzard economy APIs remain untouched")
 print("Guild Found economy enforcement tests passed.")

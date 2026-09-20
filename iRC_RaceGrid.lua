@@ -610,6 +610,8 @@ local function parseGuildReport(parts)
 end
 
 local cacheRequests, observedCacheOffers, offeredCachePayloads, incomingCacheTransfers = {}, {}, {}, {}
+local cacheRequestBySender = {}
+local CACHE_REQUEST_SENDER_COOLDOWN = 10
 
 local reportWorkQueue, reportWorkByKey = {}, {}
 local reportWorkScheduled, reportWorkDirty = false, false
@@ -624,7 +626,8 @@ local function processNextCacheChunks()
     for _ = 1, 2 do
         local work = table.remove(cacheChunkWorkQueue, 1)
         if not work then break end
-        handleMessage(work.prefix, work.message, work.sender, work.distribution, true)
+        local ok, err = pcall(handleMessage, work.prefix, work.message, work.sender, work.distribution, true)
+        if not ok and geterrorhandler then geterrorhandler()(err) end
     end
     cacheChunkWorkScheduled = false
     if #cacheChunkWorkQueue > 0 then
@@ -648,7 +651,8 @@ local function processNextReportWork()
     local work = table.remove(reportWorkQueue, 1)
     if work then
         reportWorkByKey[work.key] = nil
-        work.run()
+        local ok, err = pcall(work.run)
+        if not ok and geterrorhandler then geterrorhandler()(err) end
     end
     reportWorkScheduled = false
     if #reportWorkQueue > 0 and C_Timer and C_Timer.After then
@@ -714,6 +718,7 @@ function RaceGrid:ClearCachedReportsForTesting()
     wipe(incomingChunks)
     wipe(incomingCacheTransfers)
     wipe(cacheRequests)
+    wipe(cacheRequestBySender)
     setCacheUpdating(false)
     if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
     return removed
@@ -721,6 +726,11 @@ end
 
 local function cleanCacheState()
     local now = GetTime()
+    for sender, request in pairs(cacheRequestBySender) do
+        if type(request) ~= "table" or now - (request.receivedAt or 0) > CACHE_TRANSFER_TIMEOUT then
+            cacheRequestBySender[sender] = nil
+        end
+    end
     for requestId, request in pairs(cacheRequests) do
         if type(request) ~= "table" or now - (request.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then cacheRequests[requestId] = nil end
     end
@@ -840,6 +850,11 @@ local function handleCacheMessage(parts, sender, distribution)
         or #requestId > 24 or not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(sender) then return true end
     cleanCacheState()
     if kind == "CACHE_REQUEST" and distribution == "GUILD" then
+        local senderKey, now = fullNameKey(sender), GetTime()
+        local previous = cacheRequestBySender[senderKey]
+        if previous and (previous.requestId == requestId
+            or now - previous.receivedAt < CACHE_REQUEST_SENDER_COOLDOWN) then return true end
+        cacheRequestBySender[senderKey] = { requestId = requestId, receivedAt = now }
         sendCacheOffers(requestId, sender)
         iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_DISCOVERY_RECEIVED", sender), 3)
         return true

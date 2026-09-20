@@ -22,8 +22,8 @@ local observedGroupRestrictions
 local initialGroupProtectionPending = true
 local restrictedTradeCancelled = false
 local lastMailRestrictionReason
-local originalSendMail, originalTakeInboxItem, originalTakeInboxMoney, originalAutoLootMailItem
-local originalAcceptTrade
+local lastTradeRestrictionReason
+local lastInboxRestrictionKey
 local CONJURED_ITEMS = { [5350]=true,[2288]=true,[2136]=true,[3772]=true,[8077]=true,[8078]=true,[8079]=true,[5349]=true,[1113]=true,[1114]=true,[1487]=true,[8075]=true,[8076]=true,[22895]=true }
 local HEALTHSTONE_ITEMS = { [5512]=true,[19004]=true,[19005]=true,[5511]=true,[19006]=true,[19007]=true,[5509]=true,[19008]=true,[19009]=true,[5510]=true,[19010]=true,[19011]=true,[9421]=true,[19012]=true,[19013]=true }
 local QUEST_ITEMS = { [7740]=true,[7741]=true }
@@ -214,31 +214,39 @@ function Enforcement:CheckTradeRestriction()
     if CancelTrade then CancelTrade() end
 end
 
-function Enforcement:InstallTradeAPIGuard()
-    if originalAcceptTrade or type(_G.AcceptTrade) ~= "function" then return end
-    originalAcceptTrade = _G.AcceptTrade
-    _G.AcceptTrade = function(...)
-        if isGuildFoundEconomyActive() then
-            local partnerName = getTradePartnerName()
-            local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
-            local exceptionNote
-            if not allowed and partnerName and not iRC:IsGuildMemberName(partnerName)
-                then
-                local exceptionAllowed
-                exceptionAllowed, exceptionNote = externalTradeExceptionAllowed(partnerName)
-                if exceptionAllowed then allowed, reason = true, nil end
-            end
-            if not allowed then
-                iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
-                Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED", partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
-                return
-            end
-            if exceptionNote then
-                iRC:RecordGuildFoundAudit("TRADE_EXCEPTION_APPROVED",
-                    (partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER")) .. " - " .. exceptionNote)
-            end
+local function getTradeAcceptButton()
+    return _G.TradeFrameTradeButton or (_G.TradeFrame and (_G.TradeFrame.TradeButton or _G.TradeFrame.AcceptButton))
+end
+
+function Enforcement:UpdateTradeRestriction()
+    local button = getTradeAcceptButton()
+    if not button or not button.SetEnabled then return end
+    if not isGuildFoundEconomyActive() then
+        if button.iRCRestricted then button:SetEnabled(true) end
+        button.iRCRestricted, lastTradeRestrictionReason = nil, nil
+        return
+    end
+
+    local partnerName = getTradePartnerName()
+    local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
+    local exceptionNote
+    if not allowed and partnerName and not iRC:IsGuildMemberName(partnerName) then
+        allowed, exceptionNote = externalTradeExceptionAllowed(partnerName)
+    end
+    if allowed then
+        if button.iRCRestricted then button:SetEnabled(true) end
+        button.iRCRestricted, lastTradeRestrictionReason = nil, nil
+        if exceptionNote then button.iRCApprovedException = exceptionNote end
+    else
+        button.iRCRestricted = true
+        button:SetEnabled(false)
+        local restrictionKey = tostring(partnerName or "") .. ":" .. tostring(reason or "")
+        if restrictionKey ~= lastTradeRestrictionReason then
+            lastTradeRestrictionReason = restrictionKey
+            iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
+            self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED",
+                partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
         end
-        return originalAcceptTrade(...)
     end
 end
 
@@ -319,45 +327,39 @@ function Enforcement:ShowInboxRestriction(index, sender)
     self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_INBOX_BLOCKED", sender and iRC:FormatPlayerName(sender) or iRC:Text("GUILD_FOUND_UNKNOWN_SENDER")))
 end
 
+local function setControlRestricted(control, restricted)
+    if not control or not control.SetEnabled then return end
+    if restricted then
+        control.iRCRestricted = true
+        control:SetEnabled(false)
+    elseif control.iRCRestricted then
+        control.iRCRestricted = nil
+        control:SetEnabled(true)
+    end
+end
+
+function Enforcement:UpdateInboxRestriction()
+    local index = (_G.OpenMailFrame and (_G.OpenMailFrame.openMailID or _G.OpenMailFrame.mailIndex))
+        or (_G.InboxFrame and _G.InboxFrame.openMailID)
+    local blocked, sender = false, nil
+    if index then blocked, sender = getInboxRestriction(index) end
+    setControlRestricted(_G.OpenMailMoneyButton, blocked)
+    setControlRestricted(_G.OpenMailPackageButton, blocked)
+    for slot = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do
+        setControlRestricted(_G["OpenMailAttachmentButton" .. slot], blocked)
+    end
+    local restrictionKey = blocked and tostring(index) .. ":" .. tostring(sender or "") or nil
+    if restrictionKey and restrictionKey ~= lastInboxRestrictionKey then
+        self:ShowInboxRestriction(index, sender)
+    end
+    lastInboxRestrictionKey = restrictionKey
+end
+
 function Enforcement:InstallMailAPIGuards()
-    if not originalSendMail and type(_G.SendMail) == "function" then
-        originalSendMail = _G.SendMail
-        _G.SendMail = function(recipient, ...)
-            if isGuildFoundEconomyActive() then
-                local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
-                if not allowed then
-                    iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
-                    Enforcement:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient or "", reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
-                    return
-                end
-            end
-            return originalSendMail(recipient, ...)
-        end
-    end
-    if not originalTakeInboxItem and type(_G.TakeInboxItem) == "function" then
-        originalTakeInboxItem = _G.TakeInboxItem
-        _G.TakeInboxItem = function(index, ...)
-            local blocked, sender = getInboxRestriction(index)
-            if blocked then Enforcement:ShowInboxRestriction(index, sender); return end
-            return originalTakeInboxItem(index, ...)
-        end
-    end
-    if not originalTakeInboxMoney and type(_G.TakeInboxMoney) == "function" then
-        originalTakeInboxMoney = _G.TakeInboxMoney
-        _G.TakeInboxMoney = function(index, ...)
-            local blocked, sender = getInboxRestriction(index)
-            if blocked then Enforcement:ShowInboxRestriction(index, sender); return end
-            return originalTakeInboxMoney(index, ...)
-        end
-    end
-    if not originalAutoLootMailItem and type(_G.AutoLootMailItem) == "function" then
-        originalAutoLootMailItem = _G.AutoLootMailItem
-        _G.AutoLootMailItem = function(index, ...)
-            local blocked, sender = getInboxRestriction(index)
-            if blocked then Enforcement:ShowInboxRestriction(index, sender); return end
-            return originalAutoLootMailItem(index, ...)
-        end
-    end
+    -- Restrict Blizzard's controls instead of replacing protected global APIs.
+    self:InstallMailRecipientGuard()
+    self:UpdateMailRestriction()
+    self:UpdateInboxRestriction()
 end
 
 function Enforcement:CloseRestrictedAuctionHouse()
@@ -599,6 +601,9 @@ function Enforcement:Refresh()
     iRC:RecordSelfFoundState()
     scheduleLanguageApply()
     self:UpdateSelfFoundWarning()
+    self:UpdateTradeRestriction()
+    self:UpdateMailRestriction()
+    self:UpdateInboxRestriction()
     protectNewlyActivatedRestrictions()
     if C_Timer and C_Timer.After then C_Timer.After(0, function() Enforcement:CheckGroup() end) else self:CheckGroup() end
 end
@@ -626,7 +631,6 @@ frame:SetScript("OnEvent", function(_, event, unit)
     if event == "PLAYER_LOGIN" then
         initialGroupProtectionPending = true
         protectExistingGroup(true)
-        Enforcement:InstallTradeAPIGuard()
         Enforcement:InstallMailAPIGuards()
         Enforcement:Refresh()
         local connection = iRC:GetConnection()
@@ -656,10 +660,11 @@ frame:SetScript("OnEvent", function(_, event, unit)
         end
     elseif event == "TRADE_CLOSED" then
         restrictedTradeCancelled = false
+        lastTradeRestrictionReason = nil
         pendingGuildFoundTradePartners = {}
     elseif event == "TRADE_SHOW" or event == "TRADE_UPDATE" then
-        Enforcement:InstallTradeAPIGuard()
         Enforcement:CheckTradeRestriction()
+        Enforcement:UpdateTradeRestriction()
     elseif event == "AUCTION_HOUSE_SHOW" then
         Enforcement:CloseRestrictedAuctionHouse()
     elseif event == "MAIL_SHOW" then
@@ -668,6 +673,7 @@ frame:SetScript("OnEvent", function(_, event, unit)
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_INBOX_UPDATE" then
         Enforcement:InstallMailAPIGuards()
+        Enforcement:UpdateInboxRestriction()
     elseif event == "MAIL_SEND_INFO_UPDATE" then
         Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateMailRestriction()
@@ -675,6 +681,7 @@ frame:SetScript("OnEvent", function(_, event, unit)
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_CLOSED" then
         lastMailRestrictionReason = nil
+        lastInboxRestrictionKey = nil
     elseif event == "UNIT_AURA" and unit ~= "player" then
         return
     elseif event == "PLAYER_LEVEL_UP" then

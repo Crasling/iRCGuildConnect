@@ -10,6 +10,7 @@ local POSITION_LIFETIME = 90
 local initialized, mapInitialized, mapInitializationArmed, mapInitializationPending, positionSendPending
 local mapTicker
 local pinMenu
+local mapControls
 
 local function hidePinMenu()
     if pinMenu then pinMenu:Hide() end
@@ -254,13 +255,20 @@ local function initializeMap()
         local fontFile, fontSize = label:GetFont()
         if fontFile and fontSize then label:SetFont(fontFile, fontSize, "OUTLINE") end
     end
-    local toggle = CreateFrame("CheckButton", "iRCGuildMapToggle", WorldMapFrame, "UICheckButtonTemplate")
+    -- Forever's WorldMapFrame is a MapCanvas and must be allowed to finish
+    -- building its own children without addon-owned controls being attached to
+    -- it. Keep iRC's settings in an independent overlay anchored to the map.
+    mapControls = CreateFrame("Frame", "iRCGuildMapControls", UIParent)
+    mapControls:SetSize(230, 52)
+    mapControls:SetPoint("TOPRIGHT", WorldMapFrame.ScrollContainer, "TOPRIGHT", -12, -12)
+    mapControls:SetFrameStrata("FULLSCREEN_DIALOG")
+    mapControls:SetFrameLevel((WorldMapFrame:GetFrameLevel() or 0) + 30)
+    mapControls:SetClampedToScreen(true)
+    mapControls:Hide()
+
+    local toggle = CreateFrame("CheckButton", "iRCGuildMapToggle", mapControls, "UICheckButtonTemplate")
     toggle:SetSize(22, 22)
-    -- Keep this below Blizzard's top-right controls. The map canvas renders
-    -- above ordinary children, so retain WorldMapFrame as the anchor and put
-    -- the control explicitly above the ScrollContainer.
-    toggle:SetPoint("TOPRIGHT", WorldMapFrame, "TOPRIGHT", -60, -82)
-    toggle:SetFrameLevel((WorldMapFrame.ScrollContainer:GetFrameLevel() or 0) + 20)
+    toggle:SetPoint("TOPRIGHT", mapControls, "TOPRIGHT", 0, 0)
     toggle.label = toggle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     toggle.label:SetPoint("RIGHT", toggle, "LEFT", -2, 0)
     toggle.label:SetText("iRC: Share my Pos.")
@@ -270,10 +278,9 @@ local function initializeMap()
         if self:GetChecked() then GuildMap:SchedulePosition(1) end
         if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
     end)
-    local showToggle = CreateFrame("CheckButton", "iRCGuildMapShowToggle", WorldMapFrame, "UICheckButtonTemplate")
+    local showToggle = CreateFrame("CheckButton", "iRCGuildMapShowToggle", mapControls, "UICheckButtonTemplate")
     showToggle:SetSize(22, 22)
     showToggle:SetPoint("TOPRIGHT", toggle, "BOTTOMRIGHT", 0, -2)
-    showToggle:SetFrameLevel((WorldMapFrame.ScrollContainer:GetFrameLevel() or 0) + 20)
     showToggle.label = showToggle:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     showToggle.label:SetPoint("RIGHT", showToggle, "LEFT", -2, 0)
     showToggle.label:SetText("iRC: Show Guild Members")
@@ -283,9 +290,11 @@ local function initializeMap()
         if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
     end)
     local function updateToggle()
-        toggle:SetShown(enabled())
+        local visible = enabled() and WorldMapFrame:IsShown()
+        mapControls:SetShown(visible)
+        toggle:SetShown(visible)
         toggle:SetChecked(iRC:GetSettings().shareGuildMapPosition ~= false)
-        showToggle:SetShown(enabled())
+        showToggle:SetShown(visible)
         showToggle:SetChecked(iRC:GetSettings().showGuildMap ~= false)
     end
     GuildMap.UpdateToggle = updateToggle
@@ -299,6 +308,7 @@ local function initializeMap()
     end)
     WorldMapFrame:HookScript("OnHide", function()
         hidePinMenu()
+        if mapControls then mapControls:Hide() end
         if mapTicker then mapTicker:Cancel(); mapTicker = nil end
         for name in pairs(GuildMap.pins) do clearPin(name) end
     end)

@@ -968,6 +968,18 @@ end
 
 local y = -12
 local debugModeCheck
+_, y = CreateSectionHeader(generalContent, "Personal Characters", y - 4)
+generalContent.identityMainDropdown, y = CreateSettingsDropdown("iRCPersonalMainDropdown", generalContent, "Main character",
+    "Characters you log into while they belong to this guild are added automatically. You can also add or remove a character from the Guild Members right-click menu.", y,
+    function() return iRC.Identity and iRC.Identity:GetMainName() or "" end,
+    function(value) if iRC.Identity then iRC.Identity:SetMain(value) end end,
+    function()
+        if iRC.Identity then iRC.Identity:RegisterCharacter(iRC:GetPlayerName()) end
+        local options = {}
+        for _, character in ipairs(iRC.Identity and iRC.Identity:GetCharacters() or {}) do options[#options + 1] = character.name end
+        return options
+    end,
+    function(value) return value ~= "" and value or "No character registered" end)
 _, y = CreateSectionHeader(generalContent, "Minimap Settings", y - 4)
 local minimapCheck
 minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", "Show or hide the iRC button by your minimap.", y,
@@ -1023,10 +1035,10 @@ scaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
 local slider = CreateFrame("Slider", "iRCMainWindowScaleSlider", generalContent, "OptionsSliderTemplate")
 slider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 slider:SetWidth(240)
-slider:SetMinMaxValues(0.6, 1.2)
+slider:SetMinMaxValues(0.6, 2.0)
 slider:SetValueStep(0.05)
 _G[slider:GetName() .. "Low"]:SetText("60%")
-_G[slider:GetName() .. "High"]:SetText("120%")
+_G[slider:GetName() .. "High"]:SetText("200%")
 _G[slider:GetName() .. "Text"]:SetText("")
 SetSimpleTooltip(slider, L.IRC_MAIN_WINDOW_SCALE, L.IRC_MAIN_WINDOW_SCALE_DESC)
 slider:SetScript("OnValueChanged", function(_, value)
@@ -1043,35 +1055,6 @@ _, y = CreateSettingsButton(generalContent, L.IRC_MAIN_WINDOW_RESET, 220, y, fun
     mainFrame:SetPoint("CENTER")
     iRC:Print(L.MAIN_WINDOW_RESET_DONE)
 end, L.IRC_MAIN_WINDOW_RESET_DESC)
-_, y = CreateSubcategoryHeader(generalContent, L.VERIFICATION_WINDOW_SETTINGS, y - 2)
-local verificationScaleLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-verificationScaleLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
-verificationScaleLabel:SetText(L.VERIFICATION_WINDOW_SCALE)
-local verificationScaleValue = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-verificationScaleValue:SetPoint("LEFT", verificationScaleLabel, "RIGHT", 10, 0)
-verificationScaleValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-local verificationScaleSlider = CreateFrame("Slider", "iRCVerificationWindowScaleSlider", generalContent, "OptionsSliderTemplate")
-verificationScaleSlider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
-verificationScaleSlider:SetWidth(240)
-verificationScaleSlider:SetMinMaxValues(0.6, 1.2)
-verificationScaleSlider:SetValueStep(0.05)
-_G[verificationScaleSlider:GetName() .. "Low"]:SetText("60%")
-_G[verificationScaleSlider:GetName() .. "High"]:SetText("120%")
-_G[verificationScaleSlider:GetName() .. "Text"]:SetText("")
-SetSimpleTooltip(verificationScaleSlider, L.VERIFICATION_WINDOW_SCALE, L.VERIFICATION_WINDOW_SCALE_DESC)
-verificationScaleSlider:SetScript("OnValueChanged", function(_, value)
-    value = math.floor(value * 20 + 0.5) / 20
-    iRC:GetSettings().verificationWindowScale = value
-    verificationScaleValue:SetText(math.floor(value * 100 + 0.5) .. "%")
-    if iRC.ConnectionDashboard and iRC.ConnectionDashboard.frame then iRC.ConnectionDashboard.frame:SetScale(value) end
-end)
-y = y - 74
-_, y = CreateSettingsButton(generalContent, L.VERIFICATION_WINDOW_RESET, 240, y, function()
-    local verificationFrame = iRC.ConnectionDashboard:Create()
-    verificationFrame:ClearAllPoints()
-    verificationFrame:SetPoint("CENTER")
-    iRC:Print(L.VERIFICATION_WINDOW_RESET_DONE)
-end, L.VERIFICATION_WINDOW_RESET_DESC)
 generalContent:SetHeight(math.abs(y) + 20)
 
 y = -12
@@ -2607,6 +2590,7 @@ local function RefreshGuildBankTools()
 end
 
 local function RefreshGeneralNotificationAndAdminOptions()
+    if generalContent.identityMainDropdown then generalContent.identityMainDropdown:Refresh() end
     hideChatIconCheck:Refresh()
     hideAllChatIconsCheck:Refresh()
     if debugModeCheck then debugModeCheck:Refresh() end
@@ -2653,7 +2637,6 @@ local function RefreshGeneralNotificationAndAdminOptions()
     welcomeConflictKeep:SetShown(welcomeConflict ~= nil)
     LayoutGuildNotificationCards(welcomeConflict ~= nil)
     slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
-    verificationScaleSlider:SetValue(iRC:GetSettings().verificationWindowScale or 1)
 end
 
 local function Refresh()

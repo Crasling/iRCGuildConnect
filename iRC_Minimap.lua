@@ -22,7 +22,11 @@ local function createDataObject()
         text = iRC.DisplayName,
         icon = iRC.IconPath,
         OnClick = function(_, button)
-            if button == "LeftButton" then iRC.MainUI:Toggle(true) end
+            if button == "LeftButton" then
+                if not iRC:CanOpenPanel() then return end
+                if iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
+                iRC.MainUI:Toggle(true)
+            end
             if button == "RightButton" then iRC:OpenOptions() end
         end,
         OnTooltipShow = function(tooltip)

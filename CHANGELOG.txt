@@ -2,6 +2,32 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.5 - Updating Everything
+--------------------------------------------------------------------------------
+[ADDED] On official Hardcore realms, dead guild members display a [Dead] tag in the Guild Members list
+[ADDED] Guild Leaderboard guilds can be searched by name, and the Alliance and Horde sections can be collapsed independently
+[ADDED] Guild Leaderboard shows the player's guild in a dedicated My Guild section above the faction lists
+[ADDED] Account-wide personal character groups automatically remember same-guild characters, identify mains and alts, and can be managed from Settings or the Guild Members menu
+[ADDED] Former Members tracks guild departures, last known rank, linked characters, and later rejoins for Guild Masters and members with any delegated management permission
+[ADDED] iRC warns when a registered main and alt appear online simultaneously
+[CHANGED] Guild Members search now finds character names as well as professions and recipes
+[CHANGED] Three seconds after login, a new Guild Master connection enables iRC through the full manual activation path; an explicitly disabled guild remains disabled
+[CHANGED] Built-in test-admin characters automatically enable iRC Guild Master test authority when the addon loads
+[CHANGED] Guild Leaderboard cards show their report time and sending character directly and no longer use a card-level hover tooltip
+[CHANGED] Left-clicking the minimap button publishes the current guild report and toggles the iRC panel
+[CHANGED] The iRC panel can now be scaled from 60% to 200%
+[REMOVED] Obsolete standalone Verification panel settings have been removed from General Settings
+[FIX] Ruleset rejection diagnostics no longer fail while explaining an invalid rules packet
+[FIX] Performance queues drop excess traffic instead of processing it immediately, and delayed incoming or outgoing packets are discarded after changing guilds
+[FIX] Guild Found money monitoring runs only for characters currently covered by a Guild Found progression rule
+[FIX] Cached Leaderboard requests are rate-limited per guild member and report queues continue after an individual processing error
+[FIX] Temporary profile, profession, verification, and welcome-check data is removed after a character leaves the guild
+[FIX] Automatic guild activation now runs the same rule initialization, synchronization, roster refresh, and enforcement updates as manual activation
+[FIX] Guild Found trade and mail restrictions no longer replace Blizzard's protected global APIs, reducing UI taint on the Forever client
+[FIX] Guild Map settings now use an independent overlay instead of attaching addon controls directly to Forever's World Map canvas
+[CHANGED] Initial profession sharing uses a limited retry window instead of retrying indefinitely outside an active iRC guild
+[REMOVED] The unused legacy manual-inspection messages have been removed
+
 v0.5.4 - Guild Management Polish & Smoother Leaderboard Sharing
 --------------------------------------------------------------------------------
 [CHANGED] Guild Settings, Guild Homepage, Guild Found, and Guild Banks use clearer full-width management cards with improved spacing, controls, and responsive lists

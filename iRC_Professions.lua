@@ -363,9 +363,11 @@ eventFrame:SetScript("OnEvent", function(_, event)
             -- and recipe sharing after the initial HELLO/activation exchange.
             local delay = iRC:GetStartupTrafficDelay() + 15
             sharingReadyAt = (GetTime and GetTime() or 0) + delay
+            local attempts = 0
             local function sendInitialSummary()
                 if Professions:SendSummary(true) then return end
-                C_Timer.After(15, sendInitialSummary)
+                attempts = attempts + 1
+                if attempts < 5 then C_Timer.After(15, sendInitialSummary) end
             end
             C_Timer.After(delay, sendInitialSummary)
         end

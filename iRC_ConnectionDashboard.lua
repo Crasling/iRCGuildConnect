@@ -123,9 +123,8 @@ end
 function Dashboard:Create()
     if self.frame then return self.frame end
     local frame = CreateFrame("Frame", "iRCConnectionFrame", UIParent, "BackdropTemplate")
-    local settings = iRC:GetSettings()
     frame:SetSize(1020, 650)
-    frame:SetScale(settings.verificationWindowScale or 1)
+    frame:SetScale(1)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
     frame:EnableMouse(true)
@@ -166,8 +165,7 @@ function Dashboard:Create()
     end)
     resize:SetScript("OnMouseUp", function(self)
         self.dragging = false
-        settings.verificationWindowScale = math.floor(frame:GetScale() * 20 + 0.5) / 20
-        frame:SetScale(settings.verificationWindowScale)
+        frame:SetScale(math.floor(frame:GetScale() * 20 + 0.5) / 20)
     end)
     frame.resizeHandle = resize
     iRC:EnableIdleWindowFade(frame)

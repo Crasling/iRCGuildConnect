@@ -28,7 +28,7 @@ iRC.L = {
     TRANSLATIONS_HEADER = "Translations",
 
     -- Windows & Navigation
-    IRC_MAIN_MINIMAP_TOGGLE = "Open the iRC guild panel",
+    IRC_MAIN_MINIMAP_TOGGLE = "Open iRC Panel",
     IRC_MINIMAP_SETTINGS = "Open settings",
     IRC_MAIN_NAV_TITLE = "iRC",
     IRC_MAIN_OPEN = "Open iRC window",
@@ -40,12 +40,6 @@ iRC.L = {
     IRC_MAIN_WINDOW_SETTINGS = "iRC Window",
     MAIN_WINDOW_RESET_DONE = "Main window position reset.",
     PANEL_CANNOT_USE_IN_COMBAT = "Cannot be used in combat.",
-    VERIFICATION_WINDOW_RESET = "Reset Verification panel position",
-    VERIFICATION_WINDOW_RESET_DESC = "Move the Verification panel back to the middle of the screen.",
-    VERIFICATION_WINDOW_RESET_DONE = "Verification panel position reset.",
-    VERIFICATION_WINDOW_SCALE = "Verification panel scale",
-    VERIFICATION_WINDOW_SCALE_DESC = "Make the Verification panel smaller or larger.",
-    VERIFICATION_WINDOW_SETTINGS = "Verification Panel",
 
     -- Connection & Sync
     CONNECTION_DETAIL_INACTIVE = "iRC is not connected for %s. Ask the Guild Master to enable it for the guild.",
@@ -234,6 +228,10 @@ iRC.L = {
     GUILD_STATS_CONTACTS = "Contacts: %s",
     GUILD_STATS_DESCRIPTION_META = "Updated by %s on %s",
     GUILD_STATS_EXPAND_RULES = "Click to show/hide more info",
+    GUILD_STATS_SEARCH_HINT = "Search guilds by name",
+    GUILD_STATS_EXPAND_FACTION = "Expand %s",
+    GUILD_STATS_COLLAPSE_FACTION = "Collapse %s",
+    GUILD_STATS_MY_GUILD = "My Guild",
     GUILD_STATS_GUILD_PROFILE = "Guild information",
     GUILD_STATS_HEADER_DESC = "iRC guild statistics",
     GUILD_STATS_LEVEL_60 = "Level 60",
@@ -248,6 +246,7 @@ iRC.L = {
     GUILD_STATS_REPORTED_GUILDS = "Reported Guilds",
     GUILD_STATS_RULES_UNKNOWN = "Rule data has not been received from this guild.",
     GUILD_STATS_TITLE = "Guild Leaderboard",
+    GUILD_STATS_REPORT_META = "Report: %s · Sent by: %s",
     GUILD_STATS_TOP_THREE = "Top Guilds",
     GUILD_STATS_TOTAL_MEMBERS = "Total member count",
     GUILD_STATS_TOTAL_PLAYERS = "Total members",

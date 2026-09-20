@@ -80,6 +80,34 @@ function iRC:InvalidateGuildRosterSnapshot()
     self:InvalidateGuildMemberRows()
 end
 
+local function pruneDepartedMemberData(self, snapshot)
+    local connection = self:GetConnection()
+    if not connection or #snapshot < 1 then return end
+
+    local currentNames, currentIds = {}, {}
+    for _, member in ipairs(snapshot) do
+        currentNames[self:NormalizeName(member.name)] = true
+        currentIds[memberKey(member.name, member.guid)] = true
+    end
+
+    for _, field in ipairs({ "members", "compatibilityMembers", "guildFoundRoster", "professionMembers", "attentionSince" }) do
+        local records = connection[field]
+        if type(records) == "table" then
+            for key in pairs(records) do
+                if not currentNames[key] then records[key] = nil end
+            end
+        end
+    end
+    for _, field in ipairs({ "newMemberChecks", "newMemberWelcomeNotices" }) do
+        local records = connection[field]
+        if type(records) == "table" then
+            for key in pairs(records) do
+                if not currentIds[key] then records[key] = nil end
+            end
+        end
+    end
+end
+
 function iRC:GetGuildRosterSnapshot()
     if guildRosterSnapshotValid then return guildRosterSnapshot end
     local snapshot = {}
@@ -107,6 +135,7 @@ function iRC:GetGuildRosterSnapshot()
             }
         end
     end
+    if #snapshot > 0 then pruneDepartedMemberData(self, snapshot) end
     guildRosterSnapshot = snapshot
     -- An empty result during initial guild loading is not authoritative; keep
     -- retrying until WoW supplies the roster or confirms that we have no guild.
@@ -525,6 +554,8 @@ local function buildGuildRosterRows(self, roster, connection)
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
                 level = level or (profile and profile.level) or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
                 race = race, online = online and true or false, profile = profile,
+                dead = profile and type(profile.deadGuid) == "string" and profile.deadGuid ~= ""
+                    and profile.deadGuid == (guid and guid ~= "" and guid or profile.guid) or false,
                 lastOnlineDays = lastOnlineDays,
                 compatibility = compatibility,
                 compatibilityMember = compatibilityMember,

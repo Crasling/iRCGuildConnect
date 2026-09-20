@@ -1015,12 +1015,6 @@ function iRC:PollGuildPresence()
     return self:RequestGuildPresence(true)
 end
 
-function iRC:SendInspection(targetName, requestId)
-    -- Reply to older iRC clients that still use manual inspection.
-    if not self:IsGuildConnectionActive() or not requestId then return end
-    send(self.Prefix, addProfileParts({ "INSPECT_DATA", WIRE_VERSION, requestId }, self:GetLocalProfile()), "WHISPER", targetName)
-end
-
 local function cleanWireText(value, limit)
     return tostring(value or ""):gsub("[%c]", " "):sub(1, limit)
 end
@@ -1397,12 +1391,6 @@ local function handleMessage(prefix, message, distribution, sender)
                 players = cleanWireText(parts[7], 60),
             })
         end
-    elseif kind == "INSPECT_REQUEST" then
-        local requestId = parts[2] == WIRE_VERSION and parts[3] or nil
-        if requestId and senderIsKnown(sender) then iRC:SendInspection(sender, requestId) end
-    elseif kind == "INSPECT_DATA" and parts[2] == WIRE_VERSION then
-        local profile = profileFromWire(parts, 4)
-        if profile and senderIsKnown(sender) and iRC:NormalizeName(profile.name) == iRC:NormalizeName(sender) then iRC:StoreMemberProfile(profile) end
     elseif kind == "RANK_PERMISSIONS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
@@ -1965,7 +1953,6 @@ local function handleMessage(prefix, message, distribution, sender)
                     or not timestampAccepted and "older timestamp"
                     or not senderIsAuthority and "lower authority"
                     or not progressionIsExclusive and "invalid progression combination"
-                    or incomingContactCount > 5 and "too many invite contacts"
                     or not timestampSourceValid and "invalid timestamp source"
                     or not contentAccepted and "checksum or same-timestamp content mismatch"
                     or "validation failed"
