@@ -24,9 +24,10 @@ iRC.Prefix = "iRCConnV1"
 -- Testing-only controls are restricted to these exact character/realm pairs.
 iRC.TestAdminNames = {
     "Crasjin-Soulseeker",
-    "Crasblight-Soulseeker",
+    "Harani Steeleye",
     "Crasling Terot",
-    "Crasling Featherfried"
+    "Crasling Featherfried",
+    "Crasling Hillmont"
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -72,6 +73,13 @@ iRC.ColorValues = {
     Yellow = { 1, 1, 0 },
     Gray = { 0.50, 0.50, 0.50 },
 }
+
+if not iRCDB then
+    iRCDB = {}
+end
+if not iRCCharDB then
+    iRCCharDB = {}
+end
 
 -- Keep automatic addon traffic away from the busy login frame. Each caller
 -- gets its own delay so independent startup packets do not form a new burst.
@@ -533,7 +541,7 @@ end
 
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
-    tradeExceptions = 1, guildBanks = 1, notifications = 1, homepage = 0,
+    tradeExceptions = 1, notifications = 1, homepage = 0,
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -862,57 +870,21 @@ function iRC:IsInGuildConnection()
     return self:GetGuildKey() ~= nil
 end
 
-local function ensureCharacterSettingsStore()
+local function ensureAccountSettingsStore()
     iRCDB = iRCDB or {}
-    iRCCharDB = iRCCharDB or {}
-    local legacy = type(iRCDB.settings) == "table" and iRCDB.settings or nil
-    local settings = type(iRCCharDB.settings) == "table" and iRCCharDB.settings or {}
-    if legacy and legacy ~= settings then
-        for key, value in pairs(legacy) do
-            if settings[key] == nil then settings[key] = value end
-        end
-    end
-    iRCCharDB.settings = settings
-    iRCDB.settings = settings
-    return settings
+    iRCDB.settings = type(iRCDB.settings) == "table" and iRCDB.settings or {}
+    return iRCDB.settings
 end
 
-local function ensureCharacterConnectionStore()
+local function ensureAccountConnectionStore()
     iRCDB = iRCDB or {}
-    iRCCharDB = iRCCharDB or {}
-    local legacy = type(iRCDB.connections) == "table" and iRCDB.connections or nil
-    local connections = type(iRCCharDB.connections) == "table" and iRCCharDB.connections or {}
-    if legacy and legacy ~= connections then
-        for key, connection in pairs(legacy) do
-            if connections[key] == nil then connections[key] = connection end
-        end
-    end
-    iRCCharDB.connections = connections
-    iRCDB.connections = connections
-    return connections
-end
-
-local function prepareCharacterSavedState()
-    local settings = ensureCharacterSettingsStore()
-    local connections = ensureCharacterConnectionStore()
-    iRCCharDB.guildConnectionActive = type(iRCCharDB.guildConnectionActive) == "table"
-        and iRCCharDB.guildConnectionActive or {}
-    for key, connection in pairs(connections) do
-        if type(connection) == "table" then
-            iRCCharDB.guildConnectionActive[key] = connection.active == true
-        end
-    end
-    iRCCharDB.persistenceVersion = 1
-    -- Keep the compatibility references attached to the exact tables WoW
-    -- serializes for this character.
-    iRCDB.settings = settings
-    iRCDB.connections = connections
+    iRCDB.connections = type(iRCDB.connections) == "table" and iRCDB.connections or {}
+    return iRCDB.connections
 end
 
 function iRC:GetSettings()
-    -- Forever restores per-character SavedVariables after addon files begin
-    -- executing but before ADDON_LOADED. UI construction may read defaults,
-    -- but must not create globals while the client is still restoring them.
+    -- UI construction can read defaults before ADDON_LOADED. Persistent
+    -- account settings are initialized after SavedVariables are ready.
     if not savedVariablesReady then
         for key, value in pairs(DEFAULT_SETTINGS) do
             if startupSettings[key] == nil then startupSettings[key] = value end
@@ -921,7 +893,7 @@ function iRC:GetSettings()
         startupSettings.minimapButton = startupSettings.minimapButton or { hide = false, minimapPos = -30 }
         return startupSettings
     end
-    local settings = ensureCharacterSettingsStore()
+    local settings = ensureAccountSettingsStore()
     for key, value in pairs(DEFAULT_SETTINGS) do
         if settings[key] == nil then
             settings[key] = value
@@ -975,26 +947,15 @@ function iRC:GetConnection()
     -- Dropdown initialization can read rules before ADDON_LOADED restores the DB.
     -- Let callers use defaults until then, without creating early saved state.
     if not savedVariablesReady or not key or not iRCDB then return nil end
-    local connections = ensureCharacterConnectionStore()
+    local connections = ensureAccountConnectionStore()
     local connection = connections[key]
     if not connection then
         connection = { key = key, guildName = GetGuildInfo("player"), rulesVersion = 1, active = false, members = {} }
         connections[key] = connection
-    end
-    if initializedConnections[connection] then return connection end
-    -- Keep guild activation in a small dedicated character store as well as
-    -- the connection cache. This makes activation survive relogs even if the
-    -- larger cached connection is rebuilt while the guild roster initializes.
-    iRCCharDB = iRCCharDB or {}
-    iRCCharDB.guildConnectionActive = iRCCharDB.guildConnectionActive or {}
-    local savedActive = iRCCharDB.guildConnectionActive[key]
-    if savedActive ~= nil then
-        connection.active = savedActive == true
-    else
-        connection.active = false
-        iRCCharDB.guildConnectionActive[key] = connection.active
         pendingAutomaticActivation[connection] = true
     end
+    if initializedConnections[connection] then return connection end
+    connection.active = connection.active == true
     if connection.activationTimestamp == nil then
         connection.activationTimestamp = decodeRulesTimestamp(connection.rulesTimestampHex)
     else
@@ -1008,9 +969,6 @@ function iRC:GetConnection()
     for _, key in ipairs({ "disableOfficerWarnings", "disableWhisperWarnings", "disableGuildWarnings" }) do
         if connection.guildNotifications[key] == nil then connection.guildNotifications[key] = false end
     end
-    connection.guildBankExceptions = connection.guildBankExceptions or { members = {} }
-    connection.guildBankExceptions.members = connection.guildBankExceptions.members or {}
-    connection.guildBankExceptions.details = connection.guildBankExceptions.details or {}
     connection.guildFoundTradeExceptionSettings = connection.guildFoundTradeExceptionSettings or {}
     for key, value in pairs(self.DefaultGuildFoundTradeExceptions) do
         if connection.guildFoundTradeExceptionSettings[key] == nil then
@@ -1236,8 +1194,14 @@ function iRC:GetGuildFoundTradeStatus(name, allowOfflineGuildMember)
         return false, name .. " is not in your guild."
     end
 
-    local targetIsGuildBank = self:IsGuildBankException(name)
-    if self.RaceLockedSync and not self:IsGuildBankException(self:GetPlayerName()) then
+    local ownName = self:GetPlayerName()
+    local ownIsPersonalBank = self.Identity and self.Identity:IsPersonalBank(ownName)
+    local targetIsPersonalBank = self.Identity and self.Identity:IsPersonalBank(name)
+    local targetIsPersonalCharacter = self.Identity and self.Identity:IsPersonalCharacter(name)
+    local personalBankInteraction = (ownIsPersonalBank and targetIsPersonalCharacter)
+        or (targetIsPersonalBank and self.Identity:IsPersonalCharacter(ownName))
+
+    if self.RaceLockedSync and not personalBankInteraction then
         local ownVerified, ownClean = self.RaceLockedSync:GetLocalRawStatus()
         local own = self.RaceLockedSync:GetStatus(self:GetPlayerName())
         if own then
@@ -1251,10 +1215,9 @@ function iRC:GetGuildFoundTradeStatus(name, allowOfflineGuildMember)
         end
     end
 
-    -- A configured Guild Bank is the trusted destination/source exception.
-    -- The local character must still pass the check above, but the bank must
-    -- not be rejected by its own Self-Found, verification or gold state.
-    if targetIsGuildBank then return true end
+    -- Personal bank alts are account-local storage characters. They may only
+    -- exchange with another character in the same personal character group.
+    if personalBankInteraction then return true end
 
     local profile = self:FindConnectionProfile(name)
     if not allowOfflineGuildMember then
@@ -1343,10 +1306,6 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimes
     local connection = self:GetConnection()
     if not connection then return false end
     active = active and true or false
-    local guildKey = self:GetGuildKey()
-    iRCCharDB = iRCCharDB or {}
-    iRCCharDB.guildConnectionActive = iRCCharDB.guildConnectionActive or {}
-    if guildKey then iRCCharDB.guildConnectionActive[guildKey] = active end
     if connection.active == active then
         if receivedFromGuild and tonumber(activationTimestamp)
             and tonumber(activationTimestamp) > (tonumber(connection.activationTimestamp) or 0) then
@@ -1493,33 +1452,6 @@ function iRC:ResolveGuildMemberFullName(name)
     return match
 end
 
-function iRC:IsGuildBankException(name, connection)
-    connection = connection or self:GetConnection()
-    local exceptions = connection and connection.guildBankExceptions
-    local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
-    return key ~= "" and exceptions and exceptions.members and exceptions.members[key] == true or false
-end
-
-function iRC:GetGuildBankExceptionDetails(name)
-    local connection = self:GetConnection()
-    local exceptions = connection and connection.guildBankExceptions
-    local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
-    return exceptions and exceptions.details and exceptions.details[key] or nil
-end
-
-function iRC:GetGuildBankType(name, connection)
-    connection = connection or self:GetConnection()
-    if not self:IsGuildBankException(name, connection) then return nil end
-    local exceptions = connection.guildBankExceptions
-    local key = normalizeFullPlayerName(name, GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName())
-    local detail = exceptions.details and exceptions.details[key]
-    return detail and detail.bankType == "PERSONAL" and "PERSONAL" or "GUILD"
-end
-
-function iRC:IsGuildBankSnapshotPublisher(name, connection)
-    return self:GetGuildBankType(name, connection) == "GUILD"
-end
-
 function iRC:FormatPlayerName(name)
     name = tostring(name or "")
     if self:IsForeverClient() then
@@ -1569,38 +1501,22 @@ function iRC:OpenWhisper(name)
     return false
 end
 
-function iRC:GetGuildBankExceptionText()
-    local connection = self:GetConnection()
-    local names = {}
-    for name, enabled in pairs(connection and connection.guildBankExceptions and connection.guildBankExceptions.members or {}) do
-        if enabled then names[#names + 1] = name end
-    end
-    table.sort(names)
-    return table.concat(names, ", ")
-end
-
 function iRC:MarkGuildFoundRequired(connection)
     connection = connection or self:GetConnection()
-    local guildKey = self:GetGuildKey()
-    if not connection or not guildKey then return false end
+    if not connection then return false end
     connection.guildFoundEverActive = true
-    iRCCharDB = iRCCharDB or {}
-    iRCCharDB.guildFoundGuilds = iRCCharDB.guildFoundGuilds or {}
-    iRCCharDB.guildFoundGuilds[guildKey] = true
     return true
 end
 
 function iRC:IsGuildFoundRequired(connection)
     connection = connection or self:GetConnection()
-    local guildKey = connection and connection.key
-    if not connection or not guildKey then return false end
+    if not connection then return false end
     local rules = connection.rules or self.DefaultConnectionRules
     if rules.guildFoundOnly == true or rules.level60GuildFound == true then
         self:MarkGuildFoundRequired(connection)
         return true
     end
     return connection.guildFoundEverActive == true
-        or (iRCCharDB and iRCCharDB.guildFoundGuilds and iRCCharDB.guildFoundGuilds[guildKey] == true)
 end
 
 function iRC:GetProgressionMode(rules)
@@ -1801,16 +1717,19 @@ end
 
 iRC.Frame:RegisterEvent("ADDON_LOADED")
 iRC.Frame:RegisterEvent("PLAYER_LOGIN")
-iRC.Frame:RegisterEvent("PLAYER_LOGOUT")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
     if event == "ADDON_LOADED" then
         if loadedName ~= iRC.Name then return end
         savedVariablesReady = true
-        iRCDB = iRCDB or {}
+        ensureAccountConnectionStore()
         iRCCharDB = iRCCharDB or {}
-        ensureCharacterConnectionStore()
+        iRCCharDB.settings = nil
+        iRCCharDB.connections = nil
+        iRCCharDB.guildConnectionActive = nil
+        iRCCharDB.guildFoundGuilds = nil
+        iRCCharDB.persistenceVersion = nil
         local settings = iRC:GetSettings()
         if iRC:IsTestAdmin() then settings.testGuildMasterOverride = true end
     elseif event == "PLAYER_LOGIN" then
@@ -1823,7 +1742,7 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
             pendingAutomaticActivation[connection] = nil
             if iRC:IsGuildMaster() then iRC:SetGuildConnectionActive(true) end
         end)
-        C_Timer.After(10, function()
+        C_Timer.After(5, function()
             local settings = iRC:GetSettings()
             if settings.raceLockedForkReminderShown then return end
             local isLoaded = C_AddOns and C_AddOns.IsAddOnLoaded
@@ -1832,8 +1751,6 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
                 iRC:Print(iRC:Text("RACELOCKED_FORK_DISABLE_REMINDER"))
             end
         end)
-    elseif event == "PLAYER_LOGOUT" then
-        prepareCharacterSavedState()
     elseif event == "PLAYER_REGEN_DISABLED" then
         iRC:EnterLowTrafficMode()
         iRC:CloseAllWindows()

@@ -348,22 +348,19 @@ local MAIN_NAVIGATION = {
     { id = "Current Guild", header = true },
     { id = "Guild Rules", label = "Guild Rules", child = true },
     { id = "Guild Members", label = "Guild Members", child = true },
-    { id = "Guild Bank", label = "Guild Bank", child = true },
     { id = "Management", header = true, managementHeader = true },
-    { id = "Former Members", label = "Former Members", child = true, anyPermission = true },
+    { id = "Guild Log", label = "Guild Log", child = true, anyPermission = true },
     { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, permission = "verification", dashboardTab = "Verification" },
     { id = "Incident Management", label = iRC:Text("INCIDENT_TAB"), grandchild = true, permission = "incidents", dashboardTab = "Incidents" },
     { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications" },
     { id = "Homepage Management", label = iRC:Text("GUILD_HOMEPAGE_TAB"), child = true, permission = "homepage", panelKey = "homepage" },
     { id = "Guild-Found Management", label = iRC:Text("GUILDFOUND_TOOLS_TAB"), child = true, permission = "tradeExceptions", panelKey = "guildFound" },
-    { id = "Guild Bank Management", label = "Guild Banks", child = true, permission = "guildBanks", panelKey = "guildBanks" },
 }
 
 local MANAGEMENT_PANEL_KEYS = {
     ["Notification Management"] = "notifications",
     ["Homepage Management"] = "homepage",
     ["Guild-Found Management"] = "guildFound",
-    ["Guild Bank Management"] = "guildBanks",
 }
 
 local DASHBOARD_PANEL_TABS = {
@@ -386,57 +383,6 @@ local function currentGuildNavigationName()
     return #name > 24 and (name:sub(1, 21) .. "...") or name
 end
 
-local function canUseGuildBankSnapshot()
-    return iRC:IsGuildBankSnapshotPublisher(iRC:GetPlayerName())
-end
-
-local function getContainerSlots(bag)
-    if C_Container and C_Container.GetContainerNumSlots then return C_Container.GetContainerNumSlots(bag) or 0 end
-    return 0
-end
-
-local function getContainerEntry(bag, slot)
-    if C_Container and C_Container.GetContainerItemInfo then
-        local info = C_Container.GetContainerItemInfo(bag, slot)
-        if info then
-            local link = info.hyperlink or (C_Container.GetContainerItemLink and C_Container.GetContainerItemLink(bag, slot))
-            return link or (info.itemID and "Item #" .. info.itemID), info.stackCount or 1, info.itemID
-        end
-    end
-end
-
-local function captureGuildBankSnapshot()
-    if not canUseGuildBankSnapshot() then return false, "Only a character configured as a Guild Bank can save a snapshot." end
-    local lastSaved = iRCCharDB and iRCCharDB.guildBankSnapshot
-    if lastSaved and lastSaved.guildKey == iRC:GetGuildKey() and time() - (tonumber(lastSaved.savedAt) or 0) < 60 then
-        return false, "Wait 60 seconds between Guild Bank snapshots."
-    end
-    if not BankFrame or not BankFrame:IsShown() then return false, "Open your bank before saving a snapshot." end
-    local snapshot = { guildKey = iRC:GetGuildKey(), bankType = "GUILD", savedAt = time(), money = GetMoney() or 0, items = {} }
-    local itemsByID = {}
-    local function scanContainer(bag)
-        for slot = 1, getContainerSlots(bag) do
-            local link, count, itemID = getContainerEntry(bag, slot)
-            itemID = tonumber(itemID) or (link and tonumber(link:match("item:(%d+)")))
-            if itemID then
-                local item = itemsByID[itemID]
-                if not item then
-                    item = { itemID = itemID, link = link, count = 0 }
-                    itemsByID[itemID] = item
-                    snapshot.items[#snapshot.items + 1] = item
-                end
-                item.count = item.count + (tonumber(count) or 1)
-            end
-        end
-    end
-    scanContainer(BANK_CONTAINER or -1)
-    for bag = (NUM_BAG_SLOTS or 4) + 1, (NUM_BAG_SLOTS or 4) + (NUM_BANKBAGSLOTS or 7) do scanContainer(bag) end
-    for bag = 0, NUM_BAG_SLOTS or 4 do scanContainer(bag) end
-    iRCCharDB = iRCCharDB or {}
-    iRCCharDB.guildBankSnapshot = snapshot
-    return true
-end
-
 local function getProfile(frame)
     if not frame.subjectName or iRC:NormalizeName(frame.subjectName) == iRC:NormalizeName(iRC:GetPlayerName()) then
         return iRC:GetLocalProfile()
@@ -453,30 +399,6 @@ local function setTabAppearance(button, active)
 end
 
 local applyMemberSearch
-
-local function updateBankSuggestions(frame)
-    local search, dropdown = frame.bankSearch, frame.bankSuggestions
-    if not search or not dropdown then return end
-    local query = search:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "")
-    local matches = {}
-    if query ~= "" then
-        for _, name in ipairs(frame.bankSearchItems or {}) do
-            local position = name:lower():find(query, 1, true)
-            if position then matches[#matches + 1] = { name = name, starts = position == 1 } end
-        end
-        table.sort(matches, function(a, b)
-            if a.starts ~= b.starts then return a.starts end
-            return a.name:lower() < b.name:lower()
-        end)
-    end
-    for index, button in ipairs(dropdown.buttons) do
-        local match = matches[index]
-        button.itemName = match and match.name or nil
-        button:SetShown(match ~= nil)
-        if match then button.text:SetText(match.name) end
-    end
-    dropdown:SetShown(frame.category == "Guild Bank" and search:HasFocus() and matches[1] ~= nil)
-end
 
 local function updateMemberSuggestions(frame)
     local search = frame.memberProfessionSearch
@@ -933,109 +855,6 @@ function UI:Create()
         if frame.category == "Guild Members" then UI:RenderMemberRows() end
     end)
     frame.scrollContent = content
-    frame.bankSave = CreateFrame("Button", nil, main, "UIPanelButtonTemplate")
-    frame.bankSave:SetSize(145, 24)
-    frame.bankSave:SetPoint("TOPRIGHT", main, "TOPRIGHT", -15, -47)
-    frame.bankSave:SetText("Save snapshot")
-    frame.bankSave:SetScript("OnClick", function()
-        local saved, reason = captureGuildBankSnapshot()
-        if not saved then iRC:Print(reason); return end
-        local shared = iRC.GuildBankSnapshot and iRC.GuildBankSnapshot:Send()
-        local connection = iRC:GetConnection()
-        local snapshot = iRCCharDB and iRCCharDB.guildBankSnapshot
-        if connection and snapshot then
-            snapshot.owner = iRC:GetPlayerName()
-            local latest = iRC.GuildBankSnapshot:GetLatest(connection)
-            if iRC.GuildBankSnapshot:IsNewer(snapshot, latest) then
-                connection.guildBankSnapshots = { [iRC:NormalizeName(snapshot.owner)] = snapshot }
-            end
-        end
-        iRC:Print(shared and "Guild Bank snapshot saved and shared with the guild." or "Guild Bank snapshot saved locally; guild sharing is currently unavailable.")
-        UI:Refresh()
-    end)
-    frame.bankSave:SetScript("OnUpdate", function(self, elapsed)
-        self.elapsed = (self.elapsed or 0) + elapsed
-        if self.elapsed < 0.5 then return end
-        self.elapsed = 0
-        local saved = iRCCharDB and iRCCharDB.guildBankSnapshot
-        local remaining = saved and saved.guildKey == iRC:GetGuildKey() and math.max(0, 60 - (time() - (tonumber(saved.savedAt) or 0))) or 0
-        self:SetEnabled(remaining == 0)
-        self:SetText(remaining > 0 and ("Save snapshot (" .. remaining .. "s)") or "Save snapshot")
-    end)
-    frame.bankSave:Hide()
-    frame.bankSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
-    frame.bankSearch:SetSize(540, 22)
-    frame.bankSearch:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -84)
-    frame.bankSearch:SetAutoFocus(false)
-    frame.bankSearch:SetMaxLetters(80)
-    frame.bankSearch:SetTextInsets(5, 5, 0, 0)
-    -- Parent the hint to the edit box so hiding the Guild Bank search hides
-    -- every visual part of it on the other tabs as well.
-    frame.bankSearch.hint = frame.bankSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    frame.bankSearch.hint:SetPoint("LEFT", frame.bankSearch, "LEFT", 7, 0)
-    frame.bankSearch.hint:SetText("Search bank items")
-    frame.bankSuggestions = CreateFrame("Frame", nil, main, "BackdropTemplate")
-    frame.bankSuggestions:SetSize(540, 128)
-    frame.bankSuggestions:SetPoint("TOPLEFT", frame.bankSearch, "BOTTOMLEFT", 0, -2)
-    frame.bankSuggestions:SetFrameStrata("DIALOG")
-    frame.bankSuggestions:SetFrameLevel(main:GetFrameLevel() + 20)
-    frame.bankSuggestions:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    frame.bankSuggestions:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
-    frame.bankSuggestions:SetBackdropBorderColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.85)
-    frame.bankSuggestions.buttons = {}
-    for index = 1, 5 do
-        local button = CreateFrame("Button", nil, frame.bankSuggestions)
-        button:SetSize(522, 23)
-        button:SetPoint("TOPLEFT", frame.bankSuggestions, "TOPLEFT", 7, -6 - (index - 1) * 23)
-        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
-        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
-        button.highlight:SetAllPoints()
-        button.highlight:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.18)
-        button:SetScript("OnClick", function(self)
-            if not self.itemName then return end
-            frame.bankSearch:SetText(self.itemName)
-            frame.bankSearch:ClearFocus()
-            frame.bankSuggestions:Hide()
-        end)
-        frame.bankSuggestions.buttons[index] = button
-    end
-    frame.bankSuggestions:Hide()
-    frame.bankSearch:SetScript("OnTextChanged", function(self)
-        self.hint:SetShown(self:GetText() == "")
-        if frame.category == "Guild Bank" then
-            frame.scroll:SetVerticalScroll(0)
-            UI:Refresh()
-        end
-        updateBankSuggestions(frame)
-    end)
-    frame.bankSearch:SetScript("OnEditFocusGained", function() updateBankSuggestions(frame) end)
-    frame.bankSearch:SetScript("OnEditFocusLost", function(self)
-        C_Timer.After(0, function()
-            if not self:HasFocus() and not iRC:IsMouseOverFrame(frame.bankSuggestions) then
-                frame.bankSuggestions:Hide()
-            end
-        end)
-    end)
-    frame.bankSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    frame.bankSearch:SetScript("OnEnterPressed", function(self)
-        local first = frame.bankSuggestions.buttons[1]
-        if frame.bankSuggestions:IsShown() and first.itemName then first:Click() else self:ClearFocus() end
-    end)
-    frame.bankSearch:Hide()
-    frame.bankItemInfoEvents = CreateFrame("Frame")
-    frame.bankItemInfoEvents:SetScript("OnEvent", function()
-        if frame:IsShown() and frame.category == "Guild Bank" then UI:RefreshIfShown() end
-    end)
-    frame.bankSnapshotText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    frame.bankSnapshotText:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
-    frame.bankSnapshotText:SetWidth(650)
-    frame.bankSnapshotText:SetJustifyH("LEFT")
-    frame.bankSnapshotText:SetJustifyV("TOP")
-    frame.bankSnapshotText:SetWordWrap(true)
-    frame.bankSnapshotText:Hide()
-    frame.bankSnapshotRows = {}
     local professionReport = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     professionReport:SetSize(560, 470)
     professionReport:SetPoint("CENTER", frame, "CENTER", 0, 0)
@@ -1120,7 +939,7 @@ function UI:Create()
     memberMenu.alts:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
 
     memberMenu.altMenu = CreateFrame("Frame", nil, memberMenu, "BackdropTemplate")
-    memberMenu.altMenu:SetSize(220, 82)
+    memberMenu.altMenu:SetSize(220, 148)
     memberMenu.altMenu:SetPoint("TOPLEFT", memberMenu, "TOPRIGHT", 3, -104)
     memberMenu.altMenu:SetFrameLevel(memberMenu:GetFrameLevel() + 5)
     memberMenu.altMenu:SetClampedToScreen(true)
@@ -1157,6 +976,39 @@ function UI:Create()
             UI:RefreshIfShown()
         end
     end)
+    memberMenu.altMenu.bank = CreateFrame("Button", nil, memberMenu.altMenu, "BackdropTemplate")
+    memberMenu.altMenu.bank:SetSize(194, 29)
+    memberMenu.altMenu.bank:SetPoint("TOPLEFT", 13, -76)
+    createBackdrop(memberMenu.altMenu.bank, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.altMenu.bank.text = memberMenu.altMenu.bank:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.altMenu.bank.text:SetPoint("LEFT", 10, 0)
+    memberMenu.altMenu.bank:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    memberMenu.altMenu.bank:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if profile and iRC.Identity then
+            iRC.Identity:RegisterCharacter(profile.name)
+            local enabled = not iRC.Identity:IsPersonalBank(profile.name)
+            iRC.Identity:SetPersonalBank(profile.name, enabled)
+            UI:RefreshIfShown()
+        end
+    end)
+    memberMenu.altMenu.remove = CreateFrame("Button", nil, memberMenu.altMenu, "BackdropTemplate")
+    memberMenu.altMenu.remove:SetSize(194, 29)
+    memberMenu.altMenu.remove:SetPoint("TOPLEFT", 13, -109)
+    createBackdrop(memberMenu.altMenu.remove, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.altMenu.remove.text = memberMenu.altMenu.remove:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.altMenu.remove.text:SetPoint("LEFT", 10, 0)
+    memberMenu.altMenu.remove.text:SetText("Remove Alt")
+    memberMenu.altMenu.remove:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    memberMenu.altMenu.remove:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if profile and iRC.Identity then
+            iRC.Identity:RemoveCharacter(profile.name)
+            UI:RefreshIfShown()
+        end
+    end)
     memberMenu.altMenu:Hide()
     memberMenu.alts:SetScript("OnClick", function()
         memberMenu.altMenu:SetShown(not memberMenu.altMenu:IsShown())
@@ -1178,10 +1030,6 @@ function UI:Create()
         if frame:IsShown() and frame.category == "Guild Members" and professionSearch.edit:HasFocus()
             and not iRC:IsMouseOverFrame(professionSearch.edit) and not iRC:IsMouseOverFrame(professionSearch.suggestions) then
             professionSearch.edit:ClearFocus()
-        end
-        if frame:IsShown() and frame.category == "Guild Bank" and frame.bankSearch:HasFocus()
-            and not iRC:IsMouseOverFrame(frame.bankSearch) and not iRC:IsMouseOverFrame(frame.bankSuggestions) then
-            frame.bankSearch:ClearFocus()
         end
         if memberMenu:IsShown() and not iRC:IsMouseOverFrame(memberMenu) and not iRC:IsMouseOverFrame(memberMenu.altMenu) then memberMenu:Hide() end
         if professionReport:IsShown() and not iRC:IsMouseOverFrame(professionReport) then professionReport:Hide() end
@@ -1220,6 +1068,8 @@ function UI:RenderMemberRows()
         local memberTag, tagColor
         if iRC:IsOfficialHardcoreRealm() and profile.dead == true then
             memberTag, tagColor = "Dead", { 1.00, 0.50, 0.50 }
+        elseif iRC.Identity and iRC.Identity:IsPersonalBank(profile.name) then
+            memberTag, tagColor = "Personal Bank", { 0.40, 0.80, 1.00 }
         elseif profile.selfFound == true then
             memberTag, tagColor = "Self-Found", { 1.00, 0.55, 0.55 }
         elseif profile.raceLockedStatus and profile.raceLockedStatus.verified == true then
@@ -1271,6 +1121,10 @@ function UI:RenderMemberRows()
             local registered = iRC.Identity and iRC.Identity:IsPersonalCharacter(profile.name)
             menu.altMenu.add:SetEnabled(not registered)
             menu.altMenu.main:SetEnabled(not registered or iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
+            local personalBank = registered and iRC.Identity:IsPersonalBank(profile.name)
+            menu.altMenu.bank.text:SetText(personalBank and "Remove Personal Bank Alt" or "Set as Personal Bank Alt")
+            menu.altMenu.bank:SetEnabled(iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
+            menu.altMenu.remove:SetEnabled(registered and iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
             menu.altMenu:Hide()
             menu:ClearAllPoints()
             menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / UIParent:GetEffectiveScale(), cursorY / UIParent:GetEffectiveScale())
@@ -1353,13 +1207,17 @@ local function updateMemberRows(frame)
     frame.contentSubtitle:SetText("Current guild roster and live addon information.")
 end
 
-local function updateFormerMembers(frame)
+local GUILD_LOG_COLORS = {
+    JOIN = COLORS.green, REJOIN = COLORS.green, PROMOTE = COLORS.gold,
+    DEMOTE = { 1.00, 0.55, 0.20 }, LEAVE = { 1.00, 0.50, 0.50 }, NAME = COLORS.gold,
+    LEVEL = COLORS.green, NOTE = COLORS.parchment, OFFICER_NOTE = COLORS.parchment,
+}
+
+local function updateGuildLog(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     frame.racePodium:Hide()
-    frame.bankSnapshotText:Hide()
-    for _, row in ipairs(frame.bankSnapshotRows) do row:Hide() end
-    local records = iRC.Identity and iRC.Identity:GetFormerMembers() or {}
+    local records = iRC.Identity and iRC.Identity:GetGuildLog() or {}
     for index, record in ipairs(records) do
         local row = frame.memberRows[index]
         if not row then
@@ -1369,21 +1227,16 @@ local function updateFormerMembers(frame)
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
-        row.name:SetText(record.name or "Unknown")
+        row.name:SetText(record.occurredAt and date("%Y-%m-%d %H:%M", record.occurredAt) or "Unknown time")
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
         row.name:SetTextColor(unpack(COLORS.gold))
         row.onlineTag:Hide()
         row.tag:ClearAllPoints()
         row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
-        row.tag:SetText(record.currentMember and "[Rejoined]" or "[Former]")
-        row.tag:SetTextColor(record.currentMember and 0.30 or 1.00, record.currentMember and 1.00 or 0.55, 0.35)
+        row.tag:SetText("[" .. tostring(record.eventType or "CHANGE"):gsub("_", " ") .. "]")
+        row.tag:SetTextColor(unpack(GUILD_LOG_COLORS[record.eventType] or COLORS.parchment))
         row.tag:Show()
-        local departed = record.departedAt and date("%Y-%m-%d %H:%M", record.departedAt) or "Unknown"
-        local detail = (record.departureType or "Left or removed") .. " · " .. departed
-        if record.lastRankIndex ~= nil then detail = detail .. " · Last rank index " .. record.lastRankIndex end
-        if record.identity then detail = detail .. " · " .. record.identity end
-        if (record.rejoinCount or 0) > 0 then detail = detail .. " · Rejoined " .. record.rejoinCount .. " time(s)" end
-        row.detail:SetText(detail)
+        row.detail:SetText(record.text or record.name or "Guild roster changed.")
         row:SetScript("OnClick", nil)
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
@@ -1391,17 +1244,15 @@ local function updateFormerMembers(frame)
     end
     for index = #records + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
     frame.scrollContent:SetHeight(math.max(1, #records * 60))
-    frame.contentTitle:SetText("Former Members")
-    frame.contentSubtitle:SetText(#records > 0 and "Departure history retained for this guild, including later rejoins and linked characters."
-        or "No former guild members have been recorded yet.")
+    frame.contentTitle:SetText("Guild Log")
+    frame.contentSubtitle:SetText(#records > 0 and "GRM-style guild roster history, with the newest changes first."
+        or "No guild roster changes have been recorded yet.")
 end
 
 local function updateGuildRules(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     for _, row in ipairs(frame.memberRows) do row:Hide() end
-    for _, row in ipairs(frame.bankSnapshotRows) do row:Hide() end
-    frame.bankSnapshotText:Hide()
     frame.racePodium:Hide()
 
     local connection = iRC:GetConnection()
@@ -1702,182 +1553,6 @@ local function updateGuildRules(frame)
             or iRC:Text("CONNECTION_DETAIL_INACTIVE",
                 connection and connection.guildName or (GetGuildInfo and GetGuildInfo("player")) or "this guild"))
     end
-end
-
-local BANK_CATEGORY_ORDER = {
-    "Consumable", "Reagent", "Trade Goods", "Recipe", "Gem", "Container", "Weapon", "Armor", "Quest", "Key", "Miscellaneous", "Other",
-}
-local BANK_CATEGORY_BY_ID = {
-    [0] = "Consumable", [1] = "Container", [2] = "Weapon", [3] = "Gem", [4] = "Armor",
-    [5] = "Reagent", [7] = "Trade Goods", [9] = "Recipe", [12] = "Quest", [13] = "Key", [15] = "Miscellaneous",
-}
-
-local function bankItemCategory(itemID)
-    if C_Item and C_Item.GetItemInfo then
-        local _, _, _, _, _, itemType = C_Item.GetItemInfo(itemID)
-        if itemType and itemType ~= "" then return itemType end
-    end
-    if C_Item and C_Item.GetItemInfoInstant then
-        local _, _, _, _, _, classID = C_Item.GetItemInfoInstant(itemID)
-        return BANK_CATEGORY_BY_ID[classID] or "Other"
-    end
-    return "Other"
-end
-
-local function groupedBankItems(snapshot)
-    local byID, groups, totalCount = {}, {}, 0
-    local sources = snapshot.items and { snapshot.items } or { snapshot.bank or {}, snapshot.bags or {} }
-    for _, source in ipairs(sources) do
-        for _, entry in ipairs(source) do
-            local itemID = tonumber(entry.itemID) or tonumber(tostring(entry.link or ""):match("item:(%d+)"))
-            if itemID then
-                local item = byID[itemID]
-                if not item then
-                    item = { itemID = itemID, count = 0, link = entry.link }
-                    byID[itemID] = item
-                end
-                item.count = item.count + (tonumber(entry.count) or 1)
-                if not item.link then item.link = entry.link end
-                totalCount = totalCount + (tonumber(entry.count) or 1)
-            end
-        end
-    end
-    for _, item in pairs(byID) do
-        local category = bankItemCategory(item.itemID)
-        groups[category] = groups[category] or {}
-        local name, link
-        if C_Item and C_Item.GetItemInfo then name, link = C_Item.GetItemInfo(item.itemID) end
-        item.name = name or (item.link and item.link:match("%[(.-)%]")) or ("Item #" .. item.itemID)
-        item.link = link or item.link
-        groups[category][#groups[category] + 1] = item
-    end
-    for _, items in pairs(groups) do
-        table.sort(items, function(a, b) return a.name:lower() < b.name:lower() end)
-    end
-    return groups, totalCount
-end
-
-local function updateGuildBankSnapshot(frame)
-    local previousScroll = frame.scroll:GetVerticalScroll() or 0
-    local query = frame.bankSearch:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "")
-    for _, card in ipairs(frame.raceCards) do card:Hide() end
-    for _, section in pairs(frame.factionSections) do section:Hide() end
-    for _, row in ipairs(frame.memberRows) do row:Hide() end
-    frame.racePodium:Hide()
-    frame.contentTitle:SetText("Guild Bank")
-    frame.contentSubtitle:SetText("Guild Banks: stand with your bank open, then save. Bank and bag items are combined; equipped items are excluded.")
-    local connection = iRC:GetConnection()
-    local snapshots = {}
-    local ownSnapshot = canUseGuildBankSnapshot() and iRCCharDB and iRCCharDB.guildBankSnapshot
-    if ownSnapshot and ownSnapshot.guildKey == iRC:GetGuildKey() then
-        ownSnapshot.owner = iRC:GetPlayerName()
-    end
-    local latest = iRC.GuildBankSnapshot and iRC.GuildBankSnapshot:GetLatest(connection)
-    if latest and not iRC:IsGuildBankSnapshotPublisher(latest.owner, connection) then latest = nil end
-    if ownSnapshot and (not latest or iRC.GuildBankSnapshot:IsNewer(ownSnapshot, latest)) then
-        latest = ownSnapshot
-    end
-    if latest then snapshots[1] = latest end
-    frame.bankSearchItems = {}
-    local rows = frame.bankSnapshotRows
-    for _, row in ipairs(rows) do row:Hide() end
-    frame.bankSnapshotText:Hide()
-    local rowIndex, yOffset = 0, 0
-    local function addLine(value, height, fontObject, inset)
-        rowIndex = rowIndex + 1
-        local row = rows[rowIndex]
-        if not row then
-            row = CreateFrame("Button", nil, frame.scrollContent)
-            row.icon = row:CreateTexture(nil, "ARTWORK")
-            row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-            row.label:SetJustifyH("LEFT")
-            row.label:SetPoint("LEFT", row, "LEFT", 0, 0)
-            row.label:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-            row:SetScript("OnEnter", function(self)
-                if not self.itemID then return end
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(self.itemLink or ("item:" .. self.itemID))
-                GameTooltip:Show()
-            end)
-            row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            rows[rowIndex] = row
-        end
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", inset or 0, -yOffset)
-        row:SetSize(650 - (inset or 0), height)
-        row.label:SetFontObject(fontObject or GameFontHighlightLarge)
-        row.label:SetText(value)
-        row.label:ClearAllPoints()
-        row.label:SetPoint("LEFT", row, "LEFT", 0, 0)
-        row.label:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        row.icon:Hide()
-        row.itemID, row.itemLink = nil, nil
-        row:Show()
-        yOffset = yOffset + height
-        return row
-    end
-    for _, snapshot in ipairs(snapshots) do
-        if rowIndex > 0 then yOffset = yOffset + 12 end
-        addLine(iRC:FormatPlayerName(snapshot.owner or "Guild Bank") .. " - saved " .. (date and date("%Y-%m-%d %H:%M", snapshot.savedAt or 0) or tostring(snapshot.savedAt or 0)), 26)
-        addLine("Money: " .. (GetCoinTextureString and GetCoinTextureString(snapshot.money or 0) or tostring(snapshot.money or 0) .. " copper"), 24)
-        local groups, totalCount = groupedBankItems(snapshot)
-        local seenNames = {}
-        for _, items in pairs(groups) do
-            for _, item in ipairs(items) do
-                local name = item.name
-                if name and not seenNames[name] then
-                    seenNames[name] = true
-                    frame.bankSearchItems[#frame.bankSearchItems + 1] = name
-                end
-            end
-        end
-        addLine("Items: " .. totalCount .. " total", 24)
-        local shown = {}
-        local matchCount = 0
-        local function addCategory(category)
-            local items = groups[category]
-            if not items then return end
-            shown[category] = true
-            local matching = {}
-            for _, item in ipairs(items) do
-                if query == "" or item.name:lower():find(query, 1, true) then
-                    matching[#matching + 1] = item
-                end
-            end
-            if #matching == 0 then return end
-            matchCount = matchCount + #matching
-            yOffset = yOffset + 8
-            addLine("|cffffd100" .. category .. "|r (" .. #matching .. " types)", 24, GameFontNormalLarge)
-            for _, item in ipairs(matching) do
-                local row = addLine("x" .. item.count .. "  " .. item.name, 27, GameFontHighlightLarge, 16)
-                row.itemID, row.itemLink = item.itemID, item.link
-                local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(item.itemID)
-                row.icon:SetSize(22, 22)
-                row.icon:ClearAllPoints()
-                row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
-                row.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-                row.icon:Show()
-                row.label:ClearAllPoints()
-                row.label:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
-                row.label:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-            end
-        end
-        for _, category in ipairs(BANK_CATEGORY_ORDER) do addCategory(category) end
-        local otherCategories = {}
-        for category in pairs(groups) do if not shown[category] then otherCategories[#otherCategories + 1] = category end end
-        table.sort(otherCategories)
-        for _, category in ipairs(otherCategories) do addCategory(category) end
-        if query ~= "" and matchCount == 0 then
-            addLine("No matching items found.", 26, GameFontHighlightLarge, 16)
-        elseif totalCount == 0 then
-            addLine("Empty", 24, GameFontHighlightLarge, 16)
-        end
-    end
-    if #snapshots == 0 then addLine("No Guild Bank snapshot has been received yet.", 26) end
-    frame.scrollContent:SetHeight(math.max(1, yOffset + 12))
-    local maxScroll = math.max(0, frame.scrollContent:GetHeight() - frame.scroll:GetHeight())
-    frame.scroll:SetVerticalScroll(math.min(previousScroll, maxScroll))
-    updateBankSuggestions(frame)
 end
 
 local function formatNumber(value)
@@ -2307,7 +1982,6 @@ function UI:Refresh()
     end
     frame.serverNameHeader:SetText(currentServerNavigationName())
     frame.guildNameHeader:SetText(currentGuildNavigationName())
-    local bankAccess = canUseGuildBankSnapshot()
     local embeddedManagement = managementPanelKey or dashboardTab
     frame.raceRefresh:SetShown(not embeddedManagement and frame.category == "Race Overview")
     local showRulesViewToggle = frame.category == "Guild Rules" and iRC:IsGuildMaster()
@@ -2323,22 +1997,10 @@ function UI:Refresh()
     frame.memberProfessionSearch:SetShown(not embeddedManagement and frame.category == "Guild Members")
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     frame.guildStatsSearch:SetShown(not embeddedManagement and frame.category == "Race Overview")
-    frame.bankSave:SetShown(not embeddedManagement and frame.category == "Guild Bank" and bankAccess)
-    frame.bankSearch:SetShown(not embeddedManagement and frame.category == "Guild Bank")
-    if frame.category ~= "Guild Bank" then frame.bankSuggestions:Hide() end
-    if frame.category == "Guild Bank" then
-        frame.bankItemInfoEvents:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-    else
-        frame.bankItemInfoEvents:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
-    end
-    frame.bankSnapshotText:Hide()
     if frame.category ~= "Guild Rules" then
         for _, row in ipairs(frame.ruleRows or {}) do row:Hide() end
         for _, header in ipairs(frame.ruleSectionHeaders or {}) do header:Hide() end
         if frame.rulesEmpty then frame.rulesEmpty:Hide() end
-    end
-    if frame.category ~= "Guild Bank" then
-        for _, row in ipairs(frame.bankSnapshotRows) do row:Hide() end
     end
     for _, button in ipairs(frame.guildStatsFilters or {}) do
         local shown = frame.category == "Race Overview"
@@ -2354,7 +2016,7 @@ function UI:Refresh()
         end
     end
     frame.scroll:ClearAllPoints()
-    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -112 or (frame.category == "Guild Bank" and -120 or -78))
+    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -112 or -78)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
     frame.contentTitle:SetShown(not embeddedManagement)
@@ -2378,14 +2040,12 @@ function UI:Refresh()
     for category, tab in pairs(frame.tabs) do setTabAppearance(tab, frame.category == category) end
     if frame.category == "Guild Members" then
         updateMemberRows(frame)
-    elseif frame.category == "Former Members" then
-        updateFormerMembers(frame)
+    elseif frame.category == "Guild Log" then
+        updateGuildLog(frame)
     elseif frame.category == "Guild Rules" then
         frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
             .. "  Guild connection and shared rules" .. iRC.Colors.Reset)
         updateGuildRules(frame)
-    elseif frame.category == "Guild Bank" then
-        updateGuildBankSnapshot(frame)
     elseif embeddedManagement then
         frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
             .. "  Delegated guild management" .. iRC.Colors.Reset)

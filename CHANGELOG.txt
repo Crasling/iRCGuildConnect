@@ -2,6 +2,17 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.6 - SavedVariables & Guild Tools
+--------------------------------------------------------------------------------
+[CHANGED] Guild connections, rules, management data, settings, Leaderboard reports, personal character links, and roster history now use the shared account-wide iRC database
+[CHANGED] Character-specific professions, progression history, announcement history, chat preferences, and roleplay preferences remain stored per character
+[FIX] Removed the temporary character-database aliases, logout copying, and duplicate guild activation storage used while Forever account-wide SavedVariables were unavailable
+[CHANGED] Replaced Former Members with a GRM-style Guild Log for joins, rejoins, departures, promotions, demotions, level changes, name changes, and public or officer-note changes
+[ADDED] The Guild Members Alts menu can mark a linked character as a Personal Bank Alt or remove an alt; removing it also clears its bank status
+[CHANGED] Guild Found permits transfers between Personal Bank Alts and the player's linked characters, while Forever's native Guild Bank remains available normally
+[FIX] Character renames preserve their account-wide Main, Alt, Personal Bank, and former-member identity links
+[REMOVED] Removed iRC's obsolete Guild Bank snapshots, item search, guild-wide bank-character management, delegated permission, synchronization, and diagnostics
+
 v0.5.5 - Updating Everything
 --------------------------------------------------------------------------------
 [ADDED] On official Hardcore realms, dead guild members display a [Dead] tag in the Guild Members list

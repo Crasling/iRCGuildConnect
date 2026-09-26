@@ -232,20 +232,19 @@ end
 function Diagnostics:BuildCacheReport()
     local connections = iRCDB and iRCDB.connections or {}
     local servers = iRCDB and iRCDB.globalRaceGrid and iRCDB.globalRaceGrid.servers or {}
-    local reports, samples, profiles, banks, professions = 0, 0, 0, 0, 0
+    local reports, samples, profiles, professions = 0, 0, 0, 0
     for _, server in pairs(servers or {}) do
         reports = reports + CountEntries(server.guildReports)
         for _, guildSamples in pairs(server.guildActivity or {}) do samples = samples + CountEntries(guildSamples) end
     end
     for _, connection in pairs(connections or {}) do
         profiles = profiles + CountEntries(connection.members)
-        banks = banks + CountEntries(connection.guildBankSnapshots)
         professions = professions + CountEntries(connection.professions or connection.memberProfessions)
     end
     return table.concat({ Header(), "", "-- Local cache inventory --",
         "Connections: " .. CountEntries(connections), "Guild reports: " .. reports,
         "Guild activity samples: " .. samples, "Member profiles: " .. profiles,
-        "Guild-bank snapshots: " .. banks, "Profession records: " .. professions,
+        "Profession records: " .. professions,
         "No private item, incident, note, or member contents are included in this report.", }, "\n")
 end
 

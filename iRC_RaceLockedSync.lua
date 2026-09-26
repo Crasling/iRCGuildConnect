@@ -217,7 +217,7 @@ function Sync:IsGuildFoundSubject()
     local progression = iRC:GetProgressionMode()
     return progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND"
         or (UnitLevel("player") or 0) >= 60
-        or iRC:IsGuildBankException(iRC:GetPlayerName())
+        or (iRC.Identity and iRC.Identity:IsPersonalBank(iRC:GetPlayerName()))
 end
 
 function Sync:IsMoneyMonitoringActive()

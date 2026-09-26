@@ -15,10 +15,6 @@ local RULE_AUTHORITY_TIMEOUT = 90
 local RULE_AUTHORITY_STARTUP_GRACE = 15
 local incidentUploadAt = {}
 local guildFoundAuditUploadAt = {}
-local guildBankTransfers = {}
-local MAX_GUILD_BANKS = 32
-local MAX_GUILD_BANK_WIRE = 1200
-local GUILD_BANK_CHUNK_SIZE = 80
 local profileUIRefreshPending = false
 local pendingHello = {}
 local pendingRulesBroadcast
@@ -370,7 +366,7 @@ end
 
 local function rankPermissionsWire(values)
     local fields = {}
-    for _, key in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "guildBanks", "notifications", "homepage" }) do
+    for _, key in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage" }) do
         fields[#fields + 1] = tostring(math.max(0, math.min(9, math.floor(tonumber(values and values[key]) or iRC.DefaultRankPermissions[key]))))
     end
     return table.concat(fields, ",")
@@ -388,17 +384,6 @@ function iRC:SendRankPermissions(targetName, force)
     send(self.Prefix, table.concat({ "RANK_PERMISSIONS", WIRE_VERSION, wire, tostring(timestamp),
         rulesBackupChecksum(wire .. SEP .. timestamp) }, SEP), targetName and "WHISPER" or "GUILD", targetName)
     return true
-end
-
-local function guildBanksWire(members)
-    local names = {}
-    for name, enabled in pairs(members or {}) do if enabled then names[#names + 1] = tostring(name) end end
-    table.sort(names)
-    return table.concat(names, ",")
-end
-
-local function guildBanksChecksum(names, timestamp, source)
-    return rulesBackupChecksum(table.concat({ tostring(names or ""), tostring(timestamp or 0), tostring(source or "") }, SEP))
 end
 
 local function validBranchChecksum(value)
@@ -432,14 +417,6 @@ local function resolvedPair(first, second)
     return table.concat(values, ",")
 end
 
-local function mergeGuildBankNames(first, second)
-    local names = {}
-    for name in (tostring(first or "") .. "," .. tostring(second or "")):gmatch("[^,]+") do
-        if name ~= "" then names[name] = true end
-    end
-    return guildBanksWire(names)
-end
-
 local function showManagementConflict(kind, incomingSource, acceptIncoming, keepCurrent, mergeValues, conflictId, currentValue, incomingValue, mergedValue)
     iRC.PendingManagementConflicts = iRC.PendingManagementConflicts or {}
     local existing = iRC.PendingManagementConflicts[kind]
@@ -454,7 +431,7 @@ local function showManagementConflict(kind, incomingSource, acceptIncoming, keep
         incomingValue = incomingValue,
         mergedValue = mergedValue,
     }
-    local label = iRC:Text(kind == "BANKS" and "MANAGEMENT_CONFLICT_BANKS" or "MANAGEMENT_CONFLICT_WELCOME")
+    local label = iRC:Text("MANAGEMENT_CONFLICT_WELCOME")
     iRC:Print(iRC.Colors.Yellow .. iRC:Text("MANAGEMENT_CONFLICT_CHAT", label, incomingSource) .. iRC.Colors.Reset)
     if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
     return true
@@ -487,19 +464,6 @@ local function sendManagementConflict(target, kind, value, timestamp, source, ch
     if not target or target == "" or not timestamp or timestamp <= 0 or source == "" or checksum == "" then
         return false
     end
-    if kind == "BANKS" and #tostring(value or "") > 120 then
-        local total = math.ceil(#value / GUILD_BANK_CHUNK_SIZE)
-        local transferId = tostring(checksum or "") .. tostring(timestamp or 0)
-        for index = 1, total do
-            send(iRC.Prefix, table.concat({
-                "MGMT_BANKS_CHUNK", WIRE_VERSION, transferId, tostring(index), tostring(total),
-                tostring(timestamp or 0), tostring(source or ""), tostring(checksum or ""),
-                tostring(parentChecksum or "root"), tostring(resolutions or ""),
-                value:sub((index - 1) * GUILD_BANK_CHUNK_SIZE + 1, index * GUILD_BANK_CHUNK_SIZE),
-            }, SEP), "WHISPER", target)
-        end
-        return true
-    end
     return send(iRC.Prefix, table.concat({
         "MGMT_CONFLICT", WIRE_VERSION, kind, tostring(value or ""), tostring(timestamp or 0),
         tostring(source or ""), tostring(checksum or ""), tostring(parentChecksum or ""), tostring(resolutions or ""),
@@ -530,28 +494,6 @@ function iRC:SendGuildManagementSettings(targetName, force)
     }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("GUILD_SETTINGS_SENT"), 3)
     return true
-end
-
-function iRC:SendGuildBankMetadata(targetName, onlyName, force)
-    if not force and self:DeferLowTraffic("traffic:bank-metadata:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankMetadata(targetName, onlyName, force) end) then return false end
-    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
-    local connection = self:GetConnection()
-    local exceptions = connection and connection.guildBankExceptions
-    local sentAny = false
-    for name, detail in pairs(exceptions and exceptions.details or {}) do
-        if exceptions.members[name] and (not onlyName or name == onlyName) then
-            local note = tostring(detail.note or ""):gsub("[%c]", " "):sub(1, 80)
-            send(self.Prefix, table.concat({
-                "GUILD_BANK_NOTE", WIRE_VERSION, name,
-                tostring(math.floor(tonumber(detail.addedAt) or 0)),
-                tostring(detail.addedBy or ""):gsub("[%c]", " "):sub(1, 40),
-                tostring(math.floor(tonumber(detail.updatedAt) or detail.addedAt or 0)), note,
-                detail.bankType == "PERSONAL" and "P" or "G",
-            }, SEP), targetName and "WHISPER" or "GUILD", targetName)
-            sentAny = true
-        end
-    end
-    return sentAny
 end
 
 function iRC:SendGuildContactMetadata(targetName, onlyName, force)
@@ -639,44 +581,6 @@ function iRC:SetGuildContactNote(name, note)
         self:GetPlayerName(), detail.updatedAt)
     self:SendGuildContactMetadata(nil, fullName, true)
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    return true
-end
-
-function iRC:SetGuildBankNote(name, note)
-    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
-    local connection = self:GetConnection()
-    local exceptions = connection.guildBankExceptions
-    local fullName = self:ResolveGuildMemberFullName(name)
-    if not fullName or not exceptions.members[fullName] then return false end
-    note = tostring(note or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 80)
-    local now = GetServerTime and GetServerTime() or time()
-    local detail = exceptions.details[fullName] or { addedAt = now, addedBy = self:GetPlayerName() }
-    detail.note = note
-    detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
-    exceptions.details[fullName] = detail
-    self:RecordManagementConnectionStatus("guildBanks", self:GetPlayerName(), detail.updatedAt,
-        self:GetPlayerName(), detail.updatedAt)
-    self:SendGuildBankMetadata(nil, fullName, true)
-    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    return true
-end
-
-function iRC:SetGuildBankType(name, bankType)
-    if bankType ~= "GUILD" and bankType ~= "PERSONAL" then return false end
-    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
-    local connection = self:GetConnection()
-    local fullName = self:ResolveGuildMemberFullName(name)
-    local exceptions = connection and connection.guildBankExceptions
-    if not fullName or not exceptions or not exceptions.members[fullName] then return false end
-    local now = GetServerTime and GetServerTime() or time()
-    local detail = exceptions.details[fullName] or { addedAt = now, addedBy = self:GetPlayerName(), note = "" }
-    if (detail.bankType or "GUILD") == bankType then return true end
-    detail.bankType = bankType
-    detail.updatedAt = math.max(math.floor(tonumber(detail.updatedAt) or 0) + 1, now)
-    exceptions.details[fullName] = detail
-    self:SendGuildBankMetadata(nil, fullName, true)
-    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    if self.MainUI then self.MainUI:RefreshIfShown() end
     return true
 end
 
@@ -781,98 +685,6 @@ function iRC:SendGuildFoundTradeExceptions(targetName, force)
     send(self.Prefix, table.concat({ "GF_TRADE_EXCEPTIONS", WIRE_VERSION, tostring(mask),
         tostring(timestamp), source, tradeExceptionsChecksum(mask, itemMasks, timestamp, source), itemMasks }, SEP),
         targetName and "WHISPER" or "GUILD", targetName)
-    return true
-end
-
-function iRC:SendGuildBankExceptions(targetName, force)
-    if not force and self:DeferLowTraffic("traffic:banks:" .. tostring(targetName or "guild"), function() iRC:SendGuildBankExceptions(targetName, force) end) then return false end
-    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
-    if not force and not self:IsRulesetBroadcaster() then return false end
-    local connection = self:GetConnection()
-    local exceptions = connection and connection.guildBankExceptions
-    local timestamp = exceptions and math.floor(tonumber(exceptions.timestamp) or 0) or 0
-    local source = exceptions and tostring(exceptions.source or ""):gsub("[%c]", ""):sub(1, 40) or ""
-    if timestamp <= 0 or source == "" then return false end
-    local names = guildBanksWire(exceptions.members)
-    if #names > MAX_GUILD_BANK_WIRE then return false end
-    local checksum = guildBanksChecksum(names, timestamp, source)
-    if exceptions.checksum and exceptions.checksum ~= checksum then
-        self:DebugMsg(self:Text("GUILD_BANKS_RELAY_BLOCKED"), 2)
-        return false
-    end
-    local distribution = targetName and "WHISPER" or "GUILD"
-    if #names <= 120 then
-        send(self.Prefix, table.concat({
-            "GUILD_BANKS", WIRE_VERSION, names, tostring(timestamp), source,
-            checksum, tostring(exceptions.parentChecksum or "root"), tostring(exceptions.resolutions or ""),
-        }, SEP), distribution, targetName)
-    else
-        local total = math.ceil(#names / GUILD_BANK_CHUNK_SIZE)
-        local transferId = checksum .. tostring(timestamp)
-        for index = 1, total do
-            send(self.Prefix, table.concat({
-                "GUILD_BANKS_CHUNK", WIRE_VERSION, transferId, tostring(index), tostring(total),
-                tostring(timestamp), source, checksum, tostring(exceptions.parentChecksum or "root"),
-                tostring(exceptions.resolutions or ""),
-                names:sub((index - 1) * GUILD_BANK_CHUNK_SIZE + 1, index * GUILD_BANK_CHUNK_SIZE),
-            }, SEP), distribution, targetName)
-        end
-    end
-    self:DebugMsg(self:Text("GUILD_BANKS_SENT"), 3)
-    if targetName then self:SendGuildBankMetadata(targetName, nil, force) end
-    return true
-end
-
-function iRC:SetGuildBankExceptions(value, resolutions)
-    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("guildBanks") then return false end
-    local members, count = {}, 0
-    for entry in tostring(value or ""):gmatch("[^,;\r\n]+") do
-        entry = entry:gsub("^%s+", ""):gsub("%s+$", "")
-        if entry ~= "" then
-            local fullName = self:ResolveGuildMemberFullName(entry)
-            if not fullName then
-                self:Print(self.Colors.Red .. self:Text("GUILD_BANK_INVALID_MEMBER", entry) .. self.Colors.Reset)
-                return false
-            end
-            if not members[fullName] then count = count + 1 end
-            if count > MAX_GUILD_BANKS then
-                self:Print(self.Colors.Red .. self:Text("GUILD_BANK_TOO_MANY") .. self.Colors.Reset)
-                return false
-            end
-            members[fullName] = true
-        end
-    end
-    local connection = self:GetConnection()
-    local exceptions = connection.guildBankExceptions
-    if #guildBanksWire(members) > MAX_GUILD_BANK_WIRE then
-        self:Print(self.Colors.Red .. self:Text("GUILD_BANK_TOO_LONG") .. self.Colors.Reset)
-        return false
-    end
-    local parentChecksum = exceptions.checksum or "root"
-    local now = GetServerTime and GetServerTime() or time()
-    local previousMembers = exceptions.members or {}
-    local previousDetails = exceptions.details or {}
-    local details = {}
-    for name in pairs(members) do
-        details[name] = previousDetails[name]
-        if not details[name] and not previousMembers[name] then
-            details[name] = { addedAt = now, addedBy = self:GetPlayerName(), updatedAt = now, note = "" }
-        end
-    end
-    exceptions.members = members
-    exceptions.details = details
-    exceptions.timestamp = math.max(math.floor(tonumber(exceptions.timestamp) or 0) + 1, now)
-    exceptions.source = self:GetPlayerName()
-    exceptions.parentChecksum = parentChecksum
-    exceptions.resolutions = tostring(resolutions or ""):lower():sub(1, 17)
-    exceptions.checksum = guildBanksChecksum(guildBanksWire(members), exceptions.timestamp, exceptions.source)
-    self:RecordManagementConnectionStatus("guildBanks", exceptions.source, exceptions.timestamp,
-        self:GetPlayerName(), exceptions.timestamp)
-    self:SendGuildBankExceptions(nil, true)
-    self:SendGuildBankMetadata(nil, nil, true)
-    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    if self.Enforcement then self.Enforcement:Refresh() end
-    self:Print(self:Text("GUILD_BANK_SAVED", count))
     return true
 end
 
@@ -985,8 +797,6 @@ function iRC:ForceGuildSync()
         self:SendGuildActivation(nil, true)
         self:SendConnectionRules(nil, true)
         self:SendGuildManagementSettings(nil, true)
-        self:SendGuildBankExceptions(nil, true)
-        self:SendGuildBankMetadata(nil, nil, true)
         self:SendGuildFoundTradeExceptions(nil, true)
         self:SendGuildHomepageDescription(nil, true)
         self:SendGuildHomepageIcon(nil, true)
@@ -1057,7 +867,7 @@ end
 
 function iRC:RecordGuildFoundAudit(action, target)
     local pureGuildFound = self:GetProgressionMode() == "GUILD_FOUND"
-    if ((UnitLevel("player") or 0) < 60 and not pureGuildFound and not self:IsGuildBankException(self:GetPlayerName())) or not self:IsGuildFoundRequired()
+    if ((UnitLevel("player") or 0) < 60 and not pureGuildFound) or not self:IsGuildFoundRequired()
         or not GUILD_FOUND_AUDIT_ACTIONS[action] then return false end
     local occurredAt = time()
     local player = self:GetPlayerName()
@@ -1167,7 +977,7 @@ end
 local function isUnchangedManagementPacket(parts)
     if parts[2] ~= WIRE_VERSION then return false end
     local kind = parts[1]
-    if kind ~= "GUILD_SETTINGS" and kind ~= "GUILD_BANKS" and kind ~= "GUILD_BANKS_CHUNK" and kind ~= "GF_TRADE_EXCEPTIONS"
+    if kind ~= "GUILD_SETTINGS" and kind ~= "GF_TRADE_EXCEPTIONS"
         and kind ~= "GUILD_HOMEPAGE_DESC" then return false end
     local connection = iRC:GetConnection()
     if not connection then return false end
@@ -1181,21 +991,6 @@ local function isUnchangedManagementPacket(parts)
         return saved and timestamp == tonumber(saved.timestamp) and source == saved.source
             and enabled == (saved.welcomeNewMembers == true) and tonumber(parts[7]) == mask
             and tostring(parts[6] or ""):lower() == guildSettingsChecksum(enabled, timestamp, source)
-    elseif kind == "GUILD_BANKS_CHUNK" then
-        local saved = connection.guildBankExceptions
-        return saved and tonumber(parts[6]) == tonumber(saved.timestamp)
-            and tostring(parts[7] or "") == tostring(saved.source or "")
-            and tostring(parts[8] or ""):lower() == tostring(saved.checksum or ""):lower()
-            and tostring(parts[9] or "root"):lower() == tostring(saved.parentChecksum or "root"):lower()
-            and tostring(parts[10] or ""):lower() == tostring(saved.resolutions or ""):lower()
-    elseif kind == "GUILD_BANKS" then
-        local saved = connection.guildBankExceptions
-        return saved and tonumber(parts[4]) == tonumber(saved.timestamp)
-            and tostring(parts[5] or "") == tostring(saved.source or "")
-            and tostring(parts[6] or ""):lower() == tostring(saved.checksum or ""):lower()
-            and tostring(parts[3] or "") == guildBanksWire(saved.members)
-            and tostring(parts[7] or "root"):lower() == tostring(saved.parentChecksum or "root"):lower()
-            and tostring(parts[8] or ""):lower() == tostring(saved.resolutions or ""):lower()
     elseif kind == "GF_TRADE_EXCEPTIONS" then
         local saved = connection.guildFoundTradeExceptionSettings
         if not saved or tonumber(parts[4]) ~= tonumber(saved.timestamp)
@@ -1229,49 +1024,8 @@ local function handleMessage(prefix, message, distribution, sender)
     local parts, kind = split(message), nil
     kind = parts[1]
     if isUnchangedManagementPacket(parts) then return end
-    if kind == "BANK_SNAPSHOT" then
-        if distribution == "GUILD" and iRC:IsGuildConnectionActive() and iRC.GuildBankSnapshot then
-            iRC.GuildBankSnapshot:Receive(message, sender)
-        end
-        return
-    end
     if kind == "PROF_SUM" or kind == "PROF_REC" then
         if distribution == "GUILD" and iRC.Professions then iRC.Professions:Receive(message, sender) end
-        return
-    end
-    if (kind == "GUILD_BANKS_CHUNK" or kind == "MGMT_BANKS_CHUNK") and parts[2] == WIRE_VERSION
-        and iRC:IsGuildMemberName(sender) then
-        local transferId = tostring(parts[3] or "")
-        local index, total = tonumber(parts[4]), tonumber(parts[5])
-        local timestamp, source = tonumber(parts[6]), tostring(parts[7] or "")
-        local checksum, parentChecksum = tostring(parts[8] or ""):lower(), tostring(parts[9] or "root"):lower()
-        local resolutions, chunk = tostring(parts[10] or ""):lower(), tostring(parts[11] or "")
-        if transferId == "" or #transferId > 32 or not index or not total or index < 1 or index > total
-            or total > 20 or #chunk > GUILD_BANK_CHUNK_SIZE or not timestamp or timestamp <= 0
-            or #source > 40 or source == "" or not validBranchChecksum(parentChecksum)
-            or not validResolutions(resolutions) then return end
-        local key = iRC:NormalizeName(sender) .. ":" .. kind .. ":" .. transferId
-        local transfer = guildBankTransfers[key]
-        if not transfer or transfer.total ~= total or transfer.checksum ~= checksum then
-            transfer = { total = total, checksum = checksum, chunks = {}, received = 0, createdAt = time() }
-            guildBankTransfers[key] = transfer
-        end
-        if not transfer.chunks[index] then
-            transfer.chunks[index] = chunk
-            transfer.received = transfer.received + 1
-        end
-        if transfer.received == total then
-            local names = table.concat(transfer.chunks)
-            guildBankTransfers[key] = nil
-            if #names > MAX_GUILD_BANK_WIRE then return end
-            local rebuilt = kind == "GUILD_BANKS_CHUNK"
-                and table.concat({ "GUILD_BANKS", WIRE_VERSION, names, tostring(timestamp), source, checksum, parentChecksum, resolutions }, SEP)
-                or table.concat({ "MGMT_CONFLICT", WIRE_VERSION, "BANKS", names, tostring(timestamp), source, checksum, parentChecksum, resolutions }, SEP)
-            handleMessage(prefix, rebuilt, distribution, sender)
-        end
-        for savedKey, saved in pairs(guildBankTransfers) do
-            if time() - (saved.createdAt or 0) > 30 then guildBankTransfers[savedKey] = nil end
-        end
         return
     end
     if kind == "GUILD_ACTIVATION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
@@ -1305,7 +1059,6 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:SendConnectionRules(sender)
             iRC:SendGuildManagementSettings(sender)
             iRC:SendGuildContacts(sender)
-            iRC:SendGuildBankExceptions(sender)
             iRC:SendGuildFoundTradeExceptions(sender)
             iRC:SendGuildHomepageDescription(sender)
             iRC:SendGuildHomepageIcon(sender)
@@ -1405,8 +1158,8 @@ local function handleMessage(prefix, message, distribution, sender)
                 if not value or value < 0 or value > 9 then count = -99; break end
                 count = count + 1; values[count] = math.floor(value)
             end
-            if count == 7 then
-                for index, key in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "guildBanks", "notifications", "homepage" }) do
+            if count == 6 then
+                for index, key in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage" }) do
                     connection.rankPermissions[key] = values[index]
                 end
                 connection.rankPermissionsTimestamp = math.floor(timestamp)
@@ -1547,30 +1300,6 @@ local function handleMessage(prefix, message, distribution, sender)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             end
         end
-    elseif kind == "GUILD_BANK_NOTE" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
-        local connection = iRC:GetConnection()
-        local senderRank = getRulesRank(sender, connection)
-        local name = tostring(parts[3] or "")
-        local addedAt = tonumber(parts[4])
-        local addedBy = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 40)
-        local updatedAt = tonumber(parts[6])
-        local note = tostring(parts[7] or "")
-        local bankType = parts[8] == "P" and "PERSONAL" or "GUILD"
-        local fullName = iRC:ResolveGuildMemberFullName(name)
-        local now = GetServerTime and GetServerTime() or time()
-        if senderRank and senderRank <= (connection.rankPermissions.guildBanks or 1) and fullName == name and addedAt and addedAt > 0 and addedAt <= now + 300
-            and updatedAt and updatedAt >= addedAt and updatedAt <= now + 300 and addedBy ~= ""
-            and #note <= 80 and not note:find("[%c]") then
-            local exceptions = connection.guildBankExceptions
-            exceptions.details = exceptions.details or {}
-            local current = exceptions.details[name]
-            if not current or updatedAt > math.floor(tonumber(current.updatedAt) or 0) then
-                exceptions.details[name] = { addedAt = math.floor(addedAt), addedBy = addedBy,
-                    updatedAt = math.floor(updatedAt), note = note, bankType = bankType }
-                iRC:RecordManagementConnectionStatus("guildBanks", sender, updatedAt, sender, now)
-                if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
-            end
-        end
     elseif kind == "GF_TRADE_EXCEPTIONS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
@@ -1615,96 +1344,6 @@ local function handleMessage(prefix, message, distribution, sender)
                 scheduleReceivedManagementUIRefresh()
             end
         end
-    elseif kind == "GUILD_BANKS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
-        local connection = iRC:GetConnection()
-        local senderRank = getRulesRank(sender, connection)
-        local senderIsGuildMaster = getRosterRank(sender) == 0
-        local receiverIsGuildMaster = getRosterRank(iRC:GetPlayerName()) == 0
-        local names = tostring(parts[3] or "")
-        local timestamp = tonumber(parts[4])
-        local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 40)
-        local checksum = tostring(parts[6] or ""):lower()
-        local parentChecksum = tostring(parts[7] or "root"):lower()
-        local resolutions = tostring(parts[8] or ""):lower()
-        local sourceRank = getRulesRank(source, connection)
-        local now = GetServerTime and GetServerTime() or time()
-        if senderRank and senderRank <= (connection.rankPermissions.guildBanks or 1) and #names <= MAX_GUILD_BANK_WIRE and timestamp and timestamp > 0 and timestamp <= now + 300
-            and source ~= "" and (senderIsGuildMaster or (sourceRank ~= nil and sourceRank <= (connection.rankPermissions.guildBanks or 1)))
-            and validBranchChecksum(parentChecksum) and validResolutions(resolutions)
-            and checksum == guildBanksChecksum(names, timestamp, source) then
-            local members, valid, count = {}, true, 0
-            for name in names:gmatch("[^,]+") do
-                local fullName = iRC:ResolveGuildMemberFullName(name)
-                if not fullName or fullName ~= name then valid = false; break end
-                if not members[fullName] then count = count + 1 end
-                if count > MAX_GUILD_BANKS then valid = false; break end
-                members[fullName] = true
-            end
-            local exceptions = connection.guildBankExceptions
-            local savedTimestamp = math.floor(tonumber(exceptions.timestamp) or 0)
-            local currentNames = guildBanksWire(exceptions.members)
-            local currentChecksum = tostring(exceptions.checksum or "root"):lower()
-            local incomingResolvesCurrent = resolutionContains(resolutions, currentChecksum)
-            local incomingIsChild = parentChecksum == currentChecksum
-            local incomingIsAncestor = tostring(exceptions.parentChecksum or "root"):lower() == checksum
-            if valid and timestamp < savedTimestamp then return end
-            local function applyIncoming()
-                local previousDetails = exceptions.details or {}
-                local details = {}
-                for name in pairs(members) do
-                    details[name] = previousDetails[name] or {
-                        addedAt = math.floor(timestamp), addedBy = source,
-                        updatedAt = math.floor(timestamp), note = "",
-                    }
-                end
-                exceptions.members = members
-                exceptions.details = details
-                exceptions.timestamp = math.floor(timestamp)
-                exceptions.source = source
-                exceptions.checksum = checksum
-                exceptions.parentChecksum = parentChecksum
-                exceptions.resolutions = resolutions
-                iRC:RecordManagementConnectionStatus("guildBanks", source, timestamp, sender, now)
-                if (senderIsGuildMaster or incomingResolvesCurrent) and iRC.PendingManagementConflicts then
-                    iRC.PendingManagementConflicts.BANKS = nil
-                end
-                iRC:DebugMsg(iRC:Text("GUILD_BANKS_RECEIVED", sender), 3)
-                scheduleReceivedManagementUIRefresh()
-                if iRC.Enforcement then iRC.Enforcement:Refresh() end
-            end
-            if valid and checksum == currentChecksum then
-                iRC:RecordManagementConnectionStatus("guildBanks", source, timestamp, sender, now)
-                return
-            elseif valid and senderIsGuildMaster then
-                -- The actual roster Guild Master resolves same-age or newer
-                -- management branches without an ancestry conflict.
-                applyIncoming()
-            elseif valid and receiverIsGuildMaster then
-                -- A valid change from a delegated rank is confirmed by the
-                -- Guild Master and immediately becomes a new GM-authored head.
-                local pair = resolvedPair(currentChecksum, checksum)
-                iRC:SetGuildBankExceptions(names, pair)
-                if iRC.PendingManagementConflicts then iRC.PendingManagementConflicts.BANKS = nil end
-            elseif valid and timestamp >= savedTimestamp and (incomingResolvesCurrent or incomingIsChild) then
-                applyIncoming()
-            elseif valid and incomingIsAncestor then
-                return
-            elseif valid then
-                local pair = resolvedPair(currentChecksum, checksum)
-                local merged = mergeGuildBankNames(currentNames, names)
-                local conflictId = pair
-                local isNewConflict = showManagementConflict("BANKS", source,
-                    function() iRC:SetGuildBankExceptions(names, pair) end,
-                    function() iRC:SetGuildBankExceptions(currentNames, pair) end,
-                    function() iRC:SetGuildBankExceptions(merged, pair) end,
-                    conflictId, currentNames, names, merged)
-                if isNewConflict then
-                    sendManagementConflict(sender, "BANKS", currentNames, savedTimestamp,
-                        tostring(exceptions.source or ""), currentChecksum,
-                        tostring(exceptions.parentChecksum or "root"), tostring(exceptions.resolutions or ""))
-                end
-            end
-        end
     elseif kind == "MGMT_CONFLICT" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         if not connection then return end
@@ -1713,8 +1352,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local timestamp, source = tonumber(parts[5]), tostring(parts[6] or ""):gsub("[%c]", ""):sub(1, 80)
         local checksum = tostring(parts[7] or ""):lower()
         local now = GetServerTime and GetServerTime() or time()
-        local permission = settingKind == "WELCOME" and "notifications"
-            or settingKind == "BANKS" and "guildBanks" or nil
+        local permission = settingKind == "WELCOME" and "notifications" or nil
         local allowedRank = permission and iRC:GetGuildRankPermission(permission)
         if allowedRank and senderRank and senderRank <= allowedRank and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= "" then
             if settingKind == "WELCOME" and (value == "0" or value == "1")
@@ -1725,33 +1363,6 @@ local function handleMessage(prefix, message, distribution, sender)
                     showManagementConflict("WELCOME", source, function()
                         iRC:SetNewMemberWelcomeEnabled(incoming)
                     end, function() iRC:SetNewMemberWelcomeEnabled(current) end)
-                end
-            elseif settingKind == "BANKS" and #value <= MAX_GUILD_BANK_WIRE
-                and checksum == guildBanksChecksum(value, timestamp, source) then
-                local parentChecksum = tostring(parts[8] or "root"):lower()
-                local resolutions = tostring(parts[9] or ""):lower()
-                local members, valid, count = {}, true, 0
-                for name in value:gmatch("[^,]+") do
-                    local fullName = iRC:ResolveGuildMemberFullName(name)
-                    if not fullName or fullName ~= name then valid = false; break end
-                    if not members[fullName] then count = count + 1 end
-                    if count > MAX_GUILD_BANKS then valid = false; break end
-                    members[fullName] = true
-                end
-                local exceptions = connection.guildBankExceptions
-                local currentNames = guildBanksWire(exceptions.members)
-                local currentChecksum = tostring(exceptions.checksum or "root"):lower()
-                local incomingAlreadyResolved = resolutionContains(exceptions.resolutions, checksum)
-                    or tostring(exceptions.parentChecksum or "root"):lower() == checksum
-                if valid and validBranchChecksum(parentChecksum) and validResolutions(resolutions)
-                    and checksum ~= currentChecksum and not incomingAlreadyResolved then
-                    local pair = resolvedPair(currentChecksum, checksum)
-                    local merged = mergeGuildBankNames(currentNames, value)
-                    showManagementConflict("BANKS", source,
-                        function() iRC:SetGuildBankExceptions(value, pair) end,
-                        function() iRC:SetGuildBankExceptions(currentNames, pair) end,
-                        function() iRC:SetGuildBankExceptions(merged, pair) end,
-                        pair, currentNames, value, merged)
                 end
             end
         end
@@ -2006,7 +1617,6 @@ local function scheduleRoutineManagementRelays()
     routineManagementRelayUntil = GetTime() + 18
     local sends = {
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildManagementSettings() end end,
-        function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildBankExceptions() end end,
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildFoundTradeExceptions() end end,
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildHomepageDescription() end end,
         function() if iRC:GetGuildKey() == guildKey then iRC:SendGuildContacts() end end,

@@ -49,7 +49,6 @@ local iRC = {
     IsGuildConnectionActive = function() return true end,
     IsGuildFoundRequired = function() return true end,
     GetProgressionMode = function() return "GUILD_FOUND" end,
-    IsGuildBankException = function() return false end,
     IsGuildMemberName = function(_, name) return name == "Guildie" end,
     GetConnectionRules = function() return { guildFoundOnly = true, guildFoundTradeExceptions = false } end,
     GetGuildFoundTradeExceptionSettings = function() return { items = {} } end,

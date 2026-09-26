@@ -113,7 +113,7 @@ function iRC:GetGuildRosterSnapshot()
     local snapshot = {}
     local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
     for index = 1, count do
-        local name, _, rankIndex, level, className, _, _, _, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
+        local name, rankName, rankIndex, level, className, _, publicNote, officerNote, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
         if name then
             local lastOnlineDays
             if not online and GetGuildRosterLastOnline then
@@ -125,12 +125,15 @@ function iRC:GetGuildRosterSnapshot()
             end
             snapshot[#snapshot + 1] = {
                 name = name,
+                rankName = rankName,
                 rankIndex = rankIndex,
                 level = level,
                 className = className,
                 classFile = classFile,
                 online = online and true or false,
                 guid = guid,
+                publicNote = publicNote,
+                officerNote = officerNote,
                 lastOnlineDays = lastOnlineDays,
             }
         end

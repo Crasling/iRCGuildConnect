@@ -93,7 +93,8 @@ function Announcements:GetUnlockedIcons(name)
     if fresh and profile.race and iRC:GetGuildMemberRaceCheck(profile.race, connection).mismatch then
         unlocked.violation = true
     end
-    if fresh and not iRC:IsGuildBankException(name, connection) then
+    local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(name)
+    if fresh and not personalBank then
         local level = tonumber(profile.level) or 0
         if (mode == "SELF_FOUND" and level < 60 and profile.selfFound ~= true)
             or (mode == "SELF_FOUND" and level >= 60 and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND" and not guildFoundVerified)
