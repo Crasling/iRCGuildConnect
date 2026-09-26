@@ -147,10 +147,10 @@ local function getServerStore()
         store = { guildReports = {} }
         iRCDB.globalRaceGrid.servers[serverKey] = store
     end
-    if store.reportSchema ~= REPORT_SCHEMA then
-        store.guildReports = {}
-        store.reportSchema = REPORT_SCHEMA
-    end
+    -- Cached reports are user data gathered from other guilds. A schema bump
+    -- must never erase the complete cache; older records are validated and
+    -- filled with safe defaults by the normal read/render path instead.
+    store.reportSchema = REPORT_SCHEMA
     store.guildReports = store.guildReports or {}
     store.guildActivity = store.guildActivity or {}
     return store
@@ -336,7 +336,10 @@ function RaceGrid:BuildOwnGuildReports()
     local connection = iRC:GetConnection()
     if not connection or not iRC:IsGuildConnectionActive() then return {} end
     local profile = iRC:GetLocalProfile()
-    local guildRace = normalizeRaceToken(iRC:GetGuildRace())
+    -- Ordinary members do not know the Guild Master's selected guild race
+    -- during bootstrap. The report still needs a valid legacy race token;
+    -- faction is carried separately and remains authoritative.
+    local guildRace = normalizeRaceToken(iRC:GetGuildRace()) or normalizeRaceToken(profile.race)
     local guildName = tostring(connection.guildName or (GetGuildInfo and GetGuildInfo("player")) or "")
     if not guildRace or guildName == "" then return {} end
     local rules = iRC:GetConnectionRules() or {}
@@ -348,7 +351,7 @@ function RaceGrid:BuildOwnGuildReports()
         classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel20 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
-        rulesKnown = true,
+        rulesKnown = connection.rulesBootstrap ~= true,
         rules = {
             raceLock = rules.raceLock == true,
             nativeTongueOnly = rules.nativeTongueOnly and true or false,
@@ -434,7 +437,7 @@ local function serializeGuildReport(report, includeDescription)
     for _, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
         fields[#fields + 1] = tostring((report.classes or {})[class] or 0)
     end
-    local rules, ruleMask = report.rules or {}, 0
+    local rules, ruleMask = report.rules or {}, report.rulesKnown == false and 256 or 0
     for _, entry in ipairs({
         { "nativeTongueOnly", 1 }, { "selfFoundOnly", 2 }, { "level60GuildFound", 4 },
         { "allowLevel60WithoutSelfFound", 8 }, { "sameRaceGroupsOnly", 16 },
@@ -443,7 +446,8 @@ local function serializeGuildReport(report, includeDescription)
     }) do
         local raceOnly = entry[1] == "nativeTongueOnly" or entry[1] == "sameRaceGroupsOnly"
             or entry[1] == "allowLevel60MixedRaceGroups"
-        if rules[entry[1]] and (not raceOnly or rules.raceLock == true) then ruleMask = ruleMask + entry[2] end
+        if report.rulesKnown ~= false and rules[entry[1]]
+            and (not raceOnly or rules.raceLock == true) then ruleMask = ruleMask + entry[2] end
     end
     fields[#fields + 1] = tostring(ruleMask)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
@@ -550,22 +554,26 @@ local function parseGuildReport(parts)
     if classTotal > members then return nil end
     local rules, rulesKnown
     if parts[22] ~= nil then
-        local mask = validNumber(parts[22], 0, 255)
+        -- Mask 256 means the guild report was assembled during first-start
+        -- bootstrap and intentionally does not claim authoritative rules.
+        local mask = validNumber(parts[22], 0, 256)
         local sameRaceLevel = validNumber(parts[23], 1, 60)
         local guildGroupsLevel = validNumber(parts[24], 1, 60)
         if not mask or not sameRaceLevel or not guildGroupsLevel then return nil end
-        local function enabled(flag) return math.floor(mask / flag) % 2 == 1 end
-        rulesKnown = true
-        rules = {
-            nativeTongueOnly = enabled(1), selfFoundOnly = enabled(2),
-            level60GuildFound = enabled(4), allowLevel60WithoutSelfFound = enabled(8),
-            sameRaceGroupsOnly = enabled(16), allowLevel60MixedRaceGroups = enabled(32),
-            guildGroupsOnly = enabled(64), sameRaceMinimumLevel = sameRaceLevel,
-            guildFoundTradeExceptions = enabled(128),
-            guildMapEnabled = parts[29] == "1",
-            raceLock = parts[30] == "1",
-            guildGroupsMinimumLevel = guildGroupsLevel,
-        }
+        if mask ~= 256 then
+            local function enabled(flag) return math.floor(mask / flag) % 2 == 1 end
+            rulesKnown = true
+            rules = {
+                nativeTongueOnly = enabled(1), selfFoundOnly = enabled(2),
+                level60GuildFound = enabled(4), allowLevel60WithoutSelfFound = enabled(8),
+                sameRaceGroupsOnly = enabled(16), allowLevel60MixedRaceGroups = enabled(32),
+                guildGroupsOnly = enabled(64), sameRaceMinimumLevel = sameRaceLevel,
+                guildFoundTradeExceptions = enabled(128),
+                guildMapEnabled = parts[29] == "1",
+                raceLock = parts[30] == "1",
+                guildGroupsMinimumLevel = guildGroupsLevel,
+            }
+        end
     end
     local guildContacts = tostring(parts[25] or "")
     if #guildContacts > 140 or guildContacts:find("[%c]") then return nil end

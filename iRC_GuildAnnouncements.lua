@@ -88,7 +88,8 @@ function Announcements:GetUnlockedIcons(name)
     local rules = connection.rules or iRC.DefaultConnectionRules
     local mode = iRC:GetProgressionMode(rules)
     local guildFoundVerified = status and status.verified == true
-    if status and status.clean == false then unlocked.violation = true end
+    local guildFoundApplies = iRC:IsGuildFoundProgressionApplicable(profile and profile.level, profile and profile.selfFound, rules)
+    if guildFoundApplies and status and status.clean == false then unlocked.violation = true end
     if fresh and profile.currentGroupRuleViolation then unlocked.violation = true end
     if fresh and profile.race and iRC:GetGuildMemberRaceCheck(profile.race, connection).mismatch then
         unlocked.violation = true
@@ -111,7 +112,7 @@ function Announcements:GetUnlockedIcons(name)
     if profile and profile.selfFound == true and fresh then
         unlocked.selfFound = true
     end
-    if guildFoundVerified then unlocked.guildFound = true end
+    if guildFoundApplies and guildFoundVerified then unlocked.guildFound = true end
     return unlocked
 end
 
@@ -274,7 +275,7 @@ local function hookChatTooltip(chatFrame)
 end
 
 local function canAnnounce(ruleKey)
-    if not SendChatMessage or not iRC:IsGuildConnectionActive() then return false end
+    if not SendChatMessage or not iRC:IsGuildConnectionActive() or iRC:IsGuildConnectionBootstrap() then return false end
     local rules = iRC:GetConnectionRules()
     return rules and rules[ruleKey] == true
 end

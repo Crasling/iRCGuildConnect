@@ -843,6 +843,110 @@ function UI:Create()
     frame.guildStatsSearch.hint:SetTextColor(0.55, 0.55, 0.55)
     frame.guildStatsSearch:Hide()
 
+    frame.guildLogSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
+    frame.guildLogSearch:SetSize(300, 22)
+    frame.guildLogSearch:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -50)
+    frame.guildLogSearch:SetAutoFocus(false)
+    frame.guildLogSearch:SetMaxLetters(80)
+    frame.guildLogSearch:SetTextInsets(5, 5, 0, 0)
+    frame.guildLogSearch:SetFontObject(GameFontHighlight)
+    frame.guildLogSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    frame.guildLogSearch:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    frame.guildLogSearch:SetScript("OnTextChanged", function(self)
+        self.hint:SetShown(self:GetText() == "")
+        if self.updateSuggestions then self.updateSuggestions() end
+        if frame.scroll then frame.scroll:SetVerticalScroll(0) end
+        UI:Refresh()
+    end)
+    frame.guildLogSearch.hint = frame.guildLogSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.guildLogSearch.hint:SetPoint("LEFT", 7, 0)
+    frame.guildLogSearch.hint:SetText(iRC:Text("GUILD_LOG_SEARCH_HINT"))
+    frame.guildLogSearch.hint:SetTextColor(0.55, 0.55, 0.55)
+    frame.guildLogSearch.suggestions = CreateFrame("Frame", nil, frame.guildLogSearch, "BackdropTemplate")
+    frame.guildLogSearch.suggestions:SetSize(300, 128)
+    frame.guildLogSearch.suggestions:SetPoint("TOPLEFT", frame.guildLogSearch, "BOTTOMLEFT", 0, -2)
+    frame.guildLogSearch.suggestions:SetFrameStrata("DIALOG")
+    frame.guildLogSearch.suggestions:SetFrameLevel(main:GetFrameLevel() + 20)
+    frame.guildLogSearch.suggestions:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    frame.guildLogSearch.suggestions:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
+    frame.guildLogSearch.suggestions:SetBackdropBorderColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.85)
+    frame.guildLogSearch.buttons = {}
+    local function updateGuildLogSuggestions()
+        local search = frame.guildLogSearch
+        local query = search:GetText():match("^%s*(.-)%s*$"):lower()
+        local entries, seen = {}, {}
+        local function add(label, priority, formatEvent)
+            label = tostring(label or "")
+            if formatEvent then
+                label = label:gsub("_", " "):gsub("(%a)([%w']*)", function(first, rest)
+                    return first:upper() .. rest:lower()
+                end)
+            end
+            local key = label:lower()
+            if label ~= "" and not seen[key] and key:find(query, 1, true) then
+                seen[key] = true
+                entries[#entries + 1] = { label = label, lower = key, priority = priority }
+            end
+        end
+        if query ~= "" then
+            for _, record in ipairs(iRC.Identity and iRC.Identity:GetGuildLog() or {}) do
+                add(record.name, 1)
+                add(record.eventType, 2, true)
+            end
+            table.sort(entries, function(a, b)
+                local aStarts, bStarts = a.lower:find(query, 1, true) == 1, b.lower:find(query, 1, true) == 1
+                if aStarts ~= bStarts then return aStarts end
+                if a.priority ~= b.priority then return a.priority < b.priority end
+                return a.lower < b.lower
+            end)
+        end
+        for index, button in ipairs(search.buttons) do
+            button.value = entries[index] and entries[index].label or nil
+            button:SetShown(button.value ~= nil)
+            if button.value then button.text:SetText(button.value) end
+        end
+        search.suggestions:SetShown(query ~= "" and entries[1] ~= nil and search:HasFocus())
+    end
+    frame.guildLogSearch.updateSuggestions = updateGuildLogSuggestions
+    for index = 1, 5 do
+        local button = CreateFrame("Button", nil, frame.guildLogSearch.suggestions)
+        button:SetSize(282, 23)
+        button:SetPoint("TOPLEFT", frame.guildLogSearch.suggestions, "TOPLEFT", 7, -6 - (index - 1) * 23)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.18)
+        button:SetScript("OnClick", function(self)
+            if not self.value then return end
+            frame.guildLogSearch:SetText(self.value)
+            frame.guildLogSearch:ClearFocus()
+            frame.guildLogSearch.suggestions:Hide()
+        end)
+        frame.guildLogSearch.buttons[index] = button
+    end
+    frame.guildLogSearch:SetScript("OnEditFocusGained", updateGuildLogSuggestions)
+    frame.guildLogSearch:SetScript("OnEditFocusLost", function(self)
+        C_Timer.After(0, function()
+            if not self:HasFocus() and not iRC:IsMouseOverFrame(self.suggestions) then self.suggestions:Hide() end
+        end)
+    end)
+    frame.guildLogSearch:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+        self.suggestions:Hide()
+    end)
+    frame.guildLogSearch:SetScript("OnEnterPressed", function(self)
+        local first = self.buttons[1]
+        if first.value and self.suggestions:IsShown() then first:Click() else self:ClearFocus() end
+    end)
+    frame.guildLogSearch:Hide()
+    frame.guildLogSearch.suggestions:Hide()
+
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 15, -78)
     scroll:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -31, 14)
@@ -856,7 +960,7 @@ function UI:Create()
     end)
     frame.scrollContent = content
     local professionReport = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    professionReport:SetSize(560, 470)
+    professionReport:SetSize(500, 520)
     professionReport:SetPoint("CENTER", frame, "CENTER", 0, 0)
     professionReport:SetFrameLevel(frame:GetFrameLevel() + 20)
     createBackdrop(professionReport, { 0.025, 0.022, 0.018, 1 }, { 0.75, 0.48, 0.13, 1 })
@@ -869,20 +973,117 @@ function UI:Create()
     reportScroll:SetPoint("TOPLEFT", 17, -48)
     reportScroll:SetPoint("BOTTOMRIGHT", -31, 17)
     local reportContent = CreateFrame("Frame", nil, reportScroll)
-    reportContent:SetWidth(490)
+    reportContent:SetWidth(430)
     reportContent:SetHeight(1)
     reportScroll:SetScrollChild(reportContent)
     professionReport.text = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     professionReport.text:SetPoint("TOPLEFT", 0, 0)
-    professionReport.text:SetWidth(490)
+    professionReport.text:SetWidth(430)
     professionReport.text:SetJustifyH("LEFT")
     professionReport.text:SetJustifyV("TOP")
     professionReport.content = reportContent
     professionReport.scroll = reportScroll
     professionReport:Hide()
     frame.professionReport = professionReport
+    local function showMemberProfile(profile)
+        if not profile then return end
+        local normalizedName = iRC:NormalizeName(profile.name)
+        local rosterMember
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            if iRC:NormalizeName(member.name) == normalizedName then rosterMember = member; break end
+        end
+        local history = iRC.Identity and iRC.Identity:GetMemberHistory(profile.name)
+        local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(profile.name)
+        local classFile = rosterMember and rosterMember.classFile or profile.class
+        local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+        professionReport.title:SetText(iRC:FormatPlayerName(profile.name))
+        if classColor then
+            professionReport.title:SetTextColor(classColor.r, classColor.g, classColor.b)
+        else
+            professionReport.title:SetTextColor(unpack(COLORS.gold))
+        end
+        local lines = {
+            iRC.Colors.Orange .. "Character" .. iRC.Colors.Reset,
+            "Level " .. tostring(profile.level or "?") .. " " .. tostring(profile.race or "Unknown")
+                .. " " .. tostring(rosterMember and rosterMember.className or profile.class or "Unknown"),
+            "Guild rank: " .. tostring(rosterMember and rosterMember.rankName or "Unknown"),
+            profile.online and (iRC.Colors.Green .. "Online" .. iRC.Colors.Reset)
+                or "Last online: " .. (profile.lastOnlineDays and string.format("%.1f days ago", profile.lastOnlineDays) or "Unknown"),
+        }
+        if identityLabel then lines[#lines + 1] = "Identity: " .. identityLabel end
+        if iRC.Identity then
+            local linked = iRC.Identity:GetLinkedCharacters(profile.name)
+            if #linked > 0 then lines[#lines + 1] = "Linked characters: " .. table.concat(linked, ", ") end
+        end
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = iRC.Colors.Orange .. "Membership" .. iRC.Colors.Reset
+        lines[#lines + 1] = "First observed: " .. (history and history.firstSeenAt and date("%Y-%m-%d %H:%M", history.firstSeenAt) or "Not recorded")
+        if history and history.joinedAt then lines[#lines + 1] = "Joined: " .. date("%Y-%m-%d %H:%M", history.joinedAt) end
+        if history and history.rejoinedAt then lines[#lines + 1] = "Last rejoined: " .. date("%Y-%m-%d %H:%M", history.rejoinedAt) end
+        lines[#lines + 1] = "Public note: " .. ((rosterMember and rosterMember.publicNote ~= "" and rosterMember.publicNote) or "None")
+        lines[#lines + 1] = "Officer note: " .. ((rosterMember and rosterMember.officerNote ~= "" and rosterMember.officerNote) or "None or unavailable")
+        local rankHistory = history and history.rankHistory or {}
+        if #rankHistory > 0 then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = iRC.Colors.Orange .. "Rank history" .. iRC.Colors.Reset
+            for index = #rankHistory, math.max(1, #rankHistory - 7), -1 do
+                local change = rankHistory[index]
+                lines[#lines + 1] = date("%Y-%m-%d %H:%M", change.changedAt) .. " - "
+                    .. tostring(change.fromRank) .. " to " .. tostring(change.toRank)
+            end
+        end
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = iRC.Colors.Orange .. "Professions" .. iRC.Colors.Reset
+        local professionLines = {}
+        for _, option in ipairs(iRC.Professions:GetOptions()) do
+            local rank = profile.professionData and profile.professionData.skills
+                and profile.professionData.skills[option[1]]
+            if rank then professionLines[#professionLines + 1] = option[2] .. " (" .. tostring(rank) .. ")" end
+        end
+        if #professionLines > 0 then
+            lines[#lines + 1] = table.concat(professionLines, ", ")
+        else
+            lines[#lines + 1] = "No profession data received from this member."
+        end
+        local activity = iRC.Identity and iRC.Identity:GetMemberActivity(profile.name, 8) or {}
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = iRC.Colors.Orange .. "Recent guild activity" .. iRC.Colors.Reset
+        if #activity > 0 then
+            for _, record in ipairs(activity) do
+                lines[#lines + 1] = date("%Y-%m-%d %H:%M", record.occurredAt) .. " ["
+                    .. tostring(record.eventType):gsub("_", " ") .. "] " .. tostring(record.text or "")
+            end
+        else
+            lines[#lines + 1] = "No recorded guild activity."
+        end
+        professionReport.text:SetText(table.concat(lines, "\n"))
+        professionReport.content:SetHeight(math.max(1, professionReport.text:GetStringHeight() + 12))
+        professionReport.scroll:SetVerticalScroll(0)
+        professionReport:Show()
+        professionReport:Raise()
+    end
+    frame.showMemberProfile = showMemberProfile
+    local MEMBER_MENU_TONES = {
+        detail = COLORS.gold,
+        contact = { 0.35, 0.72, 1.00 },
+        character = COLORS.green,
+        bank = { 0.40, 0.80, 1.00 },
+        danger = { 1.00, 0.50, 0.50 },
+        disabled = { 0.45, 0.45, 0.45 },
+    }
+    local function styleMemberMenuButton(button, tone, enabled)
+        enabled = enabled ~= false
+        local color = enabled and (MEMBER_MENU_TONES[tone] or COLORS.gold) or MEMBER_MENU_TONES.disabled
+        button:SetEnabled(enabled)
+        button:SetAlpha(enabled and 1 or 0.48)
+        button:SetBackdropColor(enabled and 0.07 or 0.035, enabled and 0.055 or 0.035, enabled and 0.04 or 0.035, 0.98)
+        button:SetBackdropBorderColor(color[1], color[2], color[3], enabled and 0.90 or 0.55)
+        button.text:SetTextColor(color[1], color[2], color[3])
+        if button.arrow then button.arrow:SetTextColor(color[1], color[2], color[3]) end
+    end
+    frame.styleMemberMenuButton = styleMemberMenuButton
     local memberMenu = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    memberMenu:SetSize(270, 166)
+    memberMenu:SetSize(270, 214)
     memberMenu:SetFrameStrata("DIALOG")
     memberMenu:SetFrameLevel(frame:GetFrameLevel() + 30)
     memberMenu:SetClampedToScreen(true)
@@ -893,54 +1094,63 @@ function UI:Create()
     memberMenu.title:SetJustifyH("LEFT")
     local menuClose = CreateFrame("Button", nil, memberMenu, "UIPanelCloseButton")
     menuClose:SetPoint("TOPRIGHT", 4, 4)
+    memberMenu.detailLabel = memberMenu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    memberMenu.detailLabel:SetPoint("TOPLEFT", 18, -43)
+    memberMenu.detailLabel:SetText("Details")
+    memberMenu.detailLabel:SetTextColor(unpack(COLORS.gold))
     memberMenu.view = CreateFrame("Button", nil, memberMenu, "BackdropTemplate")
     memberMenu.view:SetSize(238, 29)
-    memberMenu.view:SetPoint("TOPLEFT", 16, -48)
+    memberMenu.view:SetPoint("TOPLEFT", 16, -59)
     createBackdrop(memberMenu.view, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
     memberMenu.view.text = memberMenu.view:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     memberMenu.view.text:SetPoint("LEFT", 12, 0)
-    memberMenu.view.text:SetText("View professions & recipes")
+    memberMenu.view.text:SetText("View member profile")
     memberMenu.view:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.view, "detail", true)
     memberMenu.view:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
         if not profile then return end
-        professionReport.title:SetText(iRC:FormatPlayerName(profile.name) .. " - Professions & Recipes")
-        local data = profile.professionData
-        local lines = data and iRC.Professions:DescribeRecipes(data) or {}
-        professionReport.text:SetText(#lines > 0 and table.concat(lines, "\n") or "No profession data received from this member.")
-        professionReport.content:SetHeight(math.max(1, professionReport.text:GetStringHeight() + 12))
-        professionReport.scroll:SetVerticalScroll(0)
-        professionReport:Show()
+        showMemberProfile(profile)
     end)
     memberMenu.whisper = CreateFrame("Button", nil, memberMenu, "BackdropTemplate")
+    memberMenu.contactLabel = memberMenu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    memberMenu.contactLabel:SetPoint("TOPLEFT", 18, -96)
+    memberMenu.contactLabel:SetText("Contact")
+    memberMenu.contactLabel:SetTextColor(unpack(COLORS.gold))
     memberMenu.whisper:SetSize(238, 29)
-    memberMenu.whisper:SetPoint("TOPLEFT", 16, -82)
+    memberMenu.whisper:SetPoint("TOPLEFT", 16, -112)
     createBackdrop(memberMenu.whisper, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
     memberMenu.whisper.text = memberMenu.whisper:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     memberMenu.whisper.text:SetPoint("LEFT", 12, 0)
     memberMenu.whisper.text:SetText("Whisper")
     memberMenu.whisper:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.whisper, "contact", true)
     memberMenu.whisper:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
         if profile then iRC:OpenWhisper(profile.name) end
     end)
     memberMenu.alts = CreateFrame("Button", nil, memberMenu, "BackdropTemplate")
+    memberMenu.characterLabel = memberMenu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    memberMenu.characterLabel:SetPoint("TOPLEFT", 18, -149)
+    memberMenu.characterLabel:SetText("My characters")
+    memberMenu.characterLabel:SetTextColor(unpack(COLORS.gold))
     memberMenu.alts:SetSize(238, 29)
-    memberMenu.alts:SetPoint("TOPLEFT", 16, -116)
+    memberMenu.alts:SetPoint("TOPLEFT", 16, -165)
     createBackdrop(memberMenu.alts, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
     memberMenu.alts.text = memberMenu.alts:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     memberMenu.alts.text:SetPoint("LEFT", 12, 0)
-    memberMenu.alts.text:SetText("Alts")
+    memberMenu.alts.text:SetText("Main, Alts & Personal Bank")
     memberMenu.alts.arrow = memberMenu.alts:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     memberMenu.alts.arrow:SetPoint("RIGHT", -12, 0)
     memberMenu.alts.arrow:SetText(">")
     memberMenu.alts:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.alts, "character", true)
 
     memberMenu.altMenu = CreateFrame("Frame", nil, memberMenu, "BackdropTemplate")
     memberMenu.altMenu:SetSize(220, 148)
-    memberMenu.altMenu:SetPoint("TOPLEFT", memberMenu, "TOPRIGHT", 3, -104)
+    memberMenu.altMenu:SetPoint("TOPLEFT", memberMenu, "TOPRIGHT", 3, -149)
     memberMenu.altMenu:SetFrameLevel(memberMenu:GetFrameLevel() + 5)
     memberMenu.altMenu:SetClampedToScreen(true)
     createBackdrop(memberMenu.altMenu, { 0.035, 0.028, 0.02, 0.99 }, { COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1 })
@@ -952,6 +1162,7 @@ function UI:Create()
     memberMenu.altMenu.add.text:SetPoint("LEFT", 10, 0)
     memberMenu.altMenu.add.text:SetText("Add to my characters")
     memberMenu.altMenu.add:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.altMenu.add, "character", true)
     memberMenu.altMenu.add:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
@@ -967,6 +1178,7 @@ function UI:Create()
     memberMenu.altMenu.main.text:SetPoint("LEFT", 10, 0)
     memberMenu.altMenu.main.text:SetText("Set as my Main")
     memberMenu.altMenu.main:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.altMenu.main, "detail", true)
     memberMenu.altMenu.main:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
@@ -983,6 +1195,7 @@ function UI:Create()
     memberMenu.altMenu.bank.text = memberMenu.altMenu.bank:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     memberMenu.altMenu.bank.text:SetPoint("LEFT", 10, 0)
     memberMenu.altMenu.bank:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.altMenu.bank, "bank", true)
     memberMenu.altMenu.bank:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
@@ -1001,6 +1214,7 @@ function UI:Create()
     memberMenu.altMenu.remove.text:SetPoint("LEFT", 10, 0)
     memberMenu.altMenu.remove.text:SetText("Remove Alt")
     memberMenu.altMenu.remove:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.altMenu.remove, "danger", true)
     memberMenu.altMenu.remove:SetScript("OnClick", function()
         local profile = memberMenu.profile
         memberMenu:Hide()
@@ -1030,6 +1244,11 @@ function UI:Create()
         if frame:IsShown() and frame.category == "Guild Members" and professionSearch.edit:HasFocus()
             and not iRC:IsMouseOverFrame(professionSearch.edit) and not iRC:IsMouseOverFrame(professionSearch.suggestions) then
             professionSearch.edit:ClearFocus()
+        end
+        if frame:IsShown() and frame.category == "Guild Log" and frame.guildLogSearch:HasFocus()
+            and not iRC:IsMouseOverFrame(frame.guildLogSearch)
+            and not iRC:IsMouseOverFrame(frame.guildLogSearch.suggestions) then
+            frame.guildLogSearch:ClearFocus()
         end
         if memberMenu:IsShown() and not iRC:IsMouseOverFrame(memberMenu) and not iRC:IsMouseOverFrame(memberMenu.altMenu) then memberMenu:Hide() end
         if professionReport:IsShown() and not iRC:IsMouseOverFrame(professionReport) then professionReport:Hide() end
@@ -1066,13 +1285,15 @@ function UI:RenderMemberRows()
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
         local memberTag, tagColor
+        row.name:SetFontObject(GameFontHighlight)
         if iRC:IsOfficialHardcoreRealm() and profile.dead == true then
             memberTag, tagColor = "Dead", { 1.00, 0.50, 0.50 }
         elseif iRC.Identity and iRC.Identity:IsPersonalBank(profile.name) then
             memberTag, tagColor = "Personal Bank", { 0.40, 0.80, 1.00 }
         elseif profile.selfFound == true then
             memberTag, tagColor = "Self-Found", { 1.00, 0.55, 0.55 }
-        elseif profile.raceLockedStatus and profile.raceLockedStatus.verified == true then
+        elseif iRC:IsGuildFoundProgressionApplicable(profile.level, profile.selfFound)
+            and profile.raceLockedStatus and profile.raceLockedStatus.verified == true then
             memberTag, tagColor = "Guild-Found", { 0.30, 1, 0.35 }
         end
         row.name:SetText(iRC:FormatPlayerName(profile.name))
@@ -1109,26 +1330,41 @@ function UI:RenderMemberRows()
             else
                 GameTooltip:AddLine("No profession data received from this member.", 0.7, 0.7, 0.7)
             end
+            GameTooltip:AddLine("Left-click to view member profile.", 1, 0.72, 0.22)
             GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-        row:SetScript("OnClick", function(_, mouseButton)
+        row:SetScript("OnClick", function(clickedRow, mouseButton)
+            if mouseButton == "LeftButton" then
+                frame.showMemberProfile(profile)
+                return
+            end
             if mouseButton ~= "RightButton" then return end
             local menu = frame.memberMenu
-            local cursorX, cursorY = GetCursorPosition()
             menu.profile = profile
             menu.title:SetText(iRC:FormatPlayerName(profile.name))
             local registered = iRC.Identity and iRC.Identity:IsPersonalCharacter(profile.name)
-            menu.altMenu.add:SetEnabled(not registered)
-            menu.altMenu.main:SetEnabled(not registered or iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
+            local isMain = registered and iRC.Identity:GetMainName() == iRC:FormatPlayerName(profile.name)
             local personalBank = registered and iRC.Identity:IsPersonalBank(profile.name)
             menu.altMenu.bank.text:SetText(personalBank and "Remove Personal Bank Alt" or "Set as Personal Bank Alt")
-            menu.altMenu.bank:SetEnabled(iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
-            menu.altMenu.remove:SetEnabled(registered and iRC.Identity:GetMainName() ~= iRC:FormatPlayerName(profile.name))
+            frame.styleMemberMenuButton(menu.view, "detail", true)
+            frame.styleMemberMenuButton(menu.whisper, "contact", true)
+            frame.styleMemberMenuButton(menu.alts, "character", true)
+            frame.styleMemberMenuButton(menu.altMenu.add, "character", not registered)
+            frame.styleMemberMenuButton(menu.altMenu.main, "detail", not isMain)
+            frame.styleMemberMenuButton(menu.altMenu.bank, "bank", not isMain)
+            frame.styleMemberMenuButton(menu.altMenu.remove, "danger", registered and not isMain)
             menu.altMenu:Hide()
+            menu:SetHeight(214)
+            local cursorX, cursorY = GetCursorPosition()
             menu:ClearAllPoints()
-            menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / UIParent:GetEffectiveScale(), cursorY / UIParent:GetEffectiveScale())
+            -- Match the Verification popup: convert physical cursor pixels to
+            -- this scaled menu's coordinate space before anchoring to UIParent.
+            local menuScale = menu:GetEffectiveScale()
+            if not menuScale or menuScale <= 0 then menuScale = UIParent:GetEffectiveScale() or 1 end
+            menu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cursorX / menuScale, cursorY / menuScale)
             menu:Show()
+            menu:Raise()
         end)
         row:Show()
     end
@@ -1210,14 +1446,29 @@ end
 local GUILD_LOG_COLORS = {
     JOIN = COLORS.green, REJOIN = COLORS.green, PROMOTE = COLORS.gold,
     DEMOTE = { 1.00, 0.55, 0.20 }, LEAVE = { 1.00, 0.50, 0.50 }, NAME = COLORS.gold,
-    LEVEL = COLORS.green, NOTE = COLORS.parchment, OFFICER_NOTE = COLORS.parchment,
+    LEVEL = COLORS.green, RETURN = COLORS.green, NOTE = COLORS.parchment, OFFICER_NOTE = COLORS.parchment,
 }
 
 local function updateGuildLog(frame)
+    if iRC.Identity then iRC.Identity:RequestGuildHistory() end
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     frame.racePodium:Hide()
     local records = iRC.Identity and iRC.Identity:GetGuildLog() or {}
+    local query = frame.guildLogSearch and frame.guildLogSearch:GetText() or ""
+    query = query:match("^%s*(.-)%s*$"):lower()
+    if query ~= "" then
+        local filtered = {}
+        for _, record in ipairs(records) do
+            local searchable = table.concat({ record.name or "", record.eventType or "", record.text or "" }, " "):lower()
+            if searchable:find(query, 1, true) then filtered[#filtered + 1] = record end
+        end
+        records = filtered
+    end
+    local currentClasses = {}
+    for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+        currentClasses[iRC:NormalizeName(member.name)] = member.classFile
+    end
     for index, record in ipairs(records) do
         local row = frame.memberRows[index]
         if not row then
@@ -1227,16 +1478,24 @@ local function updateGuildLog(frame)
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
-        row.name:SetText(record.occurredAt and date("%Y-%m-%d %H:%M", record.occurredAt) or "Unknown time")
+        row.name:SetFontObject(GameFontNormal)
+        row.name:SetText(record.name or "Unknown member")
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
-        row.name:SetTextColor(unpack(COLORS.gold))
+        local classFile = record.classFile or currentClasses[iRC:NormalizeName(record.name)]
+        local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+        if classColor then
+            row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
+        else
+            row.name:SetTextColor(unpack(COLORS.gold))
+        end
         row.onlineTag:Hide()
         row.tag:ClearAllPoints()
         row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
         row.tag:SetText("[" .. tostring(record.eventType or "CHANGE"):gsub("_", " ") .. "]")
         row.tag:SetTextColor(unpack(GUILD_LOG_COLORS[record.eventType] or COLORS.parchment))
         row.tag:Show()
-        row.detail:SetText(record.text or record.name or "Guild roster changed.")
+        local occurredAt = record.occurredAt and date("%Y-%m-%d %H:%M", record.occurredAt) or "Unknown time"
+        row.detail:SetText(occurredAt .. " - " .. (record.text or "Guild roster changed."))
         row:SetScript("OnClick", nil)
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
@@ -1245,8 +1504,8 @@ local function updateGuildLog(frame)
     for index = #records + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
     frame.scrollContent:SetHeight(math.max(1, #records * 60))
     frame.contentTitle:SetText("Guild Log")
-    frame.contentSubtitle:SetText(#records > 0 and "GRM-style guild roster history, with the newest changes first."
-        or "No guild roster changes have been recorded yet.")
+    frame.contentSubtitle:SetText(#records > 0 and iRC:Text("GUILD_LOG_DESCRIPTION")
+        or (query ~= "" and iRC:Text("GUILD_LOG_NO_SEARCH_RESULTS") or iRC:Text("GUILD_LOG_EMPTY")))
 end
 
 local function updateGuildRules(frame)
@@ -1997,6 +2256,8 @@ function UI:Refresh()
     frame.memberProfessionSearch:SetShown(not embeddedManagement and frame.category == "Guild Members")
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     frame.guildStatsSearch:SetShown(not embeddedManagement and frame.category == "Race Overview")
+    frame.guildLogSearch:SetShown(not embeddedManagement and frame.category == "Guild Log")
+    if frame.category ~= "Guild Log" then frame.guildLogSearch.suggestions:Hide() end
     if frame.category ~= "Guild Rules" then
         for _, row in ipairs(frame.ruleRows or {}) do row:Hide() end
         for _, header in ipairs(frame.ruleSectionHeaders or {}) do header:Hide() end
@@ -2016,7 +2277,8 @@ function UI:Refresh()
         end
     end
     frame.scroll:ClearAllPoints()
-    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, frame.category == "Race Overview" and -112 or -78)
+    local usesSearchHeader = frame.category == "Race Overview" or frame.category == "Guild Log"
+    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, usesSearchHeader and -112 or -78)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
     frame.contentTitle:SetShown(not embeddedManagement)

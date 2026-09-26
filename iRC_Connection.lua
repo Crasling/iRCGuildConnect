@@ -222,6 +222,7 @@ end
 function iRC:SendGuildActivation(targetName, force)
     if not force and self:DeferLowTraffic("traffic:activation:" .. tostring(targetName or "guild"), function() iRC:SendGuildActivation(targetName, force) end) then return false end
     if not self:IsInGuildConnection() then return end
+    if self:IsGuildConnectionBootstrap() then return false end
     local isBroadcaster = self:IsRulesetBroadcaster()
     if not self:IsGuildMaster() and not isBroadcaster then return end
     local distribution = targetName and "WHISPER" or "GUILD"
@@ -366,6 +367,8 @@ end
 
 local function rankPermissionsWire(values)
     local fields = {}
+    -- Keep the original six-field packet stable for released clients. New permissions
+    -- use their own packet so adding one cannot invalidate every older setting.
     for _, key in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage" }) do
         fields[#fields + 1] = tostring(math.max(0, math.min(9, math.floor(tonumber(values and values[key]) or iRC.DefaultRankPermissions[key]))))
     end
@@ -383,6 +386,10 @@ function iRC:SendRankPermissions(targetName, force)
     local wire = rankPermissionsWire(connection.rankPermissions)
     send(self.Prefix, table.concat({ "RANK_PERMISSIONS", WIRE_VERSION, wire, tostring(timestamp),
         rulesBackupChecksum(wire .. SEP .. timestamp) }, SEP), targetName and "WHISPER" or "GUILD", targetName)
+    local rosterHistory = tostring(math.max(0, math.min(9, math.floor(tonumber(connection.rankPermissions.rosterHistory)
+        or self.DefaultRankPermissions.rosterHistory))))
+    send(self.Prefix, table.concat({ "ROSTER_HISTORY_PERMISSION", WIRE_VERSION, rosterHistory, tostring(timestamp),
+        rulesBackupChecksum(rosterHistory .. SEP .. timestamp) }, SEP), targetName and "WHISPER" or "GUILD", targetName)
     return true
 end
 
@@ -689,6 +696,7 @@ function iRC:SendGuildFoundTradeExceptions(targetName, force)
 end
 
 function iRC:IsRulesetBroadcaster()
+    if self:IsGuildConnectionBootstrap() then return false end
     local name, rank = getRulesAuthority()
     local isSelf = name ~= nil and self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName())
     -- A newly loaded officer has not received the other clients' profiles yet.
@@ -725,6 +733,10 @@ function iRC:SendConnectionRules(targetName, force)
     if not self:IsGuildConnectionActive() or not isBroadcaster then return end
     local rules = self:GetConnectionRules()
     local connection = self:GetConnection()
+    -- First-start defaults exist only to let every guild member connect and
+    -- request the real guild state. They must never become an authoritative
+    -- ruleset merely because this client was elected as a relay.
+    if connection and connection.rulesBootstrap == true then return false end
     local timestampHex, timestampSource = self:EnsureConnectionRulesTimestamp(connection)
     -- A non-GM client may only relay the exact ruleset it previously received.
     -- This prevents a same-rank elected broadcaster from propagating locally
@@ -1023,6 +1035,10 @@ local function handleMessage(prefix, message, distribution, sender)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
+    if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_GROUP" then
+        if iRC.Identity and iRC:IsGuildMemberName(sender) then iRC.Identity:ReceiveSync(parts, sender) end
+        return
+    end
     if isUnchangedManagementPacket(parts) then return end
     if kind == "PROF_SUM" or kind == "PROF_REC" then
         if distribution == "GUILD" and iRC.Professions then iRC.Professions:Receive(message, sender) end
@@ -1167,6 +1183,18 @@ local function handleMessage(prefix, message, distribution, sender)
                 if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
                 if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
             end
+        end
+    elseif kind == "ROSTER_HISTORY_PERMISSION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local connection = iRC:GetConnection()
+        local senderRank = getRulesRank(sender, connection)
+        local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
+        local now = time()
+        if senderRank == 0 and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
+            and timestamp <= now + 300 and checksum == rulesBackupChecksum(tostring(parts[3]) .. SEP .. timestamp)
+            and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
+            connection.rankPermissions.rosterHistory = math.floor(value)
+            if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
         end
     elseif kind == "GUILD_SETTINGS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
@@ -1501,7 +1529,8 @@ local function handleMessage(prefix, message, distribution, sender)
         if staleBackup then
             sameStampReference = rulesBackupFingerprint(connection.rules, savedHex, connection.rulesTimestampSource)
         end
-        local sameStampMatches = incomingTimestamp ~= savedTimestamp or not connection
+        local bootstrapRules = connection and connection.rulesBootstrap == true
+        local sameStampMatches = bootstrapRules or incomingTimestamp ~= savedTimestamp or not connection
             or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
             or sameStampReference == incomingBackup
         local authorityName, authorityRank = getRulesAuthority()
@@ -1509,7 +1538,8 @@ local function handleMessage(prefix, message, distribution, sender)
             or (senderRank == authorityRank and (not authorityName
                 or distribution == "WHISPER"
                 or iRC:NormalizeName(authorityName) == iRC:NormalizeName(sender))))
-        local timestampAccepted = validTimestamp and incomingTimestamp >= savedTimestamp
+        local timestampAccepted = validTimestamp and (bootstrapRules and incomingTimestamp > 0
+            or not bootstrapRules and incomingTimestamp >= savedTimestamp)
         local contentAccepted = checksumValid and exceptionChecksumValid and mapChecksumValid
             and raceLockChecksumValid and guildFoundChecksumValid and announcementChecksumValid and sameStampMatches
         local acceptRules = rulesSchemaSupported and contentAccepted and progressionIsExclusive and timestampAccepted
@@ -1522,6 +1552,7 @@ local function handleMessage(prefix, message, distribution, sender)
             connection.rulesTimestampSource = timestampSource
             connection.rulesRelayedBy = sender
             connection.rulesReceivedAt = time()
+            connection.rulesBootstrap = nil
             connection.receivedRulesBackup = incomingBackup
             connection.receivedRulesBackupVersion = 1
             connection.receivedRulesChecksum = rulesBackupChecksum(incomingBackup)
@@ -1674,7 +1705,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if isReloading then scheduleStartupSync() end
     elseif event == "PLAYER_GUILD_UPDATE" then
         local unit = ...
-        if unit ~= "player" or guildUpdatePending or GetTime() < ignoreGuildUpdatesUntil then return end
+        if unit ~= "player" then return end
+        -- PLAYER_LOGIN cannot bootstrap a player who was guildless at login.
+        -- Schedule the same guarded first-guild activation when they join later.
+        if iRC.ScheduleNewGuildActivation then iRC:ScheduleNewGuildActivation(3) end
+        if guildUpdatePending or GetTime() < ignoreGuildUpdatesUntil then return end
         guildUpdatePending = true
         C_Timer.After(1, function()
             guildUpdatePending = false

@@ -2,6 +2,26 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.7 - Guild Management
+--------------------------------------------------------------------------------
+[ADDED] The Guild Log can be searched by character name, event type, or change text
+[ADDED] Guild Log search suggests up to five matching character names or event types that can be clicked to fill the search
+[CHANGED] Guild Log entries emphasize character names with their class color and move timestamps into the event details
+[ADDED] Left-clicking a Guild Member opens a compact detailed profile with roster details, identity links, membership dates, rank history, notes, profession levels, and recent guild activity
+[ADDED] Guild Log and member-history events synchronize through throttled addon messages, with a dedicated delegated rank permission and recent-history catch-up requests
+[ADDED] Main, Alt, and Personal Bank identity groups synchronize to guild members and appear consistently in member profiles and roster tags
+[CHANGED] A new guild connection starts enabled for every guild rank, while editing remains restricted to the Guild Master and delegated permissions
+[FIX] Players who install iRC while guildless now connect automatically when they join a guild without reloading
+[FIX] A first-time local connection lets new testers participate without granting rule authority, publishing management settings, running officer polls, or sending guild warnings
+[FIX] First-time default rules are temporary and are always replaced by the first valid ruleset published by the guild
+[FIX] New testers can assemble and publish Guild Leaderboard reports without presenting temporary rules as official guild rules
+[FIX] First-time setup reuses an existing saved guild connection instead of creating a duplicate or replacing established guild data
+[FIX] Opening or refreshing the Guild Leaderboard no longer clears cached guild reports after an internal report-format update
+[ADDED] The Guild Log records when a member returns after at least 30 days of inactivity
+[FIX] The Guild Members right-click menu opens at the mouse cursor and remains correctly positioned at every iRC panel scale
+[FIX] Historical Guild-Found approvals no longer leave Guild-Found or violation tags visible after the applicable progression rule is removed
+[CHANGED] The Guild Members right-click menu now uses grouped actions, distinct action colors, dynamic presentation, and clearly dimmed unavailable Main, Alt, and Personal Bank actions
+
 v0.5.6 - SavedVariables & Guild Tools
 --------------------------------------------------------------------------------
 [CHANGED] Guild connections, rules, management data, settings, Leaderboard reports, personal character links, and roster history now use the shared account-wide iRC database

@@ -2078,6 +2078,7 @@ do
         verification = "Verification decisions", presence = "Presence checks and automatic warnings",
         incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
+        rosterHistory = "Guild Log and member history",
     }
     local function rankValues()
         local values = {}
@@ -2095,7 +2096,7 @@ do
         return "Rank " .. tostring(value)
     end
     local permissionY = permissionStartY
-    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage" }) do
+    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage", "rosterHistory" }) do
         local permissionKey = permission
         rankPermissionDropdowns[permission], permissionY = CreateCompactManagementDropdown("iRCRankPermission" .. permission,
             permissionCard, permissionLabels[permission], permissionY,

@@ -541,7 +541,7 @@ end
 
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
-    tradeExceptions = 1, notifications = 1, homepage = 0,
+    tradeExceptions = 1, notifications = 1, homepage = 0, rosterHistory = 1,
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -922,6 +922,9 @@ function iRC:StampConnectionRules(connection)
     if not self:IsGuildMaster() then return false end
     connection = connection or self:GetConnection()
     if not connection then return false end
+    -- Any deliberate Guild Master edit turns the local bootstrap defaults into
+    -- a real ruleset. From this point normal timestamp protection applies.
+    connection.rulesBootstrap = nil
     local stamp = math.max(time(), decodeRulesTimestamp(connection.rulesTimestampHex) + 1)
     connection.rulesTimestampHex = string.format("%x", stamp)
     connection.rulesTimestampSource = self:GetPlayerName()
@@ -941,6 +944,37 @@ end
 
 local initializedConnections = setmetatable({}, { __mode = "k" })
 local pendingAutomaticActivation = setmetatable({}, { __mode = "k" })
+local savedConnectionKeysAtLoad = {}
+
+local function normalizedGuildName(value)
+    return tostring(value or ""):match("^%s*(.-)%s*$"):lower()
+end
+
+local function isEstablishedConnection(connection)
+    return type(connection) == "table" and (connection.rulesBootstrap ~= true
+        or decodeRulesTimestamp(connection.rulesTimestampHex) > 0
+        or type(connection.receivedRulesBackup) == "string"
+        or (tonumber(connection.activationTimestamp) or 0) > 0)
+end
+
+local function findStoredGuildConnection(connections, currentKey, guildName, current)
+    local wanted = normalizedGuildName(guildName)
+    if wanted == "" then return current end
+    local best = current
+    for storedKey, candidate in pairs(connections) do
+        local candidateGuildName = type(candidate) == "table" and candidate.guildName or nil
+        if normalizedGuildName(candidateGuildName) == "" then
+            candidateGuildName = tostring(storedKey):match("^(.-)@") or storedKey
+        end
+        if storedKey ~= currentKey and type(candidate) == "table"
+            and normalizedGuildName(candidateGuildName) == wanted
+            and (not best or isEstablishedConnection(candidate) and not isEstablishedConnection(best)) then
+            best = candidate
+        end
+    end
+    if best and best ~= current then connections[currentKey] = best end
+    return best
+end
 
 function iRC:GetConnection()
     local key = self:GetGuildKey()
@@ -948,12 +982,16 @@ function iRC:GetConnection()
     -- Let callers use defaults until then, without creating early saved state.
     if not savedVariablesReady or not key or not iRCDB then return nil end
     local connections = ensureAccountConnectionStore()
-    local connection = connections[key]
+    local guildName = GetGuildInfo("player")
+    local connection = findStoredGuildConnection(connections, key, guildName, connections[key])
     if not connection then
-        connection = { key = key, guildName = GetGuildInfo("player"), rulesVersion = 1, active = false, members = {} }
+        connection = { key = key, guildName = guildName, rulesVersion = 1, active = false,
+            rulesBootstrap = true, members = {} }
         connections[key] = connection
-        pendingAutomaticActivation[connection] = true
+        if savedConnectionKeysAtLoad[key] ~= true then pendingAutomaticActivation[connection] = true end
     end
+    connection.key = key
+    connection.guildName = connection.guildName or guildName
     if initializedConnections[connection] then return connection end
     connection.active = connection.active == true
     if connection.activationTimestamp == nil then
@@ -1003,7 +1041,7 @@ function iRC:GetConnection()
     if connection.rules.guildRace == "" and self:IsGuildMaster() then
         local _, raceFile = UnitRace("player")
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
-        self:StampConnectionRules(connection)
+        if connection.rulesBootstrap ~= true then self:StampConnectionRules(connection) end
     end
     initializedConnections[connection] = true
     return connection
@@ -1050,8 +1088,12 @@ function iRC:GetGuildMemberRankIndex(name)
 end
 
 function iRC:HasGuildPermission(permission)
+    local connection = self:GetConnection()
+    -- Bootstrap is a local participation mode, not guild authorization. It
+    -- must not grant management authority from default rank permissions.
+    if connection and connection.rulesBootstrap == true then return false end
     if self:IsGuildMaster() then return true end
-    local connection, rankIndex = self:GetConnection(), self:GetPlayerGuildRankIndex()
+    local rankIndex = self:GetPlayerGuildRankIndex()
     local allowed = connection and connection.rankPermissions and tonumber(connection.rankPermissions[permission])
     if allowed == nil then allowed = self.DefaultRankPermissions[permission] end
     return rankIndex ~= nil and allowed ~= nil and rankIndex <= allowed
@@ -1301,16 +1343,23 @@ function iRC:IsGuildConnectionActive()
     return connection and connection.active == true or false
 end
 
+function iRC:IsGuildConnectionBootstrap()
+    local connection = self:GetConnection()
+    return connection and connection.active == true and connection.rulesBootstrap == true or false
+end
+
 function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimestamp, activationSource)
     if not receivedFromGuild and not self:IsGuildMaster() then return false end
     local connection = self:GetConnection()
     if not connection then return false end
     active = active and true or false
+    if not receivedFromGuild then connection.rulesBootstrap = nil end
     if connection.active == active then
         if receivedFromGuild and tonumber(activationTimestamp)
             and tonumber(activationTimestamp) > (tonumber(connection.activationTimestamp) or 0) then
             connection.activationTimestamp = math.floor(tonumber(activationTimestamp))
             connection.activationSource = tostring(activationSource or "")
+            connection.activationBootstrap = nil
         end
         return false
     end
@@ -1318,6 +1367,7 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimes
     if receivedFromGuild then
         connection.activationTimestamp = math.max(0, math.floor(tonumber(activationTimestamp) or 0))
         connection.activationSource = tostring(activationSource or "")
+        if connection.activationTimestamp > 0 then connection.activationBootstrap = nil end
     else
         connection.activationTimestamp = math.max(time(), (tonumber(connection.activationTimestamp) or 0) + 1)
         connection.activationSource = self:GetPlayerName()
@@ -1351,6 +1401,45 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimes
     if active and self.RefreshGuildRoster then self:RefreshGuildRoster() end
     if self.Enforcement then self.Enforcement:Refresh() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:ActivateNewGuildConnection()
+    local connection = self:GetConnection()
+    if not connection or not pendingAutomaticActivation[connection] then return false end
+    pendingAutomaticActivation[connection] = nil
+    connection.rulesBootstrap = true
+    connection.activationBootstrap = true
+    local changed = self:SetGuildConnectionActive(true, true, 0, "")
+    if self.SendHello then self:SendHello() end
+    if self.RequestGuildActivation then self:RequestGuildActivation(true) end
+    if self.RequestConnectionRules then self:RequestConnectionRules() end
+    if self.Compatibility and self.Compatibility.BroadcastAll then self.Compatibility:BroadcastAll() end
+    if self.RaceGrid and self.RaceGrid.Refresh then self.RaceGrid:Refresh() end
+    return changed
+end
+
+local automaticActivationToken
+function iRC:ScheduleNewGuildActivation(delay)
+    if not C_Timer or not C_Timer.After then return false end
+    local token = {}
+    automaticActivationToken = token
+    local expectedGuildKey = self:GetGuildKey()
+    local attempts = 0
+    local function activateWhenReady()
+        if automaticActivationToken ~= token then return end
+        attempts = attempts + 1
+        local currentGuildKey = iRC:GetGuildKey()
+        if expectedGuildKey and currentGuildKey and currentGuildKey ~= expectedGuildKey then return end
+        if not expectedGuildKey then expectedGuildKey = currentGuildKey end
+        local connection = iRC:GetConnection()
+        if not connection then
+            if attempts < 5 then C_Timer.After(3, activateWhenReady) end
+            return
+        end
+        if pendingAutomaticActivation[connection] then iRC:ActivateNewGuildConnection() end
+    end
+    C_Timer.After(math.max(0, tonumber(delay) or 3), activateWhenReady)
     return true
 end
 
@@ -1401,7 +1490,7 @@ end
 
 function iRC:IsAddonResponseRequired(connection)
     connection = connection or self:GetConnection()
-    if not connection or connection.active ~= true then return false end
+    if not connection or connection.active ~= true or connection.rulesBootstrap == true then return false end
     local rules = connection.rules or self.DefaultConnectionRules
     return rules.raceLock == true or rules.nativeTongueOnly == true
         or rules.selfFoundOnly == true or rules.guildFoundOnly == true or rules.level60GuildFound == true
@@ -1532,6 +1621,15 @@ function iRC:GetMaxLevelProgressionMode(rules)
     if rules.level60GuildFound then return "GUILD_FOUND" end
     if rules.allowLevel60WithoutSelfFound then return "UNRESTRICTED" end
     return "SELF_FOUND"
+end
+
+function iRC:IsGuildFoundProgressionApplicable(level, selfFound, rules)
+    rules = rules or self:GetConnectionRules() or self.DefaultConnectionRules
+    local progression = self:GetProgressionMode(rules)
+    if progression == "GUILD_FOUND" then return true end
+    if progression == "SELF_FOUND_OR_GUILD_FOUND" then return selfFound ~= true end
+    return progression == "SELF_FOUND" and (tonumber(level) or 0) >= 60
+        and self:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND"
 end
 
 function iRC:SetProgressionMode(mode)
@@ -1723,7 +1821,10 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
     if event == "ADDON_LOADED" then
         if loadedName ~= iRC.Name then return end
         savedVariablesReady = true
-        ensureAccountConnectionStore()
+        local savedConnections = ensureAccountConnectionStore()
+        for key, connection in pairs(savedConnections) do
+            if type(connection) == "table" then savedConnectionKeysAtLoad[key] = true end
+        end
         iRCCharDB = iRCCharDB or {}
         iRCCharDB.settings = nil
         iRCCharDB.connections = nil
@@ -1736,12 +1837,7 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()
-        C_Timer.After(3, function()
-            local connection = iRC:GetConnection()
-            if not connection or not pendingAutomaticActivation[connection] then return end
-            pendingAutomaticActivation[connection] = nil
-            if iRC:IsGuildMaster() then iRC:SetGuildConnectionActive(true) end
-        end)
+        iRC:ScheduleNewGuildActivation(3)
         C_Timer.After(5, function()
             local settings = iRC:GetSettings()
             if settings.raceLockedForkReminderShown then return end

@@ -793,18 +793,16 @@ local function getEffectiveVerificationState(member, progressionMode, usesGuildF
     if state == "optional" then return state end
     local hasLiveAddon = state == "verified" or state == "compatible"
     local guildFoundStatus = memberGuildFoundStatus(member)
-    -- Gold monitoring applies to every native iRC member.
-    if state == "verified" and guildFoundStatus and guildFoundStatus.clean == false then
+    local guildFoundApplies = usesGuildFound
+        and iRC:IsGuildFoundProgressionApplicable(member.level, member.selfFound, connection and connection.rules)
+    if state == "verified" and guildFoundApplies and guildFoundStatus and guildFoundStatus.clean == false then
         return "attention"
     end
     if hasLiveAddon and iRC.Identity and iRC.Identity:IsPersonalBank(member.name) then return state end
     if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
         return "attention"
     end
-    local needsGuildFoundVerification = hasLiveAddon and usesGuildFound
-        and ((progressionMode == "GUILD_FOUND")
-            or (progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and member.selfFound ~= true)
-            or (progressionMode == "SELF_FOUND" and (member.level or 0) >= 60))
+    local needsGuildFoundVerification = hasLiveAddon and guildFoundApplies
     if needsGuildFoundVerification and not (guildFoundStatus and guildFoundStatus.verified == true) then
         return "attention"
     end

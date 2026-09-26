@@ -215,7 +215,7 @@ end
 
 function iRC:IsPresenceNotificationLeader()
     local connection = self:GetConnection()
-    if not connection or connection.active ~= true then return false end
+    if not connection or connection.active ~= true or connection.rulesBootstrap == true then return false end
     -- Notification leadership must follow the real guild roster. Testing
     -- overrides may unlock configuration, but they cannot grant access to
     -- officer chat or displace an actual authorized iRC officer client.
