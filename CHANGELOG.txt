@@ -2,6 +2,10 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.8 - Hardcore Chat Icon Fix
+--------------------------------------------------------------------------------
+[FIX] The Dead chat icon is now limited to dead or ghost characters on official Hardcore realms
+
 v0.5.7 - Guild Management
 --------------------------------------------------------------------------------
 [ADDED] The Guild Log can be searched by character name, event type, or change text
@@ -21,7 +25,6 @@ v0.5.7 - Guild Management
 [FIX] The Guild Members right-click menu opens at the mouse cursor and remains correctly positioned at every iRC panel scale
 [FIX] Historical Guild-Found approvals no longer leave Guild-Found or violation tags visible after the applicable progression rule is removed
 [CHANGED] The Guild Members right-click menu now uses grouped actions, distinct action colors, dynamic presentation, and clearly dimmed unavailable Main, Alt, and Personal Bank actions
-
 v0.5.6 - SavedVariables & Guild Tools
 --------------------------------------------------------------------------------
 [CHANGED] Guild connections, rules, management data, settings, Leaderboard reports, personal character links, and roster history now use the shared account-wide iRC database

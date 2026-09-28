@@ -163,7 +163,8 @@ function iRC:GetLocalProfile()
         shareGlobalRaceGrid = true,
         testGuildMasterOverride = self:IsTestAdminGuildMaster(),
         hideChatIcon = iRCCharDB and iRCCharDB.hideChatIcon == true,
-        deadGuid = UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") and (UnitGUID("player") or "") or "",
+        deadGuid = self:IsOfficialHardcoreRealm() and UnitIsDeadOrGhost
+            and UnitIsDeadOrGhost("player") and (UnitGUID("player") or "") or "",
         deathStateKnown = true,
         currentGroupRuleViolation = self.Enforcement and self.Enforcement.IsCurrentGroupViolation
             and self.Enforcement:IsCurrentGroupViolation() or false,

@@ -61,7 +61,10 @@ function Announcements:GetUnlockedIcons(name)
     local rank = getRosterRank(name)
     local connection = rank ~= nil and iRC:GetConnection() or nil
     local profile = isSelf and iRC:GetLocalProfile() or connection and connection.members and connection.members[key]
-    if profile and type(profile.guid) == "string" and profile.guid ~= "" and profile.deadGuid == profile.guid then unlocked.death = true end
+    if iRC:IsOfficialHardcoreRealm() and profile and type(profile.guid) == "string"
+        and profile.guid ~= "" and profile.deadGuid == profile.guid then
+        unlocked.death = true
+    end
     if rank == nil then
         if isSelf and iRCCharDB and iRCCharDB.hideChatIcon == true and not unlocked.death then return {} end
         return unlocked
@@ -192,6 +195,10 @@ function Announcements:GetPublicChatIcon(name)
     local key = publicNameKey(name)
     local entry = key and publicIcons[key]
     if entry and entry.expiresAt > time() then
+        if entry.kind == "death" and not iRC:IsOfficialHardcoreRealm() then
+            publicIcons[key] = nil
+            return nil
+        end
         if entry.kind == "creator" and not iRC:IsTestAdminName(name) then
             publicIcons[key] = nil
             return nil
@@ -215,6 +222,7 @@ function Announcements:ReceiveIconWire(message, distribution, sender)
         sendIconWire("ICON_STATUS\t" .. ICON_WIRE_VERSION .. "\t" .. (ownKind or "none"), sender)
     elseif kind == "ICON_STATUS" and pendingRequests[key] and pendingRequests[key] > time() then
         if value ~= "none" and not self.Icons[value] then return end
+        if value == "death" and not iRC:IsOfficialHardcoreRealm() then value = "none" end
         -- The sender controls its packet, but not this client's admin list.
         if value == "creator" and not iRC:IsTestAdminName(sender) then return end
         pendingRequests[key] = nil
@@ -300,6 +308,7 @@ end
 
 function Announcements:SendTest(kind)
     if not iRC:IsTestAdmin() or not iRC:IsGuildConnectionActive() or not SendChatMessage then return false end
+    if kind == "death" and not iRC:IsOfficialHardcoreRealm() then return false end
     local message = kind == "death" and iRC:Text("CHAT_ANNOUNCE_TEST_DEATH") or kind == "level60" and iRC:Text("CHAT_ANNOUNCE_TEST_LEVEL60")
     if not message then return false end
     return pcall(SendChatMessage, message, "GUILD")
@@ -308,7 +317,9 @@ end
 local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
     if type(message) ~= "string" or not author or author == "" then return false end
     local icon, iconKind
-    if message == iRC:Text("CHAT_ANNOUNCE_DEATH") or message == iRC:Text("CHAT_ANNOUNCE_TEST_DEATH") then icon, iconKind = Announcements.Icons.death, "death"
+    if iRC:IsOfficialHardcoreRealm()
+        and (message == iRC:Text("CHAT_ANNOUNCE_DEATH") or message == iRC:Text("CHAT_ANNOUNCE_TEST_DEATH")) then
+        icon, iconKind = Announcements.Icons.death, "death"
     elseif message == iRC:Text("CHAT_ANNOUNCE_LEVEL60") or message == iRC:Text("CHAT_ANNOUNCE_TEST_LEVEL60") then icon, iconKind = Announcements.Icons.level60, "level60" end
     local hideAll = iRCCharDB and iRCCharDB.hideAllChatIcons == true
     if hideAll and not icon then return false end
