@@ -56,10 +56,11 @@ end
 
 local function isGuildFoundEconomyActive()
     local progressionMode = iRC:GetProgressionMode()
+    local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(iRC:GetPlayerName())
     local eligible = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
         or (UnitLevel("player") or 0) >= 60
-        or (iRC.Identity and iRC.Identity:IsPersonalBank(iRC:GetPlayerName()))
-    return iRC:IsGuildFoundRequired() and eligible and not iRC:GetSelfFoundState()
+        or personalBank
+    return iRC:IsGuildFoundRequired() and eligible and (personalBank or not iRC:GetSelfFoundState())
 end
 
 local function getNativeLanguage()
@@ -125,6 +126,10 @@ local function getTradePartnerName()
     return partnerName
 end
 
+local function isTradeWindowOpen()
+    return TradeFrame and TradeFrame.IsShown and TradeFrame:IsShown() or false
+end
+
 local function itemIdFromLink(link)
     return type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil
 end
@@ -172,12 +177,13 @@ local function externalTradeExceptionAllowed(partnerName)
     end
     for _, itemId in ipairs(playerItems) do if not allowedTransferItem(itemId) then return false, nil end end
     for _, itemId in ipairs(targetItems) do if not allowedTransferItem(itemId) then return false, nil end end
-    local selectedLockboxes = selectedItems.lockboxes or {}
+    local incomingLockboxes = selectedItems.lockpickIncoming or {}
+    local outgoingLockboxes = selectedItems.lockpickOutgoing or {}
     if playerServiceId and not (settings.lockpickIncoming and LOCKBOX_ITEMS[playerServiceId]
-        and selectedLockboxes[playerServiceId]) then return false, nil end
+        and incomingLockboxes[playerServiceId]) then return false, nil end
     if playerServiceId then useCategory("Lockpicking (Incoming)") end
     if targetServiceId and not (settings.lockpickOutgoing and playerClass == "ROGUE"
-        and LOCKBOX_ITEMS[targetServiceId] and selectedLockboxes[targetServiceId]) then return false, nil end
+        and LOCKBOX_ITEMS[targetServiceId] and outgoingLockboxes[targetServiceId]) then return false, nil end
     if targetServiceId then useCategory("Lockpicking (Outgoing)") end
     return true, table.concat(usedCategories, ", ")
 end
@@ -198,7 +204,10 @@ local function getSendMailButton()
 end
 
 function Enforcement:CheckTradeRestriction()
-    if not isGuildFoundEconomyActive() or restrictedTradeCancelled then return end
+    -- Refresh also runs during login/reload. Forever may retain a recipient
+    -- name in the trade widgets while the trade window is hidden, which must
+    -- never be treated as an active trade.
+    if not isTradeWindowOpen() or not isGuildFoundEconomyActive() or restrictedTradeCancelled then return end
     local partnerName = getTradePartnerName()
     if not partnerName then return end
     local allowed, reason = iRC:GetGuildFoundTradeStatus(partnerName)
@@ -222,6 +231,12 @@ end
 function Enforcement:UpdateTradeRestriction()
     local button = getTradeAcceptButton()
     if not button or not button.SetEnabled then return end
+    if not isTradeWindowOpen() then
+        if button.iRCRestricted then button:SetEnabled(true) end
+        button.iRCRestricted, button.iRCApprovedException = nil, nil
+        lastTradeRestrictionReason = nil
+        return
+    end
     if not isGuildFoundEconomyActive() then
         if button.iRCRestricted then button:SetEnabled(true) end
         button.iRCRestricted, lastTradeRestrictionReason = nil, nil

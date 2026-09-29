@@ -589,10 +589,13 @@ iRC.L = {
 
     -- Management & Notifications
     DELEGATED_PERMISSIONS_CATEGORY = "Delegated Permissions",
-    DISABLE_AUTOMATIC_WARNINGS_DESC = "Stop iRC from sending automatic warnings through this channel.",
-    DISABLE_GUILD_WARNINGS = "Disable automatic Guild Chat warnings",
-    DISABLE_OFFICER_WARNINGS = "Disable automatic Officer Chat warnings",
-    DISABLE_WHISPER_WARNINGS = "Disable automatic warning whispers",
+    ENABLE_GUILD_WARNINGS = "Automatic Guild Chat warnings",
+    ENABLE_GUILD_WARNINGS_DESC = "Post an escalation in Guild Chat when a member remains online without a verified iRC response.",
+    ENABLE_OFFICER_WARNINGS = "Automatic Officer Chat warnings",
+    ENABLE_OFFICER_WARNINGS_DESC = "Notify officers about missing iRC responses, race-rule mismatches, and prohibited group activity.",
+    ENABLE_WHISPER_WARNINGS = "Automatic warning whispers",
+    ENABLE_WHISPER_WARNINGS_DESC = "Privately ask a member to enable or reload iRC when their addon response cannot be verified.",
+    VERIFICATION_SEARCH_PLACEHOLDER = "Search members or linked characters...",
     GUILD_MANAGEMENT_HEADER = "Guild Management",
     GUILD_NOTIFICATIONS_CATEGORY = "Notifications",
     GUILD_NOTIFICATIONS_DESC = "Configure shared guild notifications. Access follows the delegated permissions selected by the Guild Master.",

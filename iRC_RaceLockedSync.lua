@@ -292,7 +292,11 @@ end
 function Sync:GetLocalRawStatus()
     self:ObserveSelfFound()
     local history = localHistory()
-    local verified = history.maxLevelSelfFound == true
+    -- A confirmed Personal Bank Alt enters the Guild-Found economy as soon as
+    -- that role is active. It does not need to complete Self-Found progression
+    -- first, but it still uses the normal money audit below.
+    local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(iRC:GetPlayerName())
+    local verified = personalBank or history.maxLevelSelfFound == true
     local clean, tamperAt = history.moneyDiscrepancyAt == nil, history.moneyDiscrepancyAt or 0
     return verified, clean, tamperAt
 end

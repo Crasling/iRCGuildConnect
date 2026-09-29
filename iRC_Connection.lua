@@ -4,6 +4,9 @@ if not iRC then return end
 
 local SEP = "\t"
 local WIRE_VERSION = "10"
+-- Warning bits changed from "disabled" to "enabled" in 0.5.9. Keep this
+-- package on its own version so mixed clients cannot silently invert settings.
+local GUILD_SETTINGS_VERSION = "2"
 local SECONDS_PER_DAY = 86400
 local lastPresencePollAt = 0
 local ACTIVATION_REQUEST_COOLDOWN = 10
@@ -156,6 +159,12 @@ end
 function iRC:GetLocalProfile()
     local raceName, raceFile = UnitRace("player")
     local _, classFile = UnitClass("player")
+    -- Ordinary deaths are temporary gameplay state. Only Hardcore characters
+    -- publish death/ghost state as part of their persistent guild identity.
+    local deadGuid = ""
+    if self:IsOfficialHardcoreRealm() and UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then
+        deadGuid = UnitGUID("player") or ""
+    end
     return {
         addonVersion = self.Version, name = self:GetPlayerName() or "Unknown", guid = UnitGUID("player") or "",
         race = raceFile or raceName or "Unknown", class = classFile or "UNKNOWN", level = UnitLevel("player") or 1,
@@ -163,8 +172,7 @@ function iRC:GetLocalProfile()
         shareGlobalRaceGrid = true,
         testGuildMasterOverride = self:IsTestAdminGuildMaster(),
         hideChatIcon = iRCCharDB and iRCCharDB.hideChatIcon == true,
-        deadGuid = self:IsOfficialHardcoreRealm() and UnitIsDeadOrGhost
-            and UnitIsDeadOrGhost("player") and (UnitGUID("player") or "") or "",
+        deadGuid = deadGuid,
         deathStateKnown = true,
         currentGroupRuleViolation = self.Enforcement and self.Enforcement.IsCurrentGroupViolation
             and self.Enforcement:IsCurrentGroupViolation() or false,
@@ -331,8 +339,10 @@ function iRC:GetConnectionRulesFingerprint(connection)
         rules, connection.rulesTimestampHex, connection.rulesTimestampSource))
 end
 
-local function guildSettingsChecksum(enabled, timestamp, source)
-    return rulesBackupChecksum(table.concat({ enabled and "1" or "0", tostring(timestamp or 0), tostring(source or "") }, SEP))
+local function guildSettingsChecksum(enabled, timestamp, source, warningMask)
+    local values = { enabled and "1" or "0", tostring(timestamp or 0), tostring(source or "") }
+    if warningMask ~= nil then values[#values + 1] = tostring(warningMask) end
+    return rulesBackupChecksum(table.concat(values, SEP))
 end
 
 local TRADE_EXCEPTION_KEYS = {
@@ -348,22 +358,41 @@ local function tradeExceptionsMask(settings)
     return mask
 end
 
-local TRADE_ITEM_CATEGORIES = { "conjured", "healthstones", "questItems", "lockboxes" }
+local TRADE_ITEM_CATEGORIES = { "conjured", "healthstones", "questItems", "lockpickOutgoing", "lockpickIncoming" }
+
+local function tradeItemMask(settings, category)
+    local mask, selected = 0, settings and settings.items and settings.items[category] or {}
+    for index, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
+        if selected[itemId] == true then mask = mask + (2 ^ (index - 1)) end
+    end
+    return mask
+end
 
 local function tradeItemMasks(settings)
     local masks = {}
     for _, category in ipairs(TRADE_ITEM_CATEGORIES) do
-        local mask, selected = 0, settings and settings.items and settings.items[category] or {}
-        for index, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
-            if selected[itemId] == true then mask = mask + (2 ^ (index - 1)) end
-        end
-        masks[#masks + 1] = tostring(mask)
+        masks[#masks + 1] = tostring(tradeItemMask(settings, category))
     end
     return table.concat(masks, ",")
 end
 
+local function applyTradeItemMask(settings, category, mask)
+    settings.items[category] = {}
+    for itemIndex, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
+        if math.floor(mask / (2 ^ (itemIndex - 1))) % 2 == 1 then
+            settings.items[category][itemId] = true
+        end
+    end
+end
+
+local function applyTradeItemMasks(settings, itemMaskValues)
+    for categoryIndex, category in ipairs(TRADE_ITEM_CATEGORIES) do
+        applyTradeItemMask(settings, category, itemMaskValues[categoryIndex] or 0)
+    end
+end
+
 local function tradeExceptionsChecksum(mask, itemMasks, timestamp, source)
-    return rulesBackupChecksum(table.concat({ tostring(mask), tostring(itemMasks or "0,0,0,0"), tostring(timestamp or 0), tostring(source or "") }, SEP))
+    return rulesBackupChecksum(table.concat({ tostring(mask), tostring(itemMasks or "0,0,0,0,0"), tostring(timestamp or 0), tostring(source or "") }, SEP))
 end
 
 local function rankPermissionsWire(values)
@@ -487,18 +516,18 @@ function iRC:SendGuildManagementSettings(targetName, force)
     if not settings then return false end
     local timestamp = math.floor(tonumber(settings.timestamp) or 0)
     local source = tostring(settings.source or ""):gsub("[%c]", ""):sub(1, 80)
-    -- No officer may invent a timestamp for the default. Only an explicit
-    -- An authorized management change creates the first package; afterwards an authorized rank may
+    -- No officer may invent a timestamp for the default. An authorized
+    -- management change creates the first package; afterwards an authorized rank may
     -- relay the exact newest value it has received.
     if timestamp <= 0 or source == "" then
         return false
     end
     local enabled = settings.welcomeNewMembers ~= false
-    local warningMask = (settings.disableOfficerWarnings and 1 or 0) + (settings.disableWhisperWarnings and 2 or 0) + (settings.disableGuildWarnings and 4 or 0)
+    local warningMask = (settings.enableOfficerWarnings and 1 or 0) + (settings.enableWhisperWarnings and 2 or 0) + (settings.enableGuildWarnings and 4 or 0)
     local distribution = targetName and "WHISPER" or "GUILD"
     send(self.Prefix, table.concat({
-        "GUILD_SETTINGS", WIRE_VERSION, enabled and "1" or "0", tostring(timestamp), source,
-        guildSettingsChecksum(enabled, timestamp, source), tostring(warningMask),
+        "GUILD_SETTINGS", GUILD_SETTINGS_VERSION, enabled and "1" or "0", tostring(timestamp), source,
+        guildSettingsChecksum(enabled, timestamp, source, warningMask), tostring(warningMask),
     }, SEP), distribution, targetName)
     self:DebugMsg(self:Text("GUILD_SETTINGS_SENT"), 3)
     return true
@@ -606,12 +635,12 @@ function iRC:SetNewMemberWelcomeEnabled(enabled)
     return true
 end
 
-function iRC:SetAutomaticWarningDisabled(channel, disabled)
+function iRC:SetAutomaticWarningEnabled(channel, enabled)
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
     local settings = self:GetConnection().guildNotifications
-    local key = ({ OFFICER = "disableOfficerWarnings", WHISPER = "disableWhisperWarnings", GUILD = "disableGuildWarnings" })[channel]
+    local key = ({ OFFICER = "enableOfficerWarnings", WHISPER = "enableWhisperWarnings", GUILD = "enableGuildWarnings" })[channel]
     if not key then return false end
-    settings[key] = disabled and true or false
+    settings[key] = enabled and true or false
     local now = GetServerTime and GetServerTime() or time()
     settings.timestamp = math.max(math.floor(tonumber(settings.timestamp) or 0) + 1, now)
     settings.source = self:GetPlayerName()
@@ -637,13 +666,10 @@ function iRC:SetGuildFoundTradeException(key, enabled)
         conjured = "conjured",
         healthstones = "healthstones",
         questItems = "questItems",
-        lockpickOutgoing = "lockboxes",
-        lockpickIncoming = "lockboxes",
+        lockpickOutgoing = "lockpickOutgoing",
+        lockpickIncoming = "lockpickIncoming",
     })[key]
     local categoryWasEnabled = wasEnabled
-    if itemCategory == "lockboxes" then
-        categoryWasEnabled = settings.lockpickOutgoing == true or settings.lockpickIncoming == true
-    end
     settings[key] = enabled and true or false
     if enabled and not categoryWasEnabled and itemCategory then
         settings.items = settings.items or {}
@@ -651,6 +677,11 @@ function iRC:SetGuildFoundTradeException(key, enabled)
         for _, itemId in ipairs(self.GuildFoundTradeExceptionItems[itemCategory] or {}) do
             settings.items[itemCategory][itemId] = true
         end
+    elseif not enabled and itemCategory then
+        -- Item choices have no effect without their parent exception. Clear
+        -- them instead of leaving hidden selections that reappear later.
+        settings.items = settings.items or {}
+        settings.items[itemCategory] = {}
     end
     settings.timestamp = math.max(time(), math.floor(tonumber(settings.timestamp) or 0) + 1)
     settings.source = self:GetPlayerName()
@@ -926,7 +957,7 @@ function iRC:SendGroupViolation(record)
         seenGroupViolations[violationId] = true
         record.reporter = record.reporter or self:GetPlayerName()
         self:StoreOfficerIncident(record)
-        if not self:IsAutomaticWarningDisabled("OFFICER") then SendChatMessage(self:Text("GROUP_VIOLATION_OFFICER", self:FormatPlayerName(self:GetPlayerName()), instanceName, displayPlayerList(players)), "OFFICER") end
+        if self:IsAutomaticWarningEnabled("OFFICER") then SendChatMessage(self:Text("GROUP_VIOLATION_OFFICER", self:FormatPlayerName(self:GetPlayerName()), instanceName, displayPlayerList(players)), "OFFICER") end
         locallyReported = true
     end
     return locallyReported
@@ -988,10 +1019,10 @@ local function senderIsKnown(sender)
 end
 
 local function isUnchangedManagementPacket(parts)
-    if parts[2] ~= WIRE_VERSION then return false end
     local kind = parts[1]
     if kind ~= "GUILD_SETTINGS" and kind ~= "GF_TRADE_EXCEPTIONS"
         and kind ~= "GUILD_HOMEPAGE_DESC" then return false end
+    if parts[2] ~= (kind == "GUILD_SETTINGS" and GUILD_SETTINGS_VERSION or WIRE_VERSION) then return false end
     local connection = iRC:GetConnection()
     if not connection then return false end
     if kind == "GUILD_SETTINGS" then
@@ -999,11 +1030,11 @@ local function isUnchangedManagementPacket(parts)
         local timestamp, source = tonumber(parts[4]), tostring(parts[5] or "")
         if not saved or not timestamp or timestamp <= 0 then return false end
         local enabled = parts[3] == "1"
-        local mask = (saved.disableOfficerWarnings and 1 or 0) + (saved.disableWhisperWarnings and 2 or 0)
-            + (saved.disableGuildWarnings and 4 or 0)
+        local mask = (saved.enableOfficerWarnings and 1 or 0) + (saved.enableWhisperWarnings and 2 or 0)
+            + (saved.enableGuildWarnings and 4 or 0)
         return saved and timestamp == tonumber(saved.timestamp) and source == saved.source
             and enabled == (saved.welcomeNewMembers == true) and tonumber(parts[7]) == mask
-            and tostring(parts[6] or ""):lower() == guildSettingsChecksum(enabled, timestamp, source)
+            and tostring(parts[6] or ""):lower() == guildSettingsChecksum(enabled, timestamp, source, tonumber(parts[7]))
     elseif kind == "GF_TRADE_EXCEPTIONS" then
         local saved = connection.guildFoundTradeExceptionSettings
         if not saved or tonumber(parts[4]) ~= tonumber(saved.timestamp)
@@ -1036,7 +1067,8 @@ local function handleMessage(prefix, message, distribution, sender)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
-    if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_GROUP" then
+    if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_MEMBER"
+        or kind == "IDENT_LINK_REQUEST" or kind == "IDENT_LINK_DECLINE" then
         if iRC.Identity and iRC:IsGuildMemberName(sender) then iRC.Identity:ReceiveSync(parts, sender) end
         return
     end
@@ -1128,7 +1160,7 @@ local function handleMessage(prefix, message, distribution, sender)
                     id = violationId, reporter = sender, occurredAt = occurredAt,
                     instanceName = instanceName, players = players,
                 })
-                if not iRC:IsAutomaticWarningDisabled("OFFICER") then SendChatMessage(iRC:Text("GROUP_VIOLATION_OFFICER", iRC:FormatPlayerName(sender), instanceName, displayPlayerList(players)), "OFFICER") end
+                if iRC:IsAutomaticWarningEnabled("OFFICER") then SendChatMessage(iRC:Text("GROUP_VIOLATION_OFFICER", iRC:FormatPlayerName(sender), instanceName, displayPlayerList(players)), "OFFICER") end
             end
             -- Always acknowledge a valid repeat. The first acknowledgement may
             -- have been lost even though the officer notice was already sent.
@@ -1197,7 +1229,7 @@ local function handleMessage(prefix, message, distribution, sender)
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
         end
-    elseif kind == "GUILD_SETTINGS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+    elseif kind == "GUILD_SETTINGS" and parts[2] == GUILD_SETTINGS_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
         local senderIsGuildMaster = getRosterRank(sender) == 0
@@ -1209,7 +1241,8 @@ local function handleMessage(prefix, message, distribution, sender)
         local warningMask = parts[7] and math.max(0, math.min(7, math.floor(tonumber(parts[7]) or 0))) or nil
         local now = GetServerTime and GetServerTime() or time()
         if senderRank and senderRank <= (connection.rankPermissions.notifications or 1) and timestamp and timestamp > 0 and timestamp <= now + 300
-            and source ~= "" and checksum == guildSettingsChecksum(enabled, timestamp, source) then
+            and warningMask ~= nil and source ~= ""
+            and checksum == guildSettingsChecksum(enabled, timestamp, source, warningMask) then
             local connection = iRC:GetConnection()
             local settings = connection.guildNotifications
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
@@ -1218,9 +1251,9 @@ local function handleMessage(prefix, message, distribution, sender)
             if timestamp < savedTimestamp then return end
             local function applyWarningSettings()
                 if warningMask == nil then return end
-                settings.disableOfficerWarnings = warningMask % 2 >= 1
-                settings.disableWhisperWarnings = math.floor(warningMask / 2) % 2 >= 1
-                settings.disableGuildWarnings = math.floor(warningMask / 4) % 2 >= 1
+                settings.enableOfficerWarnings = warningMask % 2 >= 1
+                settings.enableWhisperWarnings = math.floor(warningMask / 2) % 2 >= 1
+                settings.enableGuildWarnings = math.floor(warningMask / 4) % 2 >= 1
             end
             if senderIsGuildMaster then
                 settings.welcomeNewMembers = enabled
@@ -1342,7 +1375,7 @@ local function handleMessage(prefix, message, distribution, sender)
         if senderRank and senderRank <= (connection.rankPermissions.tradeExceptions or 1)
             and mask and mask >= 0 and mask <= 255 and mask == math.floor(mask)
             and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= ""
-            and itemMasks:match("^%d+,%d+,%d+,%d+$") and #itemMasks <= 45
+            and itemMasks:match("^%d+,%d+,%d+,%d+,%d+$") and #itemMasks <= 45
             and checksum == tradeExceptionsChecksum(mask, itemMasks, timestamp, source) then
             local settings = connection.guildFoundTradeExceptionSettings
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
@@ -1354,15 +1387,7 @@ local function handleMessage(prefix, message, distribution, sender)
                 settings.items = settings.items or {}
                 local itemMaskValues = {}
                 for value in itemMasks:gmatch("%d+") do itemMaskValues[#itemMaskValues + 1] = tonumber(value) or 0 end
-                for categoryIndex, category in ipairs(TRADE_ITEM_CATEGORIES) do
-                    settings.items[category] = {}
-                    local itemMask = itemMaskValues[categoryIndex] or 0
-                    for itemIndex, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
-                        if math.floor(itemMask / (2 ^ (itemIndex - 1))) % 2 == 1 then
-                            settings.items[category][itemId] = true
-                        end
-                    end
-                end
+                applyTradeItemMasks(settings, itemMaskValues)
                 settings.timestamp, settings.source = math.floor(timestamp), source
                 iRC:RecordManagementConnectionStatus("guildFound", source, timestamp, sender, now)
                 if receiverIsGuildMaster and not senderIsGuildMaster then

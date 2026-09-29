@@ -257,7 +257,7 @@ local function announcePresenceMismatch(member, verification, escalated)
     -- so always consult the live caches again at the final send boundary.
     local liveProfile = iRC:FindConnectionProfile(member.name)
     local liveVerification = iRC:GetMemberVerification(member.name, true, liveProfile)
-    if liveVerification.state == "verified" or liveVerification.state == "compatible" then
+    if iRC:IsLiveAddonState(liveVerification.state) then
         local key = iRC:NormalizeName(member.name)
         reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
         iRC:DebugMsg(iRC:Text("PRESENCE_RECOVERED", iRC:FormatPlayerName(member.name)), 3)
@@ -277,10 +277,10 @@ local function announcePresenceMismatch(member, verification, escalated)
         and iRC:Text("PRESENCE_PLAYER_ESCALATION")
         or iRC:Text("PRESENCE_PLAYER_NOTICE")
     if SendChatMessage then
-        if not iRC:IsAutomaticWarningDisabled("OFFICER") then SendChatMessage(officerMessage, "OFFICER") end
-        if not iRC:IsAutomaticWarningDisabled("WHISPER") then SendChatMessage(whisperMessage, "WHISPER", nil, displayName) end
+        if iRC:IsAutomaticWarningEnabled("OFFICER") then SendChatMessage(officerMessage, "OFFICER") end
+        if iRC:IsAutomaticWarningEnabled("WHISPER") then SendChatMessage(whisperMessage, "WHISPER", nil, displayName) end
         if escalated then
-            if not iRC:IsAutomaticWarningDisabled("GUILD") then SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", displayName), "GUILD") end
+            if iRC:IsAutomaticWarningEnabled("GUILD") then SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", displayName), "GUILD") end
             local occurredAt = time()
             iRC:StoreOfficerIncident({
                 id = "presence:" .. iRC:NormalizeName(member.name) .. ":" .. occurredAt,
@@ -337,7 +337,7 @@ function iRC:CheckPresenceMismatches()
         local verification = member.verification or { state = "missing" }
         if member.raceMismatch and member.raceCheck then
             local signature = table.concat({ tostring(member.guid or ""), member.raceCheck.actual, member.raceCheck.expected }, ":")
-            if connection.raceMismatchNotices[key] ~= signature and SendChatMessage and not self:IsAutomaticWarningDisabled("OFFICER") then
+            if connection.raceMismatchNotices[key] ~= signature and SendChatMessage and self:IsAutomaticWarningEnabled("OFFICER") then
                 local actualRace = self:Text("GUILD_RACE_" .. member.raceCheck.actual)
                 local expectedRace = self:Text("GUILD_RACE_" .. member.raceCheck.expected)
                 local sent = pcall(SendChatMessage, self:Text("RACE_MISMATCH_OFFICER_NOTICE", self:FormatPlayerName(member.name), actualRace, expectedRace), "OFFICER")
@@ -351,7 +351,7 @@ function iRC:CheckPresenceMismatches()
         end
         if not member.online then
             reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
-        elseif verification.state == "verified" or verification.state == "compatible" then
+        elseif self:IsLiveAddonState(verification.state) then
             if reportedPresenceMismatches[key] then self:DebugMsg(self:Text("PRESENCE_RECOVERED", self:FormatPlayerName(member.name)), 3) end
             reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
             connection.newMemberChecks[id] = nil

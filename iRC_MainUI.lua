@@ -9,12 +9,22 @@ local guildStatsFilter = "ALL"
 local collapsedFactionSections = {}
 local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
 
+-- A Self-Found journey that transitions at the level cap is ultimately a
+-- Guild-Found ruleset, so present and filter it consistently as Guild-Found.
+local function isGuildFoundRules(rules)
+    if not rules then return false end
+    local progression = iRC:GetProgressionMode(rules)
+    return progression == "GUILD_FOUND"
+        or progression == "SELF_FOUND_OR_GUILD_FOUND"
+        or (progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
+end
+
 local function getGuildCardTag(group)
     local rules = group and group.rulesKnown and group.rules
     if not rules then return nil end
     if rules.raceLock == true then return "Race-Locked", { 0.25, 0.85, 1 } end
     local progression = iRC:GetProgressionMode(rules)
-    if progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND" then
+    if isGuildFoundRules(rules) then
         return "Guild-Found", { 0.30, 1, 0.35 }
     end
     if progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND" then
@@ -28,7 +38,7 @@ local function getCurrentGuildStatsFilter()
     local rules = iRC:GetConnectionRules()
     if rules.raceLock == true then return "RACE_LOCKED" end
     local progression = iRC:GetProgressionMode(rules)
-    if progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND" then return "GUILD_FOUND" end
+    if isGuildFoundRules(rules) then return "GUILD_FOUND" end
     if progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND" then return "SELF_FOUND" end
     return "ALL"
 end
@@ -1183,8 +1193,7 @@ function UI:Create()
         local profile = memberMenu.profile
         memberMenu:Hide()
         if profile and iRC.Identity then
-            iRC.Identity:RegisterCharacter(profile.name)
-            iRC.Identity:SetMain(profile.name)
+            iRC.Identity:ConfirmCurrentCharacterForMain(profile.name)
             UI:RefreshIfShown()
         end
     end)
@@ -1200,8 +1209,8 @@ function UI:Create()
         local profile = memberMenu.profile
         memberMenu:Hide()
         if profile and iRC.Identity then
-            iRC.Identity:RegisterCharacter(profile.name)
             local enabled = not iRC.Identity:IsPersonalBank(profile.name)
+            iRC.Identity:RegisterCharacter(profile.name, enabled and "BANK" or "ALT")
             iRC.Identity:SetPersonalBank(profile.name, enabled)
             UI:RefreshIfShown()
         end
@@ -1285,11 +1294,18 @@ function UI:RenderMemberRows()
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
         local memberTag, tagColor
+        local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(profile.name)
         row.name:SetFontObject(GameFontHighlight)
         if iRC:IsOfficialHardcoreRealm() and profile.dead == true then
             memberTag, tagColor = "Dead", { 1.00, 0.50, 0.50 }
         elseif iRC.Identity and iRC.Identity:IsPersonalBank(profile.name) then
             memberTag, tagColor = "Personal Bank", { 0.40, 0.80, 1.00 }
+        elseif identityLabel == "Main" then
+            memberTag, tagColor = "Main", { 0.30, 1.00, 0.35 }
+        elseif identityLabel and identityLabel:find("^Pending") then
+            memberTag, tagColor = "Pending Alt", { 1.00, 0.72, 0.22 }
+        elseif identityLabel then
+            memberTag, tagColor = "Alt", { 0.70, 0.55, 1.00 }
         elseif profile.selfFound == true then
             memberTag, tagColor = "Self-Found", { 1.00, 0.55, 0.55 }
         elseif iRC:IsGuildFoundProgressionApplicable(profile.level, profile.selfFound)
@@ -1306,7 +1322,6 @@ function UI:RenderMemberRows()
         row.tag:SetShown(memberTag ~= nil)
         row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
         row.detail:SetText((profile.race or "Unknown") .. " · " .. (profile.class or "Unknown") .. " · Level " .. (profile.level or 1))
-        local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(profile.name)
         if identityLabel then row.detail:SetText(row.detail:GetText() .. " | " .. identityLabel) end
         row.profileName = profile.name
         local professionData = profile.professionData
@@ -1401,7 +1416,7 @@ end
 local function updateMemberRows(frame)
     -- Index the current roster once per refresh; typing only filters these rows.
     local profiles = iRC:GetGuildRosterRows()
-    local entries, byKey = {}, {}
+    local entries, byKey, profilesByName = {}, {}, {}
     local function add(kind, label, profile)
         if not label or label == "" then return end
         local key = kind .. ":" .. label:lower()
@@ -1414,7 +1429,26 @@ local function updateMemberRows(frame)
         entry.members[profile] = true
     end
     for _, profile in ipairs(profiles) do
-        add("name", iRC:FormatPlayerName(profile.name), profile)
+        profilesByName[iRC:NormalizeName(profile.name)] = profile
+    end
+    for _, profile in ipairs(profiles) do
+        local linkedNames = iRC.Identity and iRC.Identity:GetLinkedCharacters(profile.name) or {}
+        if #linkedNames == 0 then
+            add("name", iRC:FormatPlayerName(profile.name), profile)
+        else
+            -- Every character name in an identity group points at every group
+            -- member currently in the roster. Searching a main therefore also
+            -- finds its Alts and Personal Bank Alts, and vice versa.
+            local linkedProfiles = {}
+            for _, linkedName in ipairs(linkedNames) do
+                local linkedProfile = profilesByName[iRC:NormalizeName(linkedName)]
+                if linkedProfile then linkedProfiles[#linkedProfiles + 1] = linkedProfile end
+            end
+            for _, linkedName in ipairs(linkedNames) do
+                local displayName = iRC:FormatPlayerName(linkedName)
+                for _, linkedProfile in ipairs(linkedProfiles) do add("name", displayName, linkedProfile) end
+            end
+        end
         local data = profile.professionData
         if data then
             for _, option in ipairs(iRC.Professions:GetOptions()) do
@@ -1960,9 +1994,8 @@ end
 
 local function setRaceCard(card, group, rank)
     local rules = group and group.rulesKnown and group.rules
-    local progression = rules and iRC:GetProgressionMode(rules) or "NONE"
     local accent = rules and rules.raceLock == true and (RACE_COLORS[group.race] or RACE_COLORS.Unknown)
-        or (progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND")
+        or isGuildFoundRules(rules)
             and { 0.30, 1, 0.35 } or RACE_COLORS.Unknown
     card.accent:SetColorTexture(accent[1], accent[2], accent[3], 1)
     card.icon:SetTexture(getGuildCardIcon(group))
@@ -2107,8 +2140,7 @@ local function updateRaceOverview(frame)
         local filtered = {}
         for _, group in ipairs(allGroups) do
             if group.rulesKnown and group.rules and group.rules.raceLock == false
-                and (iRC:GetProgressionMode(group.rules) == "GUILD_FOUND"
-                    or iRC:GetProgressionMode(group.rules) == "SELF_FOUND_OR_GUILD_FOUND") then
+                and isGuildFoundRules(group.rules) then
                 filtered[#filtered + 1] = group
             end
         end

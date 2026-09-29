@@ -7,8 +7,15 @@ iRC.Identity = Identity
 local warnedTogether = {}
 local rosterRetryScheduled
 local lastHistoryRequestAt = 0
-local IDENTITY_WIRE_VERSION = "1"
+local IDENTITY_WIRE_VERSION = "2"
+local LINK_REQUEST_LIFETIME = 7 * 86400
+local MAX_LINK_REQUESTS = 50
+local MAX_GUILD_LOG_ENTRIES = 500
+local MAX_SHARED_HISTORY = 50
+local HISTORY_REQUEST_COOLDOWN = 60
 local initializedGuildLogStores = setmetatable({}, { __mode = "k" })
+local shownLinkRequests = {}
+local lastLinkRelayAt = 0
 local SYNCED_EVENT_TYPES = {
     JOIN = true, REJOIN = true, LEAVE = true, PROMOTE = true, DEMOTE = true,
     LEVEL = true, NAME = true, NOTE = true, OFFICER_NOTE = true, RETURN = true,
@@ -19,7 +26,15 @@ local function cleanWireText(value, limit)
 end
 
 local function eventFingerprint(eventType, name, text, occurredAt)
-    local value = table.concat({ tostring(eventType), iRC:NormalizeName(name), tostring(text), math.floor((tonumber(occurredAt) or 0) / 5) }, "|")
+    -- Several clients can observe one roster event at slightly different
+    -- times. Five-second buckets give those observations the same stable ID.
+    local timeBucket = math.floor((tonumber(occurredAt) or 0) / 5)
+    local value = table.concat({
+        tostring(eventType),
+        iRC:NormalizeName(name),
+        tostring(text),
+        timeBucket,
+    }, "|")
     local hash = 5381
     for index = 1, #value do hash = (hash * 33 + value:byte(index)) % 4294967291 end
     return string.format("%08x", hash)
@@ -36,6 +51,8 @@ local function guildStore(create)
         iRCDB.identityGuilds[guildKey] = store
     end
     if store then
+        -- SavedVariables can contain partially written or older records. Make
+        -- each collection safe before any caller reads or modifies the store.
         store.characters = type(store.characters) == "table" and store.characters or {}
         store.personalBanks = type(store.personalBanks) == "table" and store.personalBanks or {}
         store.formerMembers = type(store.formerMembers) == "table" and store.formerMembers or {}
@@ -50,7 +67,11 @@ local function guildStore(create)
             initializedGuildLogStores[store] = true
         end
         store.memberHistory = type(store.memberHistory) == "table" and store.memberHistory or {}
-        store.guildIdentityGroups = type(store.guildIdentityGroups) == "table" and store.guildIdentityGroups or {}
+        store.identityAssignments = type(store.identityAssignments) == "table" and store.identityAssignments or {}
+        store.identityLinkRequests = type(store.identityLinkRequests) == "table" and store.identityLinkRequests or {}
+        store.identityMemberUpdatedAt = type(store.identityMemberUpdatedAt) == "table" and store.identityMemberUpdatedAt or {}
+        store.confirmedCharacters = type(store.confirmedCharacters) == "table" and store.confirmedCharacters or {}
+        store.excludedCharacters = type(store.excludedCharacters) == "table" and store.excludedCharacters or {}
         store.missingCounts = type(store.missingCounts) == "table" and store.missingCounts or {}
     end
     return store
@@ -60,38 +81,92 @@ local function characterKey(name)
     return iRC:NormalizeName(name)
 end
 
+local function refreshCurrentRoleState(name)
+    if characterKey(name) ~= characterKey(iRC:GetPlayerName()) then return end
+    -- Identity roles affect progression enforcement immediately. Refresh the
+    -- local restrictions and publish the resulting Guild-Found state through
+    -- the normal throttled traffic path without waiting for another game event.
+    if iRC.Enforcement and iRC.Enforcement.Refresh then
+        iRC.Enforcement:Refresh()
+    elseif iRC.RaceLockedSync and iRC.RaceLockedSync.RefreshMoneyMonitoring then
+        iRC.RaceLockedSync:RefreshMoneyMonitoring()
+    end
+    if iRC.RaceLockedSync and iRC.RaceLockedSync.Broadcast then
+        iRC.RaceLockedSync:Broadcast()
+    end
+end
+
+local function trimGuildLog(store)
+    while #store.guildLog > MAX_GUILD_LOG_ENTRIES do
+        local removed = table.remove(store.guildLog, 1)
+        if removed and removed.id then store.guildLogIds[removed.id] = nil end
+    end
+end
+
 function Identity:GetStore()
     return guildStore(true)
 end
 
-function Identity:RegisterCharacter(name)
+function Identity:RegisterCharacter(name, requestedRole, automatic)
     local store = guildStore(true)
     local key = characterKey(name)
     if not store or not key or key == "" then return false end
+    local currentKey = characterKey(iRC:GetPlayerName())
+    if automatic and key == currentKey and store.excludedCharacters[key] then
+        self:BroadcastIdentityRemoval()
+        return false
+    end
+    if not automatic then store.excludedCharacters[key] = nil end
+    local canAutoConfirm = true
+    if key == currentKey and store.main and store.main ~= key then
+        local savedMainName = store.characters[store.main]
+        if not savedMainName or not iRC:IsGuildMemberName(savedMainName) then
+            -- Account-wide data proves the account relationship, but identity
+            -- groups are guild-scoped. Do not inherit a Main outside this guild.
+            canAutoConfirm = false
+        end
+    end
     store.characters[key] = iRC:FormatPlayerName(name)
+    if key == currentKey then store.confirmedCharacters[key] = canAutoConfirm and true or nil end
     if not store.main or not store.characters[store.main] then store.main = key end
+    if key ~= currentKey then
+        -- Adding an Alt or changing its role must be confirmed by that
+        -- character before the new identity is trusted guild-wide.
+        store.confirmedCharacters[key] = nil
+        self:RequestCharacterLink(name, store.characters[store.main], requestedRole)
+    end
     self:BroadcastPersonalIdentity()
+    if store.confirmedCharacters[key] == true then refreshCurrentRoleState(name) end
     return true
 end
 
 function Identity:RemoveCharacter(name)
     local store, key = guildStore(false), characterKey(name)
     if not store or not key or not store.characters[key] then return false end
+    local mainName = store.main and store.characters[store.main]
+    if key == characterKey(iRC:GetPlayerName()) then
+        self:BroadcastIdentityRemoval()
+    elseif mainName then
+        self:RequestCharacterLink(name, mainName, "REMOVE")
+    end
     store.characters[key] = nil
     store.personalBanks[key] = nil
+    store.confirmedCharacters[key] = nil
+    store.excludedCharacters[key] = true
     if store.main == key then
         store.main = next(store.characters)
     end
     self:BroadcastPersonalIdentity()
+    refreshCurrentRoleState(name)
     return true
 end
 
 function Identity:IsPersonalBank(name)
     local store, key = guildStore(false), characterKey(name)
-    if store and key and store.characters[key] ~= nil and store.personalBanks[key] == true then return true end
-    for _, group in pairs(store and store.guildIdentityGroups or {}) do
-        if group.characters and group.characters[key] and group.personalBanks and group.personalBanks[key] then return true end
-    end
+    local assignment = store and store.identityAssignments[key]
+    if assignment and assignment.role == "BANK" then return true end
+    if store and key and store.characters[key] ~= nil and store.personalBanks[key] == true
+        and store.confirmedCharacters[key] == true then return true end
     return false
 end
 
@@ -103,13 +178,17 @@ function Identity:SetPersonalBank(name, enabled)
         if store.main == key then
             store.main = nil
             for candidate in pairs(store.characters) do
-                if candidate ~= key then store.main = candidate; break end
+                if candidate ~= key then
+                    store.main = candidate
+                    break
+                end
             end
         end
     else
         store.personalBanks[key] = nil
     end
     self:BroadcastPersonalIdentity()
+    if store.confirmedCharacters[key] == true then refreshCurrentRoleState(name) end
     return true
 end
 
@@ -124,6 +203,7 @@ function Identity:SetMain(name)
     store.main = key
     store.personalBanks[key] = nil
     self:BroadcastPersonalIdentity()
+    if store.confirmedCharacters[key] == true then refreshCurrentRoleState(name) end
     return true
 end
 
@@ -145,18 +225,19 @@ function Identity:GetIdentityLabel(name)
     local store, key = guildStore(false), characterKey(name)
     if not store or not key then return nil end
     if store.characters[key] then
+        if store.confirmedCharacters[key] ~= true then
+            return (store.personalBanks[key] and "Pending Personal Bank Alt of " or "Pending Alt of ")
+                .. (store.characters[store.main] or "unknown")
+        end
         if store.main == key then return "Main" end
         if store.personalBanks[key] then return "Personal Bank Alt of " .. (store.characters[store.main] or "unknown") end
         return "Alt of " .. (store.characters[store.main] or "unknown")
     end
-    for _, group in pairs(store.guildIdentityGroups or {}) do
-        if group.characters and group.characters[key] then
-            if group.main == key then return "Main" end
-            if group.personalBanks and group.personalBanks[key] then
-                return "Personal Bank Alt of " .. (group.characters[group.main] or "unknown")
-            end
-            return "Alt of " .. (group.characters[group.main] or "unknown")
-        end
+    local assignment = store.identityAssignments[key]
+    if assignment then
+        if assignment.mainKey == key then return "Main" end
+        if assignment.role == "BANK" then return "Personal Bank Alt of " .. assignment.mainName end
+        return "Alt of " .. assignment.mainName
     end
 end
 
@@ -165,8 +246,14 @@ function Identity:GetLinkedCharacters(name)
     if not store or not key then return result end
     local characters = store.characters[key] and store.characters or nil
     if not characters then
-        for _, group in pairs(store.guildIdentityGroups or {}) do
-            if group.characters and group.characters[key] then characters = group.characters; break end
+        local assignment = store.identityAssignments[key]
+        if assignment then
+            characters = {}
+            for assignedKey, linked in pairs(store.identityAssignments) do
+                if linked.mainKey == assignment.mainKey then
+                    characters[assignedKey] = linked.name
+                end
+            end
         end
     end
     for _, characterName in pairs(characters or {}) do result[#result + 1] = characterName end
@@ -194,10 +281,7 @@ local function addGuildLog(store, eventType, name, text, classFile)
     record.id = eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
     log[#log + 1] = record
     store.guildLogIds[record.id] = true
-    while #log > 500 do
-        local removed = table.remove(log, 1)
-        if removed and removed.id then store.guildLogIds[removed.id] = nil end
-    end
+    trimGuildLog(store)
     if Identity.BroadcastGuildLog then Identity:BroadcastGuildLog(record) end
 end
 
@@ -239,64 +323,240 @@ function Identity:BroadcastGuildLog(record, targetName)
 end
 
 function Identity:RequestGuildHistory()
-    if not iRC:IsGuildConnectionActive() or time() - lastHistoryRequestAt < 60 then return false end
+    if not iRC:IsGuildConnectionActive()
+        or time() - lastHistoryRequestAt < HISTORY_REQUEST_COOLDOWN then
+        return false
+    end
     lastHistoryRequestAt = time()
     return iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "IDENT_REQUEST", IDENTITY_WIRE_VERSION }, "\t"), "GUILD")
+end
+
+local function linkRequestId(requester, target, mainName, role, createdAt)
+    return eventFingerprint("LINK", requester .. ">" .. target, mainName .. ">" .. role, createdAt)
+end
+
+function Identity:RequestCharacterLink(targetName, mainName, role)
+    local store = guildStore(true)
+    local requester = iRC:FormatPlayerName(iRC:GetPlayerName())
+    targetName, mainName = iRC:FormatPlayerName(targetName), iRC:FormatPlayerName(mainName)
+    if not store or characterKey(targetName) == characterKey(requester)
+        or not iRC:IsGuildMemberName(targetName) or not iRC:IsGuildMemberName(mainName) then return false end
+    role = role == "BANK" and "BANK" or (role == "REMOVE" and "REMOVE" or "ALT")
+    local createdAt, expiresAt = time(), time() + LINK_REQUEST_LIFETIME
+    local id = linkRequestId(requester, targetName, mainName, role, createdAt)
+    store.identityLinkRequests[id] = { id = id, requester = requester, target = targetName,
+        mainName = mainName, role = role, createdAt = createdAt, expiresAt = expiresAt }
+    local payload = table.concat({ "IDENT_LINK_REQUEST", IDENTITY_WIRE_VERSION, id, createdAt, expiresAt,
+        cleanWireText(requester, 80), cleanWireText(targetName, 80), cleanWireText(mainName, 80), role }, "\t")
+    return iRC:SendAddonTraffic(iRC.Prefix, payload, "GUILD")
+end
+
+function Identity:ConfirmCurrentCharacterForMain(mainName)
+    local store = guildStore(true)
+    local currentName, currentKey = iRC:FormatPlayerName(iRC:GetPlayerName()), characterKey(iRC:GetPlayerName())
+    mainName = iRC:FormatPlayerName(mainName)
+    local mainKey = characterKey(mainName)
+    if not store or not currentKey or not mainKey or not iRC:IsGuildMemberName(mainName) then return false end
+    store.characters[currentKey] = currentName
+    store.characters[mainKey] = mainName
+    store.excludedCharacters[currentKey] = nil
+    store.confirmedCharacters[currentKey] = true
+    store.main = mainKey
+    store.personalBanks[currentKey] = nil
+    return self:BroadcastPersonalIdentity()
+end
+
+function Identity:AcceptLinkRequest(request)
+    if not request or characterKey(request.target) ~= characterKey(iRC:GetPlayerName()) then return false end
+    local store = guildStore(true)
+    store.identityLinkRequests[request.id] = nil
+    if request.role == "REMOVE" then
+        local currentKey = characterKey(iRC:GetPlayerName())
+        local removed = self:BroadcastIdentityRemoval()
+        store.characters[currentKey], store.personalBanks[currentKey], store.confirmedCharacters[currentKey] = nil, nil, nil
+        store.excludedCharacters[currentKey] = true
+        return removed
+    end
+    local accepted = self:ConfirmCurrentCharacterForMain(request.mainName)
+    if accepted and request.role == "BANK" then
+        local store, currentKey = guildStore(true), characterKey(iRC:GetPlayerName())
+        store.personalBanks[currentKey] = true
+        accepted = self:BroadcastPersonalIdentity()
+        refreshCurrentRoleState(iRC:GetPlayerName())
+    end
+    return accepted
+end
+
+function Identity:DeclineLinkRequest(request)
+    if not request or characterKey(request.target) ~= characterKey(iRC:GetPlayerName()) then return false end
+    local store = guildStore(true)
+    store.identityLinkRequests[request.id] = nil
+    return iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "IDENT_LINK_DECLINE", IDENTITY_WIRE_VERSION,
+        cleanWireText(request.id, 12), cleanWireText(request.target, 80) }, "\t"), "GUILD")
+end
+
+local function showLinkRequest(request)
+    if characterKey(request.target) ~= characterKey(iRC:GetPlayerName()) then return end
+    if shownLinkRequests[request.id] then return end
+    shownLinkRequests[request.id] = true
+    if StaticPopupDialogs and StaticPopup_Show then
+        StaticPopupDialogs.IRC_IDENTITY_LINK_REQUEST = StaticPopupDialogs.IRC_IDENTITY_LINK_REQUEST or {
+            text = "%s sent this character identity request: %s. Accept?",
+            button1 = ACCEPT or "Accept", button2 = DECLINE or "Decline", timeout = 0, whileDead = true, hideOnEscape = true,
+            preferredIndex = 3,
+            OnAccept = function(_, data) Identity:AcceptLinkRequest(data) end,
+            OnCancel = function(_, data) Identity:DeclineLinkRequest(data) end,
+        }
+        local destination = request.role == "REMOVE" and ("an unlink request from " .. request.mainName)
+            or request.mainName .. (request.role == "BANK" and " as a Personal Bank Alt" or " as an Alt")
+        StaticPopup_Show("IRC_IDENTITY_LINK_REQUEST", request.requester, destination, request)
+    else
+        iRC:Print(request.requester .. " requested an Alt link to " .. request.mainName
+            .. ". Right-click that Main in Guild Members and choose Set as my Main to confirm it.")
+    end
+end
+
+function Identity:RelayPendingLinkRequests()
+    local store, now = guildStore(false), time()
+    if not store then return end
+    local kept, expiredOwnTargets = 0, {}
+    for id, request in pairs(store.identityLinkRequests) do
+        local expired = (tonumber(request.expiresAt) or 0) <= now or kept >= MAX_LINK_REQUESTS
+        if expired then
+            local targetKey = characterKey(request.target)
+            if characterKey(request.requester) == characterKey(iRC:GetPlayerName()) then expiredOwnTargets[targetKey] = true end
+            store.identityLinkRequests[id] = nil
+        else
+            kept = kept + 1
+        end
+    end
+    for targetKey in pairs(expiredOwnTargets) do
+        local stillPending = false
+        for _, request in pairs(store.identityLinkRequests) do
+            if characterKey(request.target) == targetKey then stillPending = true; break end
+        end
+        if not stillPending and store.confirmedCharacters[targetKey] ~= true then
+            store.characters[targetKey], store.personalBanks[targetKey] = nil, nil
+        end
+    end
+    -- One elected guild client performs asynchronous delivery. Every client
+    -- may cache requests, so relay ownership can safely change later.
+    if not iRC:IsRulesetBroadcaster() then return end
+    local online = {}
+    for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+        if member.online then online[characterKey(member.name)] = true end
+    end
+    for id, request in pairs(store.identityLinkRequests) do
+        if online[characterKey(request.target)] then
+            local payload = table.concat({ "IDENT_LINK_REQUEST", IDENTITY_WIRE_VERSION, id,
+                request.createdAt, request.expiresAt, cleanWireText(request.requester, 80),
+                    cleanWireText(request.target, 80), cleanWireText(request.mainName, 80), request.role or "ALT" }, "\t")
+            iRC:SendAddonTraffic(iRC.Prefix, payload, "WHISPER", request.target)
+        end
+    end
+end
+
+function Identity:BroadcastIdentityRemoval(targetName)
+    local store = guildStore(true)
+    if not store or not iRC:IsGuildConnectionActive() then return false end
+    local ownName, ownKey = iRC:FormatPlayerName(iRC:GetPlayerName()), characterKey(iRC:GetPlayerName())
+    for id, request in pairs(store.identityLinkRequests) do
+        if characterKey(request.target) == ownKey then store.identityLinkRequests[id] = nil end
+    end
+    local updatedAt = math.max(time(), (tonumber(store.identityMemberUpdatedAt[ownKey]) or 0) + 1)
+    store.identityMemberUpdatedAt[ownKey] = updatedAt
+    local payload = table.concat({ "IDENT_MEMBER", IDENTITY_WIRE_VERSION, tostring(updatedAt),
+        cleanWireText(ownName, 80), "", "REMOVE" }, "\t")
+    return iRC:SendAddonTraffic(iRC.Prefix, payload, targetName and "WHISPER" or "GUILD", targetName)
 end
 
 function Identity:BroadcastPersonalIdentity(targetName, preserveTimestamp)
     local store = guildStore(false)
     if not store or not store.main or not store.characters[store.main] or not iRC:IsGuildConnectionActive() then return false end
-    local ownKey = characterKey(iRC:GetPlayerName())
+    local ownName, ownKey = iRC:FormatPlayerName(iRC:GetPlayerName()), characterKey(iRC:GetPlayerName())
     if not store.characters[ownKey] then return false end
-    local names, banks = {}, {}
-    for key, name in pairs(store.characters) do
-        names[#names + 1] = cleanWireText(name, 80)
-        if store.personalBanks[key] then banks[#banks + 1] = cleanWireText(name, 80) end
+    if ownKey ~= store.main and not iRC:IsGuildMemberName(store.characters[store.main]) then return false end
+    for id, request in pairs(store.identityLinkRequests) do
+        if characterKey(request.target) == ownKey then store.identityLinkRequests[id] = nil end
     end
-    table.sort(names); table.sort(banks)
-    if #names > 10 then return false end
-    if not preserveTimestamp or not tonumber(store.identityUpdatedAt) then
-        store.identityUpdatedAt = math.max(time(), (tonumber(store.identityUpdatedAt) or 0) + 1)
-    end
-    local payload = table.concat({ "IDENT_GROUP", IDENTITY_WIRE_VERSION, tostring(store.identityUpdatedAt),
-        cleanWireText(store.characters[store.main], 80), table.concat(names, ","), table.concat(banks, ",") }, "\t")
+    local updatedAt = math.max(time(), (tonumber(store.identityMemberUpdatedAt[ownKey]) or 0) + 1)
+    store.identityMemberUpdatedAt[ownKey] = updatedAt
+    local role = ownKey == store.main and "MAIN" or (store.personalBanks[ownKey] and "BANK" or "ALT")
+    local payload = table.concat({ "IDENT_MEMBER", IDENTITY_WIRE_VERSION, tostring(updatedAt),
+        cleanWireText(ownName, 80), cleanWireText(store.characters[store.main], 80), role }, "\t")
     return iRC:SendAddonTraffic(iRC.Prefix, payload, targetName and "WHISPER" or "GUILD", targetName)
 end
 
 function Identity:ReceiveSync(parts, sender)
     if parts[2] ~= IDENTITY_WIRE_VERSION then return false end
     local senderRank = iRC:GetGuildMemberRankIndex(sender)
-    if parts[1] == "IDENT_GROUP" then
-        local timestamp, mainName = tonumber(parts[3]), cleanWireText(parts[4], 80)
-        local names, banks, includesSender = {}, {}, false
-        for name in tostring(parts[5] or ""):gmatch("[^,]+") do
-            name = cleanWireText(name, 80)
-            local key = characterKey(name)
-            if key and key ~= "" and iRC:IsGuildMemberName(name) then
-                names[key] = iRC:FormatPlayerName(name)
-                if key == characterKey(sender) then includesSender = true end
-            end
-        end
-        for name in tostring(parts[6] or ""):gmatch("[^,]+") do banks[characterKey(name)] = true end
-        local mainKey, now = characterKey(mainName), time()
-        if not timestamp or timestamp > now + 300 or timestamp < now - 180 * 86400 or not includesSender
-            or not mainKey or not names[mainKey] then return false end
-        for key in pairs(banks) do if not names[key] then banks[key] = nil end end
+    if parts[1] == "IDENT_MEMBER" then
+        local timestamp = tonumber(parts[3])
+        local memberName, mainName, role = cleanWireText(parts[4], 80), cleanWireText(parts[5], 80), parts[6]
+        local memberKey, mainKey, now = characterKey(memberName), characterKey(mainName), time()
+        -- The addon-message sender is the proof of ownership. No Main, officer,
+        -- or relay client may assign a different character to an identity group.
+        if senderRank == nil or memberKey ~= characterKey(sender) or not timestamp
+            or timestamp > now + 300 or timestamp < now - 180 * 86400
+            or (role ~= "MAIN" and role ~= "ALT" and role ~= "BANK" and role ~= "REMOVE")
+            or (role ~= "REMOVE" and (not mainKey or not iRC:IsGuildMemberName(mainName)))
+            or (role == "MAIN" and memberKey ~= mainKey) then return false end
         local store = guildStore(true)
-        local current = store.guildIdentityGroups[mainKey]
+        local current = store.identityAssignments[memberKey]
         if current and (tonumber(current.updatedAt) or 0) >= timestamp then return false end
-        for groupKey, group in pairs(store.guildIdentityGroups) do
-            if groupKey ~= mainKey and (tonumber(group.updatedAt) or 0) <= timestamp then
-                for key in pairs(names) do
-                    if group.characters and group.characters[key] then store.guildIdentityGroups[groupKey] = nil; break end
-                end
+        if role == "REMOVE" then
+            store.identityAssignments[memberKey] = nil
+            for id, request in pairs(store.identityLinkRequests) do
+                if characterKey(request.target) == memberKey then store.identityLinkRequests[id] = nil end
             end
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+            if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+            return true
         end
-        store.guildIdentityGroups[mainKey] = { main = mainKey, characters = names, personalBanks = banks,
-            updatedAt = math.floor(timestamp), source = iRC:FormatPlayerName(sender) }
+        store.identityAssignments[memberKey] = { name = iRC:FormatPlayerName(memberName), mainKey = mainKey,
+            mainName = iRC:FormatPlayerName(mainName), role = role, updatedAt = math.floor(timestamp),
+            source = iRC:FormatPlayerName(sender) }
+        if store.characters[memberKey] and store.main == mainKey then store.confirmedCharacters[memberKey] = true end
+        for id, request in pairs(store.identityLinkRequests) do
+            if characterKey(request.target) == memberKey then store.identityLinkRequests[id] = nil end
+        end
         if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
         if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+        return true
+    end
+    if parts[1] == "IDENT_LINK_REQUEST" then
+        local id, createdAt, expiresAt = cleanWireText(parts[3], 12), tonumber(parts[4]), tonumber(parts[5])
+        local requester, target, mainName = cleanWireText(parts[6], 80), cleanWireText(parts[7], 80), cleanWireText(parts[8], 80)
+        local role = parts[9] == "BANK" and "BANK" or (parts[9] == "REMOVE" and "REMOVE" or "ALT")
+        local now = time()
+        if id == "" or id ~= linkRequestId(requester, target, mainName, role, createdAt)
+            or not createdAt or not expiresAt or expiresAt <= now or expiresAt > createdAt + LINK_REQUEST_LIFETIME
+            or createdAt > now + 300 or not iRC:IsGuildMemberName(requester)
+            or not iRC:IsGuildMemberName(target) or not iRC:IsGuildMemberName(mainName) then return false end
+        local store = guildStore(true)
+        local requestCount = 0
+        for _ in pairs(store.identityLinkRequests) do requestCount = requestCount + 1 end
+        if not store.identityLinkRequests[id] and requestCount >= MAX_LINK_REQUESTS then return false end
+        local request = { id = id, requester = iRC:FormatPlayerName(requester), target = iRC:FormatPlayerName(target),
+            mainName = iRC:FormatPlayerName(mainName), role = role,
+            createdAt = math.floor(createdAt), expiresAt = math.floor(expiresAt) }
+        store.identityLinkRequests[id] = request
+        showLinkRequest(request)
+        return true
+    end
+    if parts[1] == "IDENT_LINK_DECLINE" then
+        local id, target = cleanWireText(parts[3], 12), cleanWireText(parts[4], 80)
+        if characterKey(sender) ~= characterKey(target) then return false end
+        local store = guildStore(true)
+        local request = store.identityLinkRequests[id]
+        local targetKey = characterKey(target)
+        if request and characterKey(request.requester) == characterKey(iRC:GetPlayerName())
+            and store.confirmedCharacters[targetKey] ~= true then
+            store.characters[targetKey], store.personalBanks[targetKey] = nil, nil
+        end
+        for requestId, pending in pairs(store.identityLinkRequests) do
+            if characterKey(pending.target) == targetKey then store.identityLinkRequests[requestId] = nil end
+        end
         return true
     end
     if parts[1] == "IDENT_REQUEST" then
@@ -304,7 +564,9 @@ function Identity:ReceiveSync(parts, sender)
         C_Timer.After(math.random() * 3, function() Identity:BroadcastPersonalIdentity(sender, true) end)
         if not iRC:IsRulesetBroadcaster() then return false end
         local records = self:GetGuildLog()
-        for index = 1, math.min(#records, 50) do
+        -- Stagger catch-up packets so opening the panel cannot create one large
+        -- burst on slower clients.
+        for index = 1, math.min(#records, MAX_SHARED_HISTORY) do
             local record = records[index]
             C_Timer.After((index - 1) * 0.10, function() Identity:BroadcastGuildLog(record, sender) end)
         end
@@ -336,10 +598,7 @@ function Identity:ReceiveSync(parts, sender)
     store.guildLog[#store.guildLog + 1] = record
     store.guildLogIds[id] = true
     table.sort(store.guildLog, function(a, b) return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0) end)
-    while #store.guildLog > 500 do
-        local removed = table.remove(store.guildLog, 1)
-        if removed and removed.id then store.guildLogIds[removed.id] = nil end
-    end
+    trimGuildLog(store)
     local key = characterKey(name)
     local history = store.memberHistory[key] or { firstSeenAt = occurredAt, rankHistory = {} }
     store.memberHistory[key] = history
@@ -516,12 +775,22 @@ frame:SetScript("OnEvent", function(_, event)
     if not C_Timer or not C_Timer.After then return end
     C_Timer.After(event == "PLAYER_LOGIN" and 5 or 1, function()
         if event == "PLAYER_LOGIN" then
-            Identity:RegisterCharacter(iRC:GetPlayerName())
+            Identity:RegisterCharacter(iRC:GetPlayerName(), nil, true)
             C_Timer.After(8, function()
                 Identity:BroadcastPersonalIdentity(nil, true)
                 Identity:RequestGuildHistory()
+                Identity:RelayPendingLinkRequests()
             end)
+        else
+            local store, currentKey = guildStore(false), characterKey(iRC:GetPlayerName())
+            if store and store.characters[currentKey] and store.confirmedCharacters[currentKey] ~= true then
+                Identity:RegisterCharacter(iRC:GetPlayerName(), nil, true)
+            end
         end
         Identity:ScanRoster()
+        if time() - lastLinkRelayAt >= 30 then
+            lastLinkRelayAt = time()
+            Identity:RelayPendingLinkRequests()
+        end
     end)
 end)

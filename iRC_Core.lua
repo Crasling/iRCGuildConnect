@@ -23,11 +23,9 @@ iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 iRC.Prefix = "iRCConnV1"
 -- Testing-only controls are restricted to these exact character/realm pairs.
 iRC.TestAdminNames = {
-    "Crasjin-Soulseeker",
     "Harani Steeleye",
     "Crasling Terot",
-    "Crasling Featherfried",
-    "Crasling Hillmont"
+    "Wandy Nimsprocket",
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -198,48 +196,71 @@ function iRC:IsPerformanceMode()
     return true
 end
 
-local incomingPerformanceQueue = {}
-local outgoingPerformanceQueue = {}
+local PERFORMANCE_QUEUE_LIMIT = 256
+local INCOMING_PACKET_SPACING = 0.05
+local OUTGOING_PACKET_SPACING = 0.08
+
+-- Head/tail queues avoid table.remove(queue, 1), which copies every remaining
+-- entry and can itself create a CPU spike when a large sync arrives.
+local incomingPerformanceQueue, incomingPerformanceHead, incomingPerformanceTail = {}, 1, 0
+local outgoingPerformanceQueue, outgoingPerformanceHead, outgoingPerformanceTail = {}, 1, 0
+
+local function queueSize(head, tail)
+    return math.max(0, tail - head + 1)
+end
+
+local function isUrgentTrafficKind(kind)
+    return kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
+        or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
+        or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
+        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS"
+end
+
 local incomingPerformanceScheduled = false
 local function drainIncomingPerformanceQueue()
-    local packet = table.remove(incomingPerformanceQueue, 1)
+    local packet = incomingPerformanceQueue[incomingPerformanceHead]
+    incomingPerformanceQueue[incomingPerformanceHead] = nil
+    incomingPerformanceHead = incomingPerformanceHead + 1
     if packet and packet.guildKey == iRC:GetGuildKey() then
         local ok, err = pcall(packet.callback)
         if not ok and geterrorhandler then geterrorhandler()(err) end
     elseif packet and iRC.Diagnostics then
         iRC.Diagnostics:Trace("QUEUE_DROP", "stale incoming", packet.kind or "other")
     end
-    if #incomingPerformanceQueue > 0 then
-        C_Timer.After(0.05, drainIncomingPerformanceQueue)
+    if incomingPerformanceHead <= incomingPerformanceTail then
+        C_Timer.After(INCOMING_PACKET_SPACING, drainIncomingPerformanceQueue)
     else
+        incomingPerformanceQueue, incomingPerformanceHead, incomingPerformanceTail = {}, 1, 0
         incomingPerformanceScheduled = false
     end
 end
 
 function iRC:GetPerformanceQueueStatus()
-    return { incoming = #incomingPerformanceQueue, outgoing = #outgoingPerformanceQueue }
+    return {
+        incoming = queueSize(incomingPerformanceHead, incomingPerformanceTail),
+        outgoing = queueSize(outgoingPerformanceHead, outgoingPerformanceTail),
+    }
 end
 
 function iRC:QueuePerformanceIncoming(message, callback)
     if not self:IsPerformanceMode() or not C_Timer or not C_Timer.After then return false end
     local kind = type(message) == "string" and message:match("^([A-Z][A-Z0-9_]*)") or ""
-    if kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
-        or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
-        or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
-        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS" then return false end
-    if #incomingPerformanceQueue >= 256 then
-        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "incoming", kind, #incomingPerformanceQueue) end
+    if isUrgentTrafficKind(kind) then return false end
+    local queued = queueSize(incomingPerformanceHead, incomingPerformanceTail)
+    if queued >= PERFORMANCE_QUEUE_LIMIT then
+        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "incoming", kind, queued) end
         -- The packet was deliberately handled by dropping it. Returning false
         -- would make the caller process it synchronously and defeat throttling.
         return true
     end
-    incomingPerformanceQueue[#incomingPerformanceQueue + 1] = {
+    incomingPerformanceTail = incomingPerformanceTail + 1
+    incomingPerformanceQueue[incomingPerformanceTail] = {
         callback = callback, guildKey = self:GetGuildKey(), kind = kind,
     }
-    if self.Diagnostics then self.Diagnostics:Trace("QUEUE_IN", kind, #message, #incomingPerformanceQueue) end
+    if self.Diagnostics then self.Diagnostics:Trace("QUEUE_IN", kind, #message, queued + 1) end
     if not incomingPerformanceScheduled then
         incomingPerformanceScheduled = true
-        C_Timer.After(0.05, drainIncomingPerformanceQueue)
+        C_Timer.After(INCOMING_PACKET_SPACING, drainIncomingPerformanceQueue)
     end
     return true
 end
@@ -254,7 +275,9 @@ local function sendAddonTrafficNow(prefix, message, distribution, target)
 end
 
 local function drainOutgoingPerformanceQueue()
-    local packet = table.remove(outgoingPerformanceQueue, 1)
+    local packet = outgoingPerformanceQueue[outgoingPerformanceHead]
+    outgoingPerformanceQueue[outgoingPerformanceHead] = nil
+    outgoingPerformanceHead = outgoingPerformanceHead + 1
     if packet then
         local ok, err = true, nil
         if type(packet) == "function" then ok, err = pcall(packet)
@@ -265,9 +288,10 @@ local function drainOutgoingPerformanceQueue()
         end
         if not ok and geterrorhandler then geterrorhandler()(err) end
     end
-    if #outgoingPerformanceQueue > 0 then
-        C_Timer.After(0.08, drainOutgoingPerformanceQueue)
+    if outgoingPerformanceHead <= outgoingPerformanceTail then
+        C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
     else
+        outgoingPerformanceQueue, outgoingPerformanceHead, outgoingPerformanceTail = {}, 1, 0
         outgoingPerformanceScheduled = false
     end
 end
@@ -289,23 +313,22 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         return true
     end
     local kind = message:match("^([A-Z][A-Z0-9_]*)") or ""
-    local urgent = kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
-        or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
-        or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
-        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS"
+    local urgent = isUrgentTrafficKind(kind)
     if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After then
-        if #outgoingPerformanceQueue >= 256 then
-            if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "outgoing", prefix, kind, #outgoingPerformanceQueue) end
+        local queued = queueSize(outgoingPerformanceHead, outgoingPerformanceTail)
+        if queued >= PERFORMANCE_QUEUE_LIMIT then
+            if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "outgoing", prefix, kind, queued) end
             return false
         end
-        outgoingPerformanceQueue[#outgoingPerformanceQueue + 1] = {
+        outgoingPerformanceTail = outgoingPerformanceTail + 1
+        outgoingPerformanceQueue[outgoingPerformanceTail] = {
             prefix = prefix, message = message, distribution = distribution, target = target,
             guildKey = guildKey, kind = kind,
         }
-        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, #outgoingPerformanceQueue) end
+        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, queued + 1) end
         if not outgoingPerformanceScheduled then
             outgoingPerformanceScheduled = true
-            C_Timer.After(0.08, drainOutgoingPerformanceQueue)
+            C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
         end
         return true
     end
@@ -492,7 +515,7 @@ local DEFAULT_SETTINGS = {
     showTrafficMonitorForTesting = false,
     showFunctionProfilerForTesting = false,
     showOfficerSettingsForTesting = false,
-    showAttentionReminders = false,
+    showAttentionReminders = true,
     showGuildMap = true,
     guildMapPinSize = 8,
     shareGuildMapPosition = true,
@@ -566,12 +589,17 @@ iRC.DefaultGuildFoundTradeExceptions = {
     warlockSummons = false, magePortals = false,
 }
 
+local LOCKPICK_ITEMS = { 16882, 16883, 16884, 16885, 4632, 4633, 4634, 4636, 4637, 4638, 5758, 5759, 5760, 6354, 6355, 6712, 12033, 13875, 13918 }
 iRC.GuildFoundTradeExceptionItems = {
     conjured = { 5350, 2288, 2136, 3772, 8077, 8078, 8079, 5349, 1113, 1114, 1487, 8075, 8076, 22895 },
     healthstones = { 5512, 19004, 19005, 5511, 19006, 19007, 5509, 19008, 19009, 5510, 19010, 19011, 9421, 19012, 19013 },
     questItems = { 7740, 7741 },
-    lockboxes = { 16882, 16883, 16884, 16885, 4632, 4633, 4634, 4636, 4637, 4638, 5758, 5759, 5760, 6354, 6355, 6712, 12033, 13875, 13918 },
+    lockpickOutgoing = LOCKPICK_ITEMS,
+    lockpickIncoming = LOCKPICK_ITEMS,
 }
+-- Both directions offer the same item catalogue, but keep independent
+-- selections because giving a lockbox to a rogue and returning it are
+-- different trade permissions.
 
 iRC.GuildFoundTradeExceptionItemNames = {
     [5350] = "Conjured Water", [2288] = "Conjured Fresh Water", [2136] = "Conjured Purified Water",
@@ -706,6 +734,20 @@ end
 
 function iRC:SupportsTBCPlayableRaces()
     return self:IsForeverClient() or (tonumber(self.GameTocVersion) or 0) >= 20000
+end
+
+-- Native iRC replies and supported compatibility replies both prove that a
+-- member currently has a working addon. UI code should not have to duplicate
+-- this distinction every time it evaluates a verification state.
+function iRC:IsLiveAddonState(state)
+    return state == "verified" or state == "compatible"
+end
+
+function iRC:IsAttentionVerificationState(state)
+    return not self:IsLiveAddonState(state)
+        and state ~= "offline"
+        and state ~= "inactive"
+        and state ~= "optional"
 end
 
 function iRC:GetSelfFoundState()
@@ -1000,12 +1042,23 @@ function iRC:GetConnection()
         connection.activationTimestamp = math.max(0, math.floor(tonumber(connection.activationTimestamp) or 0))
     end
     connection.activationSource = tostring(connection.activationSource or connection.rulesTimestampSource or "")
-    connection.guildNotifications = connection.guildNotifications or { welcomeNewMembers = false }
+    connection.guildNotifications = connection.guildNotifications or {
+        welcomeNewMembers = false,
+        enableOfficerWarnings = true,
+        enableWhisperWarnings = false,
+        enableGuildWarnings = false,
+    }
     if connection.guildNotifications.welcomeNewMembers == nil then
         connection.guildNotifications.welcomeNewMembers = false
     end
-    for _, key in ipairs({ "disableOfficerWarnings", "disableWhisperWarnings", "disableGuildWarnings" }) do
-        if connection.guildNotifications[key] == nil then connection.guildNotifications[key] = false end
+    if connection.guildNotifications.enableOfficerWarnings == nil then
+        connection.guildNotifications.enableOfficerWarnings = true
+    end
+    if connection.guildNotifications.enableWhisperWarnings == nil then
+        connection.guildNotifications.enableWhisperWarnings = false
+    end
+    if connection.guildNotifications.enableGuildWarnings == nil then
+        connection.guildNotifications.enableGuildWarnings = false
     end
     connection.guildFoundTradeExceptionSettings = connection.guildFoundTradeExceptionSettings or {}
     for key, value in pairs(self.DefaultGuildFoundTradeExceptions) do
@@ -1014,8 +1067,9 @@ function iRC:GetConnection()
         end
     end
     connection.guildFoundTradeExceptionSettings.items = connection.guildFoundTradeExceptionSettings.items or {}
+    local exceptionItems = connection.guildFoundTradeExceptionSettings.items
     for category in pairs(self.GuildFoundTradeExceptionItems) do
-        connection.guildFoundTradeExceptionSettings.items[category] = connection.guildFoundTradeExceptionSettings.items[category] or {}
+        exceptionItems[category] = exceptionItems[category] or {}
     end
     connection.guildContactDetails = connection.guildContactDetails or {}
     connection.guildContactsTimestamp = tonumber(connection.guildContactsTimestamp) or 0
@@ -1503,10 +1557,10 @@ function iRC:IsNewMemberWelcomeEnabled()
         and connection.guildNotifications.welcomeNewMembers == true or false
 end
 
-function iRC:IsAutomaticWarningDisabled(channel)
+function iRC:IsAutomaticWarningEnabled(channel)
     local connection = self:GetConnection()
     local settings = connection and connection.guildNotifications
-    local key = ({ OFFICER = "disableOfficerWarnings", WHISPER = "disableWhisperWarnings", GUILD = "disableGuildWarnings" })[channel]
+    local key = ({ OFFICER = "enableOfficerWarnings", WHISPER = "enableWhisperWarnings", GUILD = "enableGuildWarnings" })[channel]
     return key and settings and settings[key] == true or false
 end
 
@@ -1661,9 +1715,6 @@ function iRC:SetProgressionMode(mode)
     end
     if not connection.rules.guildFoundOnly and not connection.rules.level60GuildFound then
         connection.rules.guildFoundTradeExceptions = false
-    end
-    if mode == "SELF_FOUND" or mode == "GUILD_FOUND" or mode == "SELF_FOUND_OR_GUILD_FOUND" then
-        self:GetSettings().showAttentionReminders = false
     end
     if self.InvalidateGuildMemberRows then self:InvalidateGuildMemberRows() end
     self:StampConnectionRules(connection)

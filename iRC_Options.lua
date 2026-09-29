@@ -1266,8 +1266,8 @@ local function GetActiveTradeExceptionGroups()
         { setting = "conjured", items = "conjured", label = L.GUILD_FOUND_EXCEPTION_CONJURED },
         { setting = "healthstones", items = "healthstones", label = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES },
         { setting = "questItems", items = "questItems", label = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS },
-        { setting = "lockpickOutgoing", items = "lockboxes", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT },
-        { setting = "lockpickIncoming", items = "lockboxes", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN },
+        { setting = "lockpickOutgoing", items = "lockpickOutgoing", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT },
+        { setting = "lockpickIncoming", items = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN },
     }
     local groups = {}
     for _, definition in ipairs(definitions) do
@@ -1879,9 +1879,9 @@ do
             description = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES_DESC },
         { key = "questItems", setting = "questItems", label = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS,
             description = L.GUILD_FOUND_EXCEPTION_QUEST_ITEMS_DESC },
-        { key = "lockboxes", setting = "lockpickOutgoing", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT,
+        { key = "lockpickOutgoing", setting = "lockpickOutgoing", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT,
             description = L.GUILD_FOUND_EXCEPTION_LOCKPICK_OUT_DESC },
-        { key = "lockboxes", setting = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN,
+        { key = "lockpickIncoming", setting = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN,
             description = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN_DESC },
     }
     for _, category in ipairs(categories) do
@@ -1904,7 +1904,12 @@ do
         header.syncBadge:SetPoint("LEFT", header, "LEFT", 4, 0)
         header.check:SetPoint("LEFT", header, "LEFT", 43, 0)
         header.check:SetScript("OnClick", function(self)
-            iRC:SetGuildFoundTradeException(categorySetting, self:GetChecked() and true or false)
+            if not iRC:SetGuildFoundTradeException(categorySetting, self:GetChecked() == true) then
+                -- The click can be rejected if permissions or the parent rule
+                -- changed while this panel was open. Restore saved state.
+                self:SetChecked(iRC:GetGuildFoundTradeExceptionSettings()[categorySetting] == true)
+            end
+            refreshGuildFoundTradeItemList()
         end)
         header.check.Refresh = function()
             header.check:SetChecked(iRC:GetGuildFoundTradeExceptionSettings()[categorySetting] == true)
@@ -1943,7 +1948,13 @@ do
             checkbox.rowBackground:SetSize(395, 22)
             checkbox.rowBackground:SetColorTexture(0.08, 0.07, 0.055, 0.48)
             checkbox:SetScript("OnClick", function(self)
-                iRC:SetGuildFoundTradeExceptionItem(itemCategoryKey, selectedItemId, self:GetChecked() and true or false)
+                if not iRC:SetGuildFoundTradeExceptionItem(itemCategoryKey, selectedItemId, self:GetChecked() == true) then
+                    local settings = iRC:GetGuildFoundTradeExceptionSettings()
+                    local selected = settings.items and settings.items[itemCategoryKey]
+                        and settings.items[itemCategoryKey][selectedItemId] == true
+                    self:SetChecked(selected)
+                end
+                refreshGuildFoundTradeItemList()
             end)
             checkbox:SetScript("OnEnter", function(self)
                 if GameTooltip then GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetItemByID(selectedItemId); GameTooltip:Show() end
@@ -1961,6 +1972,9 @@ do
         for _, category in ipairs(categories) do
             local categoryEnabled = settings[category.setting] == true
                 or (category.secondarySetting and settings[category.secondarySetting] == true)
+            category.header.check:SetChecked(categoryEnabled)
+            category.header.check:SetEnabled(canEdit and true or false)
+            category.header.check:SetAlpha(canEdit and 1 or 0.45)
             local selectedCount = 0
             for _, item in ipairs(category.items) do
                 if settings.items and settings.items[category.key] and settings.items[category.key][item.id] then
@@ -2040,12 +2054,14 @@ do
         function(value) iRC:SetNewMemberWelcomeEnabled(value) end, true)
     automaticWarningChecks = {}
     for _, entry in ipairs({
-        { "OFFICER", L.DISABLE_OFFICER_WARNINGS }, { "WHISPER", L.DISABLE_WHISPER_WARNINGS }, { "GUILD", L.DISABLE_GUILD_WARNINGS },
+        { "OFFICER", L.ENABLE_OFFICER_WARNINGS, L.ENABLE_OFFICER_WARNINGS_DESC },
+        { "WHISPER", L.ENABLE_WHISPER_WARNINGS, L.ENABLE_WHISPER_WARNINGS_DESC },
+        { "GUILD", L.ENABLE_GUILD_WARNINGS, L.ENABLE_GUILD_WARNINGS_DESC },
     }) do
         local channel = entry[1]
-        automaticWarningChecks[channel], notificationY = CreateCompactManagementToggle(notificationCard, entry[2], L.DISABLE_AUTOMATIC_WARNINGS_DESC, notificationY,
-            function() return iRC:IsAutomaticWarningDisabled(channel) end,
-            function(value) iRC:SetAutomaticWarningDisabled(channel, value) end, true)
+        automaticWarningChecks[channel], notificationY = CreateCompactManagementToggle(notificationCard, entry[2], entry[3], notificationY,
+            function() return iRC:IsAutomaticWarningEnabled(channel) end,
+            function(value) iRC:SetAutomaticWarningEnabled(channel, value) end, true)
     end
     showAttentionRemindersCheck, notificationY = CreateCompactManagementToggle(notificationCard,
         L.SHOW_ATTENTION_REMINDERS_OPTION, L.SHOW_ATTENTION_REMINDERS_OPTION_DESC, notificationY,
@@ -2299,6 +2315,21 @@ local function Refresh()
     end
     RefreshGeneralNotificationAndAdminOptions()
     local connection = iRC:GetConnection()
+    local guildActive = connection and iRC:IsGuildConnectionActive()
+    local guildFoundRules = iRC:GetConnectionRules()
+    local protectionActive = guildActive and iRC:IsGuildFoundRequired(connection)
+    local exceptionsEnabled = protectionActive and guildFoundRules.guildFoundTradeExceptions == true
+    local managementAvailableForGuildFound = guildActive and iRC:HasGuildPermission("tradeExceptions")
+    local function guildFoundStatusText(labelKey, enabled, enabledKey, disabledKey)
+        local color = enabled and iRC.Colors.Green or iRC.Colors.Gray
+        return iRC:Text(labelKey, color .. iRC:Text(enabled and enabledKey or disabledKey) .. iRC.Colors.Reset)
+    end
+    guildFoundStatus.protection:SetText(guildFoundStatusText("GUILDFOUND_STATUS_PROTECTION",
+        protectionActive, "GUILDFOUND_STATUS_ACTIVE", "GUILDFOUND_STATUS_INACTIVE"))
+    guildFoundStatus.exceptions:SetText(guildFoundStatusText("GUILDFOUND_STATUS_EXCEPTIONS",
+        exceptionsEnabled, "GUILDFOUND_STATUS_ENABLED", "GUILDFOUND_STATUS_DISABLED"))
+    guildFoundStatus.access:SetText(guildFoundStatusText("GUILDFOUND_STATUS_ACCESS",
+        managementAvailableForGuildFound, "GUILDFOUND_STATUS_AVAILABLE", "GUILDFOUND_STATUS_READ_ONLY"))
     if connection then
         if iRC:IsGuildConnectionActive() then
             connectionStatus:SetText(iRC.Colors.Green .. "Connected" .. iRC.Colors.Reset)
@@ -2322,6 +2353,7 @@ local function Refresh()
     progressionModeDropdown:Refresh()
     maxLevelProgressionDropdown:Refresh()
     guildFoundTradeExceptionsCheck:Refresh()
+    if refreshGuildFoundTradeItemList then refreshGuildFoundTradeItemList() end
     guildMapRuleCheck:Refresh()
     raceRuleUI.level60Message:Refresh()
     raceRuleUI.deathMessage:Refresh()
@@ -2335,7 +2367,6 @@ local function Refresh()
     guildGroupsLevelSlider:SetValue(iRC:GetConnectionRules().guildGroupsMinimumLevel or 1)
     refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
-    local guildActive = connection and iRC:IsGuildConnectionActive()
     local canEditHomepage = guildActive and iRC:HasGuildPermission("homepage")
     homepageDescriptionUI.edit:SetEnabled(canEditHomepage and true or false)
     homepageDescriptionUI.save:SetEnabled(canEditHomepage and true or false)

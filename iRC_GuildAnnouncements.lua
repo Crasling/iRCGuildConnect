@@ -23,7 +23,31 @@ Announcements.Icons = {
     violation = "Interface\\AddOns\\iRC\\Images\\Icons\\X_Icon.blp",
 }
 
+-- Only one earned badge is placed before a normal chat message. Safety states
+-- take priority over cosmetic or rank badges.
+local DEFAULT_ICON_PRIORITY = {
+    "death", "violation", "creator", "guildMaster",
+    "officer1", "selfFound", "guildFound",
+}
+
 local rosterReference, rosterGuildKey, rosterRanks = nil, nil, {}
+
+-- Death is a Hardcore identity state, not a general "currently unable to act"
+-- state. Keeping this check in one place prevents ordinary realm deaths from
+-- leaking into chat badges through local, guild, or public profile data.
+local function isHardcoreDeathProfile(profile)
+    return iRC:IsOfficialHardcoreRealm()
+        and type(profile) == "table"
+        and type(profile.guid) == "string"
+        and profile.guid ~= ""
+        and profile.deadGuid == profile.guid
+end
+
+local function sanitizePublicIconKind(kind, name)
+    if kind == "death" and not iRC:IsOfficialHardcoreRealm() then return "none" end
+    if kind == "creator" and not iRC:IsTestAdminName(name) then return "none" end
+    return kind
+end
 
 local function publicNameKey(name)
     if type(name) ~= "string" or name == "" then return nil end
@@ -61,10 +85,7 @@ function Announcements:GetUnlockedIcons(name)
     local rank = getRosterRank(name)
     local connection = rank ~= nil and iRC:GetConnection() or nil
     local profile = isSelf and iRC:GetLocalProfile() or connection and connection.members and connection.members[key]
-    if iRC:IsOfficialHardcoreRealm() and profile and type(profile.guid) == "string"
-        and profile.guid ~= "" and profile.deadGuid == profile.guid then
-        unlocked.death = true
-    end
+    if isHardcoreDeathProfile(profile) then unlocked.death = true end
     if rank == nil then
         if isSelf and iRCCharDB and iRCCharDB.hideChatIcon == true and not unlocked.death then return {} end
         return unlocked
@@ -127,13 +148,9 @@ end
 
 function Announcements:GetDefaultChatIcon(name)
     local unlocked = self:GetUnlockedIcons(name)
-    if unlocked.death then return self.Icons.death, "death" end
-    if unlocked.violation then return self.Icons.violation, "violation" end
-    if unlocked.creator then return self.Icons.creator, "creator" end
-    if unlocked.guildMaster then return self.Icons.guildMaster, "guildMaster" end
-    if unlocked.officer1 then return self.Icons.officer1, "officer1" end
-    if unlocked.selfFound then return self.Icons.selfFound, "selfFound" end
-    if unlocked.guildFound then return self.Icons.guildFound, "guildFound" end
+    for _, kind in ipairs(DEFAULT_ICON_PRIORITY) do
+        if unlocked[kind] then return self.Icons[kind], kind end
+    end
 end
 
 local function sendIconWire(message, target)
@@ -195,15 +212,12 @@ function Announcements:GetPublicChatIcon(name)
     local key = publicNameKey(name)
     local entry = key and publicIcons[key]
     if entry and entry.expiresAt > time() then
-        if entry.kind == "death" and not iRC:IsOfficialHardcoreRealm() then
+        local kind = sanitizePublicIconKind(entry.kind, name)
+        if kind == "none" then
             publicIcons[key] = nil
             return nil
         end
-        if entry.kind == "creator" and not iRC:IsTestAdminName(name) then
-            publicIcons[key] = nil
-            return nil
-        end
-        return self.Icons[entry.kind], entry.kind
+        return self.Icons[kind], kind
     end
     requestPublicIcon(name)
 end
@@ -222,9 +236,9 @@ function Announcements:ReceiveIconWire(message, distribution, sender)
         sendIconWire("ICON_STATUS\t" .. ICON_WIRE_VERSION .. "\t" .. (ownKind or "none"), sender)
     elseif kind == "ICON_STATUS" and pendingRequests[key] and pendingRequests[key] > time() then
         if value ~= "none" and not self.Icons[value] then return end
-        if value == "death" and not iRC:IsOfficialHardcoreRealm() then value = "none" end
-        -- The sender controls its packet, but not this client's admin list.
-        if value == "creator" and not iRC:IsTestAdminName(sender) then return end
+        -- Remote clients may claim an icon, but this client decides whether
+        -- that claim is valid for the sender and the current realm.
+        value = sanitizePublicIconKind(value, sender)
         pendingRequests[key] = nil
         publicIcons[key] = { kind = value, expiresAt = time() + PUBLIC_ICON_TTL }
     end
@@ -346,6 +360,7 @@ frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 local deathStateSharePending = false
 local function shareCurrentDeathState()
+    if not iRC:IsOfficialHardcoreRealm() then return end
     if deathStateSharePending then return end
     local function sendProfile()
         deathStateSharePending = false

@@ -329,7 +329,7 @@ local externalReady = false
 function RaceGrid:GetRosterParticipation(member)
     if iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName()) then return "verified" end
     local state = member.verification and member.verification.state
-    if state == "verified" or state == "compatible" then return state end
+    if iRC:IsLiveAddonState(state) then return state end
 end
 
 function RaceGrid:BuildOwnGuildReports()
@@ -626,27 +626,36 @@ local reportWorkScheduled, reportWorkDirty = false, false
 local REPORT_WORK_SPACING = 0.2
 local MAX_REPORT_WORK = 64
 local handleMessage
-local cacheChunkWorkQueue = {}
+local cacheChunkWorkQueue, cacheChunkWorkHead, cacheChunkWorkTail = {}, 1, 0
 local cacheChunkWorkScheduled = false
 local MAX_CACHE_CHUNK_WORK = MAX_CACHE_PACKAGES * MAX_CACHE_PARTS
 
+local function cacheChunkQueueSize()
+    return math.max(0, cacheChunkWorkTail - cacheChunkWorkHead + 1)
+end
+
 local function processNextCacheChunks()
     for _ = 1, 2 do
-        local work = table.remove(cacheChunkWorkQueue, 1)
+        local work = cacheChunkWorkQueue[cacheChunkWorkHead]
         if not work then break end
+        cacheChunkWorkQueue[cacheChunkWorkHead] = nil
+        cacheChunkWorkHead = cacheChunkWorkHead + 1
         local ok, err = pcall(handleMessage, work.prefix, work.message, work.sender, work.distribution, true)
         if not ok and geterrorhandler then geterrorhandler()(err) end
     end
     cacheChunkWorkScheduled = false
-    if #cacheChunkWorkQueue > 0 then
+    if cacheChunkWorkHead <= cacheChunkWorkTail then
         cacheChunkWorkScheduled = true
         C_Timer.After(0.03, processNextCacheChunks)
+    else
+        cacheChunkWorkQueue, cacheChunkWorkHead, cacheChunkWorkTail = {}, 1, 0
     end
 end
 
 local function queueCacheChunk(prefix, message, sender, distribution)
-    if #cacheChunkWorkQueue >= MAX_CACHE_CHUNK_WORK then return end
-    cacheChunkWorkQueue[#cacheChunkWorkQueue + 1] = {
+    if cacheChunkQueueSize() >= MAX_CACHE_CHUNK_WORK then return end
+    cacheChunkWorkTail = cacheChunkWorkTail + 1
+    cacheChunkWorkQueue[cacheChunkWorkTail] = {
         prefix = prefix, message = message, sender = sender, distribution = distribution,
     }
     if not cacheChunkWorkScheduled then
@@ -723,6 +732,7 @@ function RaceGrid:ClearCachedReportsForTesting()
     wipe(reportWorkByKey)
     reportWorkDirty = false
     wipe(cacheChunkWorkQueue)
+    cacheChunkWorkHead, cacheChunkWorkTail = 1, 0
     wipe(incomingChunks)
     wipe(incomingCacheTransfers)
     wipe(cacheRequests)

@@ -2,6 +2,26 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.9 - Performance, Guild Found & Character Links
+--------------------------------------------------------------------------------
+[IMPORTANT] Character links, notification settings, and directional lockpicking selections require iRC 0.5.9 on participating clients
+[ADDED] Guild Members and Verification can search by any linked Main, Alt, or Personal Bank name and show the complete linked group
+[ADDED] Guild Members display clear Main, Alt, Pending Alt, and Personal Bank tags
+[ADDED] Guild-visible character links now require confirmation from the linked character; same-account characters confirm on login when both are in the same guild, while separate accounts can approve a relayed request or use Set as my Main
+[CHANGED] Automatic warning options now use direct Enable controls and clearly explain what is sent through Officer Chat, whispers, and Guild Chat
+[CHANGED] New configurations enable Needs Attention reminders and Officer Chat warnings by default; welcomes, warning whispers, and Guild Chat warnings remain disabled
+[CHANGED] Incoming and outgoing lockpicking exceptions have separate item selections because they control opposite sides of a trade
+[CHANGED] Confirmed Personal Bank Alts enter Guild-Found immediately instead of requiring Self-Found progression, while retaining Guild-Found money auditing
+[CHANGED] Non-Hardcore clients no longer send unnecessary profile updates for ordinary deaths and resurrections
+[FIX] Character links have one authoritative Main and can no longer overlap or be reassigned by another player
+[FIX] Removing an Alt remains effective after login and synchronizes only after that character confirms the unlink
+[FIX] Guilds that transition from Self-Found to Guild-Found at level 60 are labeled, colored, and filtered as Guild-Found on the Guild Leaderboard
+[FIX] Non-guild exception categories and item selections refresh correctly and clear their hidden selections when disabled
+[FIX] Guild Found status panels correctly show protection, exception, and management-access states
+[FIX] Reloading an unverified Guild-Found character no longer reports a blocked trade from a hidden stale trade recipient
+[FIX] Large incoming, outgoing, and cached-report queues avoid repeated packet-list copying while traffic is throttled
+[FIX] Hardcore death chat icons use the same official-realm and current-death checks for local, guild, and public chat
+
 v0.5.8 - Hardcore Chat Icon Fix
 --------------------------------------------------------------------------------
 [FIX] The Dead chat icon is now limited to dead or ghost characters on official Hardcore realms
@@ -87,7 +107,7 @@ v0.5.2 - Forever Self-Found Hotfix
 [FIX] Self-Found detection no longer accesses protected aura lists on WoW Forever, preventing aura taint errors during combat
 [FIX] iRC remembers the last safely detected Self-Found state while aura information is protected, avoiding false rule warnings and history changes
 
-v0.5.1 - WoW Forever 
+v0.5.1 - WoW Forever
 --------------------------------------------------------------------------------
 [IMPORTANT] iRC now targets WoW Forever build 16001 only. Public guild reports use the new iRCCommsV1 channel and report format, so older iRC releases cannot exchange Leaderboard data with 0.5.1
 [CHANGED] Character names support Forever's Firstname Lastname format, including the hyphenated form used by chat and addon messages, without relying on realms
