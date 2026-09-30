@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.10 - Leaderboard Filters
+--------------------------------------------------------------------------------
+[ADDED] When OlympusMute is loaded, guilds containing Olympus are automatically hidden from the Guild Leaderboard and their public or cached reports are ignored
+[PERFORMANCE] Bursts of Guild roster updates are combined into one delayed roster, identity, map, presence, and UI refresh
+[PERFORMANCE] Cached Guild Leaderboard offers and Guild Log catch-up records use shared bounded workers instead of creating a timer for every guild or record
+[PERFORMANCE] Guild activity history stores hourly peaks instead of hundreds of individual samples per guild while preserving the 24-hour online peak
+[PERFORMANCE] Leaderboard report work uses a constant-time queue, unchanged local reports skip their periodic rebuild, and the permanent five-times-per-second mail poll has been removed
+
 v0.5.9 - Performance, Guild Found & Character Links
 --------------------------------------------------------------------------------
 [IMPORTANT] Character links, notification settings, and directional lockpicking selections require iRC 0.5.9 on participating clients

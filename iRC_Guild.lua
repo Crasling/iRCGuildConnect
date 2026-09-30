@@ -16,6 +16,7 @@ local sessionStartedAt = time()
 local guildRosterSnapshot, guildRosterSnapshotValid = {}, false
 local memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries
 local memberRowsDirty = {}
+local rosterUpdateTicket
 
 function iRC:InvalidateGuildMemberRows()
     memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries = nil, nil, nil, nil, nil
@@ -675,12 +676,21 @@ frame:SetScript("OnEvent", function(_, event)
         end
     elseif event == "GUILD_ROSTER_UPDATE" then
         iRC:InvalidateGuildRosterSnapshot()
-        if iRC.GuildMap then iRC.GuildMap:Cleanup() end
-        iRC:CheckGuildRosterForNewMembers()
-        if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
-        if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
-        if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then
-            iRC.MainUI:RefreshIfShown()
+        local ticket = {}
+        rosterUpdateTicket = ticket
+        local function processRosterUpdate()
+            if rosterUpdateTicket ~= ticket then return end
+            rosterUpdateTicket = nil
+            if iRC.GuildMap then iRC.GuildMap:Cleanup() end
+            iRC:CheckGuildRosterForNewMembers()
+            if iRC.RaceGrid and iRC.RaceGrid.MarkLocalReportDirty then iRC.RaceGrid:MarkLocalReportDirty() end
+            if iRC.Identity and iRC.Identity.HandleRosterUpdate then iRC.Identity:HandleRosterUpdate() end
+            if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
+            if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+            if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then
+                iRC.MainUI:RefreshIfShown()
+            end
         end
+        if C_Timer and C_Timer.After then C_Timer.After(0.75, processRosterUpdate) else processRosterUpdate() end
     end
 end)

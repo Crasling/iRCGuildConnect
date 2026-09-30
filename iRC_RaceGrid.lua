@@ -122,6 +122,19 @@ local function normalizeGuildName(name)
     return string.lower((tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")))
 end
 
+local function isOlympusMuteAddonLoaded()
+    if not C_AddOns or not C_AddOns.IsAddOnLoaded then return false end
+    -- OlympusMute is the published addon name. Keep the development aliases
+    -- accepted as well; the lookup is repeated so either addon may load later.
+    return C_AddOns.IsAddOnLoaded("OlympusMute") == true
+        or C_AddOns.IsAddOnLoaded("olumpysmuteaddon") == true
+        or C_AddOns.IsAddOnLoaded("OlympusMuteAddon") == true
+end
+
+local function isMutedOlympusGuild(guildName)
+    return isOlympusMuteAddonLoaded() and normalizeGuildName(guildName):find("olympus", 1, true) ~= nil
+end
+
 local function payloadChecksum(value)
     local first, second = 1, 0
     for index = 1, #value do
@@ -164,22 +177,36 @@ local function recordGuildActivity(guildName, onlinePlayers)
         samples = {}
         activity[key] = samples
     end
-    local retained = {}
+    local retained, bucketIndex = {}, {}
+    local cutoff = now - 86400
     for _, sample in ipairs(samples) do
-        if type(sample) == "table" and (tonumber(sample.timestamp) or 0) >= now - 86400 then
-            retained[#retained + 1] = sample
+        local timestamp = type(sample) == "table" and tonumber(sample.timestamp) or 0
+        if timestamp >= cutoff then
+            local bucket = math.floor(timestamp / 3600) * 3600
+            local existing = bucketIndex[bucket]
+            if existing then
+                existing.players = math.max(tonumber(existing.players) or 0, tonumber(sample.players) or 0)
+                existing.timestamp = math.max(tonumber(existing.timestamp) or 0, timestamp)
+            else
+                existing = { timestamp = timestamp, players = math.max(0, math.floor(tonumber(sample.players) or 0)) }
+                retained[#retained + 1] = existing
+                bucketIndex[bucket] = existing
+            end
         end
     end
     samples = retained
     activity[key] = samples
     local current = math.max(0, math.floor(tonumber(onlinePlayers) or 0))
-    local latest = samples[#samples]
-    if latest and latest.players == current then
+    local currentBucket = math.floor(now / 3600) * 3600
+    local latest = bucketIndex[currentBucket]
+    if latest then
+        latest.players = math.max(tonumber(latest.players) or 0, current)
         latest.timestamp = now
     else
-        samples[#samples + 1] = { timestamp = now, players = current }
+        latest = { timestamp = now, players = current }
+        samples[#samples + 1] = latest
     end
-    local peak = current
+    local peak = 0
     for _, sample in ipairs(samples) do peak = math.max(peak, tonumber(sample.players) or 0) end
     return peak
 end
@@ -293,6 +320,7 @@ end
 
 function RaceGrid:StoreGuildReport(report, silent)
     if type(report) ~= "table" or type(report.guildName) ~= "string" or report.guildName == "" then return false end
+    if isMutedOlympusGuild(report.guildName) then return false end
     if iRC:IsLowTrafficMode() then return false end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.race = normalizeRaceToken(report.race)
@@ -323,6 +351,11 @@ function RaceGrid:StoreGuildReport(report, silent)
 end
 
 local externalReady = false
+local localReportDirty = true
+
+function RaceGrid:MarkLocalReportDirty()
+    localReportDirty = true
+end
 
 -- Verification and compatible participation remain useful metadata, but the
 -- guild statistics themselves count the complete current roster.
@@ -473,6 +506,7 @@ end
 function RaceGrid:BroadcastReport(fromClick)
     if iRC:DeferLowTraffic("traffic:guild-statistics", function() RaceGrid:BroadcastReport(false) end) then return false end
     if not self:IsEnabled() then return false end
+    if fromClick ~= true and not localReportDirty then return false end
     self:EnsureChannel()
     if not getChannelId() then
         iRC:DebugMsg(iRC:Text("RACEGRID_OWN_CHANNEL_UNAVAILABLE"), 2)
@@ -480,9 +514,10 @@ function RaceGrid:BroadcastReport(fromClick)
     end
     local report = self:GetLocalReport()
     if not report.name or report.name == "" or not report.guid or report.guid == "" or not report.race then return false end
+    if isMutedOlympusGuild(report.guildName) then return false end
     local payload = serializeGuildReport(report)
     if #payload > MAX_CHANNEL_PAYLOAD then return false end
-    self:StoreGuildReport(report)
+    if self:StoreGuildReport(report) then localReportDirty = false end
     -- Public custom-channel sends require a hardware event on Classic. Startup
     -- and ticker refreshes update the local cache only and are not failures.
     if fromClick ~= true then return false end
@@ -621,7 +656,7 @@ local cacheRequests, observedCacheOffers, offeredCachePayloads, incomingCacheTra
 local cacheRequestBySender = {}
 local CACHE_REQUEST_SENDER_COOLDOWN = 10
 
-local reportWorkQueue, reportWorkByKey = {}, {}
+local reportWorkQueue, reportWorkHead, reportWorkTail, reportWorkByKey = {}, 1, 0, {}
 local reportWorkScheduled, reportWorkDirty = false, false
 local REPORT_WORK_SPACING = 0.2
 local MAX_REPORT_WORK = 64
@@ -665,19 +700,24 @@ local function queueCacheChunk(prefix, message, sender, distribution)
 end
 
 local function processNextReportWork()
-    local work = table.remove(reportWorkQueue, 1)
+    local work = reportWorkQueue[reportWorkHead]
+    reportWorkQueue[reportWorkHead] = nil
+    reportWorkHead = reportWorkHead + 1
     if work then
         reportWorkByKey[work.key] = nil
         local ok, err = pcall(work.run)
         if not ok and geterrorhandler then geterrorhandler()(err) end
     end
     reportWorkScheduled = false
-    if #reportWorkQueue > 0 and C_Timer and C_Timer.After then
+    if reportWorkHead <= reportWorkTail and C_Timer and C_Timer.After then
         reportWorkScheduled = true
         C_Timer.After(REPORT_WORK_SPACING, processNextReportWork)
-    elseif reportWorkDirty then
-        reportWorkDirty = false
-        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    else
+        reportWorkQueue, reportWorkHead, reportWorkTail = {}, 1, 0
+        if reportWorkDirty then
+            reportWorkDirty = false
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        end
     end
 end
 
@@ -693,12 +733,15 @@ local function queueReportWork(key, callback, timestamp)
         end
         return
     end
-    if #reportWorkQueue >= MAX_REPORT_WORK then
-        local dropped = table.remove(reportWorkQueue, 1)
+    if reportWorkTail - reportWorkHead + 1 >= MAX_REPORT_WORK then
+        local dropped = reportWorkQueue[reportWorkHead]
+        reportWorkQueue[reportWorkHead] = nil
+        reportWorkHead = reportWorkHead + 1
         if dropped then reportWorkByKey[dropped.key] = nil end
     end
     local work = { key = key, run = callback, timestamp = timestamp }
-    reportWorkQueue[#reportWorkQueue + 1] = work
+    reportWorkTail = reportWorkTail + 1
+    reportWorkQueue[reportWorkTail] = work
     reportWorkByKey[key] = work
     if not reportWorkScheduled then
         reportWorkScheduled = true
@@ -729,6 +772,7 @@ function RaceGrid:ClearCachedReportsForTesting()
         end
     end
     wipe(reportWorkQueue)
+    reportWorkHead, reportWorkTail = 1, 0
     wipe(reportWorkByKey)
     reportWorkDirty = false
     wipe(cacheChunkWorkQueue)
@@ -770,13 +814,6 @@ local function cleanCacheState()
     if count >= MAX_CACHE_PACKAGES and oldestKey then incomingCacheTransfers[oldestKey] = nil end
 end
 
-local function offerDelay(requestId, guildName)
-    local seed = fullNameKey(iRC:GetPlayerName()) .. tostring(requestId) .. normalizeGuildName(guildName)
-    local total = 0
-    for index = 1, #seed do total = (total + seed:byte(index) * index) % 240 end
-    return 0.35 + total / 100
-end
-
 local function sendCacheOffers(requestId, requester)
     if iRC:DeferLowTraffic("traffic:cache-offers", function() sendCacheOffers(requestId, requester) end) then return end
     local store, now = getServerStore(), time()
@@ -785,30 +822,35 @@ local function sendCacheOffers(requestId, requester)
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or 0
         local hasSenderIdentity = type(report) == "table" and type(report.name) == "string" and report.name ~= ""
             and type(report.guid) == "string" and report.guid ~= ""
-        if hasSenderIdentity and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE then
-            local payload = serializeGuildReport(report, true)
-            local checksum, guildName = payloadChecksum(payload), report.guildName
-            local cacheHop = math.max(0, math.min(1, math.floor(tonumber(report.cacheHop) or 0)))
+        if hasSenderIdentity and not isMutedOlympusGuild(report.guildName)
+            and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE then
+            local snapshot, guildName = report, report.guildName
+            local guildKey = normalizeGuildName(guildName)
             local function offer()
                 if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(requester) then return end
                 local observed = observedCacheOffers[requestId]
-                local best = observed and observed.guilds[normalizeGuildName(guildName)]
-                if best and (best.timestamp > timestamp
-                    or (best.timestamp == timestamp and (best.cacheHop or 1) < cacheHop)
-                    or (best.timestamp == timestamp and (best.cacheHop or 1) == cacheHop
+                if not observed or GetTime() - (observed.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then return end
+                local payload = serializeGuildReport(snapshot, true)
+                local checksum = payloadChecksum(payload)
+                local cacheHop = math.max(0, math.min(1, math.floor(tonumber(snapshot.cacheHop) or 0)))
+                local reportTimestamp = tonumber(snapshot.timestamp) or 0
+                local best = observed.guilds[guildKey]
+                if best and (best.timestamp > reportTimestamp
+                    or (best.timestamp == reportTimestamp and (best.cacheHop or 1) < cacheHop)
+                    or (best.timestamp == reportTimestamp and (best.cacheHop or 1) == cacheHop
                         and fullNameKey(best.sender) < fullNameKey(iRC:GetPlayerName()))) then return end
-                if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, timestamp, checksum, cacheHop }, SEP), "GUILD") then
+                if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, reportTimestamp, checksum, cacheHop }, SEP), "GUILD") then
                     local offered = offeredCachePayloads[requestId]
                         or { startedAt = GetTime(), requester = requester, guilds = {} }
                     offeredCachePayloads[requestId] = offered
                     offered.requester = requester
-                    offered.guilds[normalizeGuildName(guildName)] = {
-                        payload = payload, timestamp = timestamp, checksum = checksum, cacheHop = cacheHop,
+                    offered.guilds[guildKey] = {
+                        payload = payload, timestamp = reportTimestamp, checksum = checksum, cacheHop = cacheHop,
                     }
                     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
                 end
             end
-            if C_Timer and C_Timer.After then C_Timer.After(offerDelay(requestId, guildName), offer) else offer() end
+            queueReportWork("cache-offer:" .. requestId .. ":" .. guildKey, offer, timestamp)
         end
     end
 end
@@ -881,7 +923,7 @@ local function handleCacheMessage(parts, sender, distribution)
         local requester, guildName = parts[4], tostring(parts[5] or "")
         local timestamp, checksum = validNumber(parts[6], 0, time() + 300), tostring(parts[7] or ""):lower()
         local cacheHop = validNumber(parts[8] or "0", 0, 1)
-        if guildName == "" or #guildName > 80 or not timestamp or not cacheHop
+        if guildName == "" or #guildName > 80 or isMutedOlympusGuild(guildName) or not timestamp or not cacheHop
             or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") then return true end
         local guildKey = normalizeGuildName(guildName)
         local observed = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
@@ -914,6 +956,7 @@ local function handleCacheMessage(parts, sender, distribution)
             handleCacheMessage(parts, sender, distribution)
         end) then return true end
         local guildName, timestamp, checksum = tostring(parts[4] or ""), tonumber(parts[5]), tostring(parts[6] or ""):lower()
+        if isMutedOlympusGuild(guildName) then return true end
         local offered = offeredCachePayloads[requestId]
         if not offered or iRC:NormalizeName(offered.requester) ~= iRC:NormalizeName(sender) then return true end
         local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]
@@ -930,6 +973,7 @@ local function handleCacheMessage(parts, sender, distribution)
         return true
     elseif kind == "CACHE_DATA" and distribution == "WHISPER" then
         local guildName = tostring(parts[4] or "")
+        if isMutedOlympusGuild(guildName) then return true end
         local part, total = tonumber(parts[5]), tonumber(parts[6])
         if iRC:DeferLowTraffic("traffic:racegrid-cache:" .. iRC:NormalizeName(sender) .. ":"
             .. requestId .. ":" .. tostring(part or ""), function()
@@ -991,6 +1035,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     local publicParts
     if distribution == "CHANNEL" and message:match("^GUILD_REPORT\t") then
         publicParts = split(message)
+        if isMutedOlympusGuild(publicParts[5]) then return end
         local guildKey = normalizeGuildName(publicParts[5])
         if guildKey ~= "" then
             local existing = getServerStore().guildReports[guildKey]
@@ -1036,7 +1081,8 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     -- WoW may qualify the channel sender with its realm while the profile in
     -- the payload uses the character's short name. Compare them using iRC's
     -- canonical character-name form without weakening the sender check.
-    if not report or iRC:NormalizeName(report.name) ~= iRC:NormalizeName(sender) then return end
+    if not report or isMutedOlympusGuild(report.guildName)
+        or iRC:NormalizeName(report.name) ~= iRC:NormalizeName(sender) then return end
     if distribution == "CHANNEL" then
         local ownGuildName = GetGuildInfo and GetGuildInfo("player")
         if ownGuildName and normalizeGuildName(report.guildName) == normalizeGuildName(ownGuildName) then return end
@@ -1054,7 +1100,7 @@ function iRC:GetGlobalRaceOverview()
     local now = time()
     for key, report in pairs(stored) do
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or nil
-        if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE
+        if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE or isMutedOlympusGuild(report.guildName)
             or (not iRC:IsLowTrafficMode() and iRC:ContainsProfanity(report.guildDescription)) then
             stored[key] = nil
             serverStore.guildActivity[key] = nil
@@ -1080,8 +1126,10 @@ function iRC:GetRaceGridOverview()
         for _, report in ipairs(self:GetGlobalRaceOverview()) do groups[normalizeGuildName(report.guildName)] = report end
     end
     for _, report in ipairs(RaceGrid:BuildOwnGuildReports()) do
-        RaceGrid:StoreGuildReport(report, true)
-        groups[normalizeGuildName(report.guildName)] = report
+        if not isMutedOlympusGuild(report.guildName) then
+            RaceGrid:StoreGuildReport(report, true)
+            groups[normalizeGuildName(report.guildName)] = report
+        end
     end
 
     local result = {}

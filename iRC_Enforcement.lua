@@ -714,8 +714,3 @@ frame:SetScript("OnEvent", function(_, event, unit)
     end
 end)
 
-if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(0.20, function()
-    if (MailFrame and MailFrame:IsShown()) or (MailFrameTab2 and MailFrameTab2:IsShown()) then
-        Enforcement:UpdateMailRestriction()
-    end
-end) end

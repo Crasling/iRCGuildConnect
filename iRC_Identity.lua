@@ -7,12 +7,17 @@ iRC.Identity = Identity
 local warnedTogether = {}
 local rosterRetryScheduled
 local lastHistoryRequestAt = 0
+local historyResponseAt = {}
+local historyResponseQueue, historyResponseHead, historyResponseTail = {}, 1, 0
+local historyResponseScheduled = false
 local IDENTITY_WIRE_VERSION = "2"
 local LINK_REQUEST_LIFETIME = 7 * 86400
 local MAX_LINK_REQUESTS = 50
 local MAX_GUILD_LOG_ENTRIES = 500
 local MAX_SHARED_HISTORY = 50
 local HISTORY_REQUEST_COOLDOWN = 60
+local HISTORY_RESPONSE_COOLDOWN = 60
+local MAX_HISTORY_RESPONSE_WORK = 200
 local initializedGuildLogStores = setmetatable({}, { __mode = "k" })
 local shownLinkRequests = {}
 local lastLinkRelayAt = 0
@@ -331,6 +336,34 @@ function Identity:RequestGuildHistory()
     return iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "IDENT_REQUEST", IDENTITY_WIRE_VERSION }, "\t"), "GUILD")
 end
 
+local function processHistoryResponse()
+    local work = historyResponseQueue[historyResponseHead]
+    historyResponseQueue[historyResponseHead] = nil
+    historyResponseHead = historyResponseHead + 1
+    -- A delayed response is no longer useful after its requester leaves the
+    -- guild, and skipping it also avoids needless whisper traffic.
+    if work and iRC:IsGuildMemberName(work.target) then
+        Identity:BroadcastGuildLog(work.record, work.target)
+    end
+    if historyResponseHead <= historyResponseTail and C_Timer and C_Timer.After then
+        C_Timer.After(0.10, processHistoryResponse)
+    else
+        historyResponseQueue, historyResponseHead, historyResponseTail = {}, 1, 0
+        historyResponseScheduled = false
+    end
+end
+
+local function queueHistoryResponse(record, target)
+    if historyResponseTail - historyResponseHead + 1 >= MAX_HISTORY_RESPONSE_WORK then return false end
+    historyResponseTail = historyResponseTail + 1
+    historyResponseQueue[historyResponseTail] = { record = record, target = target }
+    if not historyResponseScheduled then
+        historyResponseScheduled = true
+        if C_Timer and C_Timer.After then C_Timer.After(0.10, processHistoryResponse) else processHistoryResponse() end
+    end
+    return true
+end
+
 local function linkRequestId(requester, target, mainName, role, createdAt)
     return eventFingerprint("LINK", requester .. ">" .. target, mainName .. ">" .. role, createdAt)
 end
@@ -563,12 +596,17 @@ function Identity:ReceiveSync(parts, sender)
         if senderRank == nil then return false end
         C_Timer.After(math.random() * 3, function() Identity:BroadcastPersonalIdentity(sender, true) end)
         if not iRC:IsRulesetBroadcaster() then return false end
+        local senderKey, now = characterKey(sender), time()
+        for key, respondedAt in pairs(historyResponseAt) do
+            if now - respondedAt >= HISTORY_RESPONSE_COOLDOWN then historyResponseAt[key] = nil end
+        end
+        if historyResponseAt[senderKey] and now - historyResponseAt[senderKey] < HISTORY_RESPONSE_COOLDOWN then return true end
+        historyResponseAt[senderKey] = now
         local records = self:GetGuildLog()
-        -- Stagger catch-up packets so opening the panel cannot create one large
-        -- burst on slower clients.
+        -- A shared bounded worker prevents several simultaneous catch-up
+        -- requests from creating hundreds of independent timer callbacks.
         for index = 1, math.min(#records, MAX_SHARED_HISTORY) do
-            local record = records[index]
-            C_Timer.After((index - 1) * 0.10, function() Identity:BroadcastGuildLog(record, sender) end)
+            if not queueHistoryResponse(records[index], sender) then break end
         end
         return true
     end
@@ -768,9 +806,20 @@ function Identity:ScanRoster()
     end
 end
 
+function Identity:HandleRosterUpdate()
+    local store, currentKey = guildStore(false), characterKey(iRC:GetPlayerName())
+    if store and store.characters[currentKey] and store.confirmedCharacters[currentKey] ~= true then
+        self:RegisterCharacter(iRC:GetPlayerName(), nil, true)
+    end
+    self:ScanRoster()
+    if time() - lastLinkRelayAt >= 30 then
+        lastLinkRelayAt = time()
+        self:RelayPendingLinkRequests()
+    end
+end
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
-frame:RegisterEvent("GUILD_ROSTER_UPDATE")
 frame:SetScript("OnEvent", function(_, event)
     if not C_Timer or not C_Timer.After then return end
     C_Timer.After(event == "PLAYER_LOGIN" and 5 or 1, function()
@@ -781,11 +830,6 @@ frame:SetScript("OnEvent", function(_, event)
                 Identity:RequestGuildHistory()
                 Identity:RelayPendingLinkRequests()
             end)
-        else
-            local store, currentKey = guildStore(false), characterKey(iRC:GetPlayerName())
-            if store and store.characters[currentKey] and store.confirmedCharacters[currentKey] ~= true then
-                Identity:RegisterCharacter(iRC:GetPlayerName(), nil, true)
-            end
         end
         Identity:ScanRoster()
         if time() - lastLinkRelayAt >= 30 then
