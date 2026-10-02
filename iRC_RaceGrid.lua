@@ -7,8 +7,8 @@ iRC.RaceGrid = RaceGrid
 
 local PREFIX = "iRCGridV1"
 local CHANNEL_NAME = "iRCCommsV1"
-local WIRE_VERSION = "4"
-local REPORT_SCHEMA = 4
+local WIRE_VERSION = "5"
+local REPORT_SCHEMA = 5
 local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
@@ -23,6 +23,9 @@ local MAX_CACHE_PARTS = 16
 local MAX_CACHE_PACKAGES = 32
 local cacheUpdatingUntil = 0
 local lastCacheOpenRequestAt
+local channelJoinReady = false
+local channelJoinStartedAt = 0
+local channelJoinGeneration = 0
 
 local function setCacheUpdating(active)
     cacheUpdatingUntil = active and ((GetTime and GetTime() or 0) + CACHE_TRANSFER_TIMEOUT) or 0
@@ -275,12 +278,27 @@ local function hideChannelFromChatWindows(channelName)
     end
 end
 
+local function hasRestoredServerChannel()
+    if not GetChannelList then return false end
+    local channels = { GetChannelList() }
+    for index = 1, #channels, 3 do
+        local channelId = tonumber(channels[index])
+        local channelName = tostring(channels[index + 1] or "")
+        if channelId and channelId > 0 and channelName ~= ""
+            and channelName:lower() ~= CHANNEL_NAME:lower() then return true end
+    end
+    return false
+end
+
 function RaceGrid:IsEnabled()
     return true
 end
 
 function RaceGrid:EnsureChannel()
     if not self:IsEnabled() then return end
+    -- Joining before Blizzard restores General/Trade makes the hidden addon
+    -- channel claim channel 1 and shifts the player's normal global channels.
+    if not channelJoinReady then return end
     if getChannelId() then
         hideChannelFromChatWindows(CHANNEL_NAME)
         return
@@ -289,6 +307,29 @@ function RaceGrid:EnsureChannel()
         iRC:DebugMsg(iRC:Text("RACEGRID_OWN_CHANNEL_JOIN"), 3)
         JoinChannelByName(CHANNEL_NAME)
     end
+end
+
+function RaceGrid:ScheduleChannelJoin(delay)
+    if channelJoinReady or not C_Timer or not C_Timer.After then return end
+    if channelJoinStartedAt <= 0 then channelJoinStartedAt = GetTime and GetTime() or 0 end
+    channelJoinGeneration = channelJoinGeneration + 1
+    local generation = channelJoinGeneration
+    C_Timer.After(math.max(0, tonumber(delay) or 3), function()
+        if generation ~= channelJoinGeneration or channelJoinReady then return end
+        local now = GetTime and GetTime() or channelJoinStartedAt
+        if hasRestoredServerChannel() or now - channelJoinStartedAt >= 30 then
+            channelJoinReady = true
+            RaceGrid:EnsureChannel()
+            -- The channel ID is assigned asynchronously. Hide it and resume the
+            -- initial local-report build once the join has completed.
+            C_Timer.After(1, function()
+                RaceGrid:EnsureChannel()
+                RaceGrid:BroadcastReport()
+            end)
+        else
+            RaceGrid:ScheduleChannelJoin(3)
+        end
+    end)
 end
 
 function RaceGrid:Disable()
@@ -305,7 +346,7 @@ function RaceGrid:GetLocalReport()
         guid = profile.guid,
         guildName = guild.guildName, race = guild.race, faction = guild.faction,
         members = guild.members, activePlayers = guild.activePlayers,
-        membersLevel60 = guild.membersLevel60, activeLevel20 = guild.activeLevel20,
+        membersLevel60 = guild.membersLevel60, activeLevel30 = guild.activeLevel30,
         activeMembers = guild.activeMembers, averageLevel = guild.averageLevel,
         classes = guild.classes, guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
@@ -381,7 +422,7 @@ function RaceGrid:BuildOwnGuildReports()
         race = guildRace, faction = UnitFactionGroup and UnitFactionGroup("player")
             or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
         guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
-        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel20 = 0,
+        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel30 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
         rulesKnown = connection.rulesBootstrap ~= true,
@@ -438,7 +479,7 @@ function RaceGrid:BuildOwnGuildReports()
             if level >= 60 then
                 group.membersLevel60 = group.membersLevel60 + 1
             end
-            if level >= 20 and recentlyOnlineFiveDays then group.activeLevel20 = group.activeLevel20 + 1 end
+            if level >= 30 and recentlyOnlineFiveDays then group.activeLevel30 = group.activeLevel30 + 1 end
         end
     end
     if group.members == 0 then return {} end
@@ -487,7 +528,7 @@ local function serializeGuildReport(report, includeDescription)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(report.guildContacts or ""):gsub("[%c]", " "):sub(1, 140)
     fields[#fields + 1] = tostring(report.addonVersion or iRC.Version or "")
-    fields[#fields + 1] = report.activeLevel20 ~= nil and tostring(report.activeLevel20) or ""
+    fields[#fields + 1] = report.activeLevel30 ~= nil and tostring(report.activeLevel30) or ""
     fields[#fields + 1] = report.activeMembers ~= nil and tostring(report.activeMembers) or ""
     fields[#fields + 1] = rules.guildMapEnabled and "1" or "0"
     fields[#fields + 1] = rules.raceLock == true and "1" or "0"
@@ -531,7 +572,7 @@ function RaceGrid:BroadcastReport(fromClick)
     if descriptionTimestamp > 0 and descriptionEditor ~= "" then
         send(PREFIX, table.concat({ "GUILD_DESC", WIRE_VERSION, tostring(descriptionTimestamp), descriptionEditor, description }, SEP), "CHANNEL", CHANNEL_NAME)
     end
-    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel20,
+    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
         report.activeMembers, report.activePlayers, report.members), 3)
     return true
 end
@@ -613,11 +654,11 @@ local function parseGuildReport(parts)
     local guildContacts = tostring(parts[25] or "")
     if #guildContacts > 140 or guildContacts:find("[%c]") then return nil end
     local addonVersion = parts[26]
-    local activeLevel20, activeMembers
+    local activeLevel30, activeMembers
     if parts[27] ~= nil and parts[27] ~= "" or parts[28] ~= nil and parts[28] ~= "" then
-        activeLevel20 = validNumber(parts[27], 0, members)
+        activeLevel30 = validNumber(parts[27], 0, members)
         activeMembers = validNumber(parts[28], 0, members)
-        if not activeLevel20 or not activeMembers or activeLevel20 > activeMembers then return nil end
+        if not activeLevel30 or not activeMembers or activeLevel30 > activeMembers then return nil end
     end
     local rawOnlineMask = parts[31]
     local guildContactsOnlineMask = validNumber(rawOnlineMask or "0", 0, 31)
@@ -638,7 +679,7 @@ local function parseGuildReport(parts)
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
-        activeLevel20 = activeLevel20, activeMembers = activeMembers,
+        activeLevel30 = activeLevel30, activeMembers = activeMembers,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
         classes = classes, rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
@@ -1089,7 +1130,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     end
     iRC:CheckForNewVersion(report.addonVersion)
     storeIncomingReport(report)
-    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel20 or 0,
+    iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel30 or 0,
         report.activeMembers or 0, report.activePlayers, report.members), 3)
 end
 
@@ -1113,7 +1154,7 @@ function iRC:GetGlobalRaceOverview()
 end
 
 local function guildRank(a, b)
-    if (a.activeLevel20 or -1) ~= (b.activeLevel20 or -1) then return (a.activeLevel20 or -1) > (b.activeLevel20 or -1) end
+    if (a.activeLevel30 or -1) ~= (b.activeLevel30 or -1) then return (a.activeLevel30 or -1) > (b.activeLevel30 or -1) end
     if (a.activeMembers or -1) ~= (b.activeMembers or -1) then return (a.activeMembers or -1) > (b.activeMembers or -1) end
     if (a.activePlayers or 0) ~= (b.activePlayers or 0) then return (a.activePlayers or 0) > (b.activePlayers or 0) end
     if (a.members or 0) ~= (b.members or 0) then return (a.members or 0) > (b.members or 0) end
@@ -1149,11 +1190,22 @@ frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("CHAT_MSG_CHANNEL")
+if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("CHANNEL_UI_UPDATE") then
+    frame:RegisterEvent("CHANNEL_UI_UPDATE")
+end
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
         registerPrefix(PREFIX)
     elseif event == "PLAYER_LOGIN" then
+        channelJoinStartedAt = GetTime and GetTime() or 0
+        if getChannelId() and LeaveChannelByName then
+            -- WoW may remember and autojoin a custom channel before addons run.
+            -- Release that premature slot so General/Trade can reclaim their
+            -- normal numbers, then rejoin through the delayed path below.
+            LeaveChannelByName(CHANNEL_NAME)
+        end
+        RaceGrid:ScheduleChannelJoin(10)
         -- Let WoW finish restoring the player's normal chat channels before
         -- adding any hidden data channels.
         if C_Timer and C_Timer.After then
@@ -1168,6 +1220,17 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if C_Timer and C_Timer.NewTicker then C_Timer.NewTicker(REPORT_INTERVAL, function()
             RaceGrid:BroadcastReport()
         end) end
+    elseif event == "CHANNEL_UI_UPDATE" then
+        if getChannelId() then
+            if not channelJoinReady and LeaveChannelByName then
+                LeaveChannelByName(CHANNEL_NAME)
+            else
+                hideChannelFromChatWindows(CHANNEL_NAME)
+            end
+        elseif not channelJoinReady and channelJoinStartedAt > 0 and hasRestoredServerChannel() then
+            -- Wait for the rest of Blizzard's auto-joined channels to settle.
+            RaceGrid:ScheduleChannelJoin(3)
+        end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         handleMessage(prefix, message, sender, distribution)

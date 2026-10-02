@@ -2,6 +2,12 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.12 - Level 30 Leaderboard & Channel Ordering
+--------------------------------------------------------------------------------
+[CHANGED] Guild Leaderboard now counts active level 30 characters seen within five days, matching Forever's new level cap
+[IMPORTANT] Guild Leaderboard public and cached reports now use report format 5; older active-level-20 reports are not shown as level-30 data
+[FIX] The hidden iRCCommsV1 channel now waits for Blizzard to restore normal server channels, preventing it from taking channel 1 and shifting General or Trade
+
 v0.5.11 - Ruleset Protection
 --------------------------------------------------------------------------------
 [FIX] First-time setup can no longer replace rules created by the Guild Master or a test admin
