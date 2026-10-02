@@ -2,6 +2,11 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.11 - Ruleset Protection
+--------------------------------------------------------------------------------
+[FIX] First-time setup can no longer replace rules created by the Guild Master or a test admin
+[FIX] Rules already received from another guild member remain protected from first-time setup, including rules saved by an earlier version
+
 v0.5.10 - Leaderboard Filters
 --------------------------------------------------------------------------------
 [ADDED] When OlympusMute is loaded, guilds containing Olympus are automatically hidden from the Guild Leaderboard and their public or cached reports are ignored

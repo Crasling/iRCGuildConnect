@@ -1555,7 +1555,14 @@ local function handleMessage(prefix, message, distribution, sender)
         if staleBackup then
             sameStampReference = rulesBackupFingerprint(connection.rules, savedHex, connection.rulesTimestampSource)
         end
+        -- A locally configured or previously relayed ruleset always wins over
+        -- bootstrap. Even if stale state retains the bootstrap flag, it must
+        -- not grant an incoming packet the bootstrap replacement exception.
         local bootstrapRules = connection and connection.rulesBootstrap == true
+            and connection.rulesLocallyConfigured ~= true
+            and connection.rulesEstablished ~= true
+            and savedTimestamp == 0
+            and type(connection.receivedRulesBackup) ~= "string"
         local sameStampMatches = bootstrapRules or incomingTimestamp ~= savedTimestamp or not connection
             or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
             or sameStampReference == incomingBackup
@@ -1579,6 +1586,7 @@ local function handleMessage(prefix, message, distribution, sender)
             connection.rulesRelayedBy = sender
             connection.rulesReceivedAt = time()
             connection.rulesBootstrap = nil
+            connection.rulesEstablished = true
             connection.receivedRulesBackup = incomingBackup
             connection.receivedRulesBackupVersion = 1
             connection.receivedRulesChecksum = rulesBackupChecksum(incomingBackup)

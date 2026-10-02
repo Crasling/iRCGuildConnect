@@ -967,6 +967,8 @@ function iRC:StampConnectionRules(connection)
     -- Any deliberate Guild Master edit turns the local bootstrap defaults into
     -- a real ruleset. From this point normal timestamp protection applies.
     connection.rulesBootstrap = nil
+    connection.rulesLocallyConfigured = true
+    connection.rulesEstablished = true
     local stamp = math.max(time(), decodeRulesTimestamp(connection.rulesTimestampHex) + 1)
     connection.rulesTimestampHex = string.format("%x", stamp)
     connection.rulesTimestampSource = self:GetPlayerName()
@@ -993,7 +995,9 @@ local function normalizedGuildName(value)
 end
 
 local function isEstablishedConnection(connection)
-    return type(connection) == "table" and (connection.rulesBootstrap ~= true
+    return type(connection) == "table" and (connection.rulesEstablished == true
+        or connection.rulesLocallyConfigured == true
+        or connection.rulesBootstrap ~= true
         or decodeRulesTimestamp(connection.rulesTimestampHex) > 0
         or type(connection.receivedRulesBackup) == "string"
         or (tonumber(connection.activationTimestamp) or 0) > 0)
@@ -1407,7 +1411,11 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimes
     local connection = self:GetConnection()
     if not connection then return false end
     active = active and true or false
-    if not receivedFromGuild then connection.rulesBootstrap = nil end
+    if not receivedFromGuild then
+        connection.rulesBootstrap = nil
+        connection.rulesLocallyConfigured = true
+        connection.rulesEstablished = true
+    end
     if connection.active == active then
         if receivedFromGuild and tonumber(activationTimestamp)
             and tonumber(activationTimestamp) > (tonumber(connection.activationTimestamp) or 0) then
@@ -1462,7 +1470,13 @@ function iRC:ActivateNewGuildConnection()
     local connection = self:GetConnection()
     if not connection or not pendingAutomaticActivation[connection] then return false end
     pendingAutomaticActivation[connection] = nil
-    connection.rulesBootstrap = true
+
+    -- The three-second first-use activation can still be pending while a test
+    -- Guild Master configures the guild. A deliberate edit stamps the rules and
+    -- makes them authoritative; never turn that saved ruleset back into
+    -- replaceable bootstrap defaults when the delayed callback finally runs.
+    if isEstablishedConnection(connection) then return false end
+
     connection.activationBootstrap = true
     local changed = self:SetGuildConnectionActive(true, true, 0, "")
     if self.SendHello then self:SendHello() end
