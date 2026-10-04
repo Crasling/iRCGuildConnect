@@ -2,6 +2,12 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.13 - Guild Management Access Fix
+--------------------------------------------------------------------------------
+[FIX] Characters who are not in a guild no longer see or receive access to guild management tools
+[FIX] Joining or leaving a guild now refreshes the open iRC panel so its available tabs immediately match the current guild and permissions
+[FIX] Guild rank permission controls now safely reject changes when no guild connection exists instead of causing a Lua error
+
 v0.5.12 - Level 30 Leaderboard & Channel Ordering
 --------------------------------------------------------------------------------
 [CHANGED] Guild Leaderboard now counts active level 30 characters seen within five days, matching Forever's new level cap

@@ -1740,6 +1740,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_GUILD_UPDATE" then
         local unit = ...
         if unit ~= "player" then return end
+        -- Re-evaluate visible navigation and embedded management panels as soon
+        -- as the player joins or leaves a guild. RefreshIfShown is delayed, so
+        -- Blizzard has time to publish the new guild state first.
+        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
         -- PLAYER_LOGIN cannot bootstrap a player who was guildless at login.
         -- Schedule the same guarded first-guild activation when they join later.
         if iRC.ScheduleNewGuildActivation then iRC:ScheduleNewGuildActivation(3) end

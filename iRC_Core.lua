@@ -1126,6 +1126,9 @@ function iRC:IsGuildAdmin()
 end
 
 function iRC:GetPlayerGuildRankIndex()
+    -- Guild roster data and test overrides must never grant a rank while the
+    -- character is not currently in a guild.
+    if not self:IsInGuildConnection() then return nil end
     if self:IsTestAdminGuildMaster() then return 0 end
     local rankIndex
     if GetGuildInfo then
@@ -1147,12 +1150,13 @@ end
 
 function iRC:HasGuildPermission(permission)
     local connection = self:GetConnection()
+    if not connection then return false end
     -- Bootstrap is a local participation mode, not guild authorization. It
     -- must not grant management authority from default rank permissions.
-    if connection and connection.rulesBootstrap == true then return false end
+    if connection.rulesBootstrap == true then return false end
     if self:IsGuildMaster() then return true end
     local rankIndex = self:GetPlayerGuildRankIndex()
-    local allowed = connection and connection.rankPermissions and tonumber(connection.rankPermissions[permission])
+    local allowed = connection.rankPermissions and tonumber(connection.rankPermissions[permission])
     if allowed == nil then allowed = self.DefaultRankPermissions[permission] end
     return rankIndex ~= nil and allowed ~= nil and rankIndex <= allowed
 end
@@ -1165,6 +1169,7 @@ function iRC:GetGuildRankPermission(permission)
 end
 
 function iRC:HasAnyManagementPermission()
+    if not self:GetConnection() then return false end
     for permission in pairs(self.DefaultRankPermissions) do
         if self:HasGuildPermission(permission) then return true end
     end
@@ -1189,6 +1194,8 @@ end
 function iRC:SetGuildRankPermission(permission, rankIndex)
     if not self:IsGuildMaster() or self.DefaultRankPermissions[permission] == nil then return false end
     local connection = self:GetConnection()
+    if not connection then return false end
+    connection.rankPermissions = connection.rankPermissions or {}
     rankIndex = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
     connection.rankPermissions[permission] = rankIndex
     connection.rankPermissionsTimestamp = math.max(time(), (tonumber(connection.rankPermissionsTimestamp) or 0) + 1)
@@ -1200,6 +1207,7 @@ function iRC:SetGuildRankPermission(permission, rankIndex)
 end
 
 function iRC:IsGuildMaster()
+    if not self:IsInGuildConnection() then return false end
     if self:IsTestGuildMaster() or self:IsTestAdminGuildMaster() then return true end
     return self:GetPlayerGuildRankIndex() == 0
 end
@@ -1252,7 +1260,8 @@ function iRC:IsTestAdmin()
 end
 
 function iRC:IsTestAdminGuildMaster()
-    return self:IsTestAdmin() and self:GetSettings().testGuildMasterOverride == true
+    return self:IsInGuildConnection() and self:IsTestAdmin()
+        and self:GetSettings().testGuildMasterOverride == true
 end
 
 function iRC:SuppressesPresenceWarnings()

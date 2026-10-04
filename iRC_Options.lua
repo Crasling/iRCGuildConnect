@@ -2599,6 +2599,10 @@ end
 function iRC:ShowManagementPanel(panelKey, parent)
     local panel = managementPanels[panelKey]
     if not panel or not parent then return false end
+    if not self:GetConnection() or not self:HasAnyManagementPermission() then
+        self:HideManagementPanels()
+        return false
+    end
     self:HideManagementPanels()
     Refresh()
     panel:SetParent(parent)
