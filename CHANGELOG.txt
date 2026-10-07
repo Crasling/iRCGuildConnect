@@ -2,6 +2,20 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.14 - Guild Homepage & Management
+--------------------------------------------------------------------------------
+[ADDED] Guild Homepage management can show class breakdowns for all levels, a custom inclusive level range, or max-level characters only
+[ADDED] Normal guilds can replace their default Guild Leaderboard tag with PvE, PvP, or RP; progression and Race-Locked tags retain priority
+[ADDED] Guild Homepage management now includes a read-only expanded preview using the same guild card shown on the public Guild Leaderboard
+[ADDED] Inactive Members provides a customizable offline-days filter, confirmed single removal or a selectable secure one-click-per-member removal queue, its own delegated rank permission, and the optional /irc inactive [days] shortcut
+[FIX] The Inactive Members threshold resets to 30 days after leaving or closing the panel, and its eligibility dimming no longer carries into the Guild Log
+[CHANGED] Guild Masters and members with a delegated management permission automatically establish a usable ruleset; members without delegated access continue to use bootstrap while requesting the guild's real rules
+[FIX] Automatically established rules remain replaceable and use a protected zero timestamp, so they cannot overwrite an existing authoritative ruleset
+[CHANGED] Management pages follow a clearer roster, verification, guild-settings, and conditional-tools order; unavailable Guild-Found management is now visibly disabled with an explanation
+[CHANGED] Every delegated management permission now defaults to guild Rank 1 when no saved guild-specific choice exists
+[CHANGED] Test-admin name matching supports an explicitly configured trailing wildcard
+[REMOVED] iSoundPlayer has been removed from the Other Addons list
+
 v0.5.13 - Guild Management Access Fix
 --------------------------------------------------------------------------------
 [FIX] Characters who are not in a guild no longer see or receive access to guild management tools

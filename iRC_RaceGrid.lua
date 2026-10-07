@@ -270,6 +270,171 @@ local function getChannelId(channelName)
     return type(channelId) == "number" and channelId > 0 and channelId or nil
 end
 
+-- Session-only roster used by the test-admin diagnostics page. The server's
+-- channel roster is authoritative for who is online; version replies merely
+-- enrich those rows and never add an offline character to the displayed list.
+local adminPresence = { users = {}, versions = {}, requestedAt = 0, requestId = nil }
+local adminProbeBySender = {}
+
+local function rememberAdminVersion(name, version, guildName)
+    local key = fullNameKey(name)
+    if key == "" then return end
+    version = tostring(version or ""):gsub("[%c%s]", "")
+    if version == "" or #version > 32 then return end
+    adminPresence.versions[key] = {
+        version = version,
+        guildName = tostring(guildName or ""):gsub("[%c]", " "):sub(1, 80),
+        seenAt = time(),
+    }
+    if adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10 then
+        adminPresence.users[key] = name
+    end
+end
+
+local function getAdminRosterAPI()
+    if C_ChatInfo and C_ChatInfo.GetChannelRosterInfo then return C_ChatInfo.GetChannelRosterInfo end
+    return GetChannelRosterInfo
+end
+
+local function findAdminChannelDisplayIndex()
+    if adminPresence.displayIndex then return adminPresence.displayIndex end
+    if not GetChannelDisplayInfo then return nil end
+    for index = 1, 50 do
+        local ok, displayName = pcall(GetChannelDisplayInfo, index)
+        if ok and type(displayName) == "string" and displayName:lower() == CHANNEL_NAME:lower() then
+            adminPresence.displayIndex = index
+            return index
+        end
+    end
+end
+
+local function refreshAdminChannelRoster(displayIndex, rosterCount)
+    if not iRC:IsTestAdmin() then return false end
+    local getRosterInfo = getAdminRosterAPI()
+    if not getRosterInfo then return false end
+    displayIndex = tonumber(displayIndex) or findAdminChannelDisplayIndex()
+    if not displayIndex then return false end
+    local displayName
+    if GetChannelDisplayInfo then
+        local ok, value = pcall(GetChannelDisplayInfo, displayIndex)
+        if ok then displayName = value end
+        if type(displayName) == "string" and displayName ~= ""
+            and displayName:lower() ~= CHANNEL_NAME:lower() then return false end
+    end
+    adminPresence.displayIndex = displayIndex
+    local count = math.max(0, math.floor(tonumber(rosterCount) or 0))
+    if count == 0 then count = 500 end
+    for index = 1, count do
+        local rosterOK, name = pcall(getRosterInfo, displayIndex, index)
+        if rosterOK and type(name) == "string" and name ~= "" then
+            adminPresence.users[fullNameKey(name)] = name
+        elseif rosterCount == nil then
+            break
+        end
+    end
+    local ownName = iRC:GetPlayerName()
+    if ownName and ownName ~= "" then adminPresence.users[fullNameKey(ownName)] = ownName end
+    return true
+end
+
+local function captureAdminChannelList(message, sender)
+    if not iRC:IsTestAdmin() or adminPresence.requestedAt <= 0
+        or time() - adminPresence.requestedAt > 10 then return end
+    local captured = false
+    message = tostring(message or "")
+    local function addName(name, allowSpaces)
+        name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            :gsub("^%*+", ""):gsub("^%s+", ""):gsub("%s+$", "")
+            :gsub("^%[", ""):gsub("%]$", ""):gsub("[%.;]$", "")
+        name = name:gsub("%s+", " ")
+        local lowerName = name:lower()
+        if name == "" or #name > 80 or name:find("[%c%[%],:|]")
+            or (not allowSpaces and name:find("%s"))
+            or lowerName == CHANNEL_NAME:lower() or lowerName == "channel"
+            or lowerName == "players" or lowerName == "list" or lowerName == "owner"
+            or lowerName == "moderator" then return false end
+        adminPresence.users[fullNameKey(name)] = name
+        return true
+    end
+    for name in message:gmatch("|Hplayer:([^:|]+)") do
+        if addName(name, true) then captured = true end
+    end
+    if not captured then
+        -- Forever may deliver /chatlist as CHAT_MSG_SYSTEM rather than
+        -- CHAT_MSG_CHANNEL_LIST. Accept either one-name lines or the comma-
+        -- separated tail of the channel header while the scan window is open.
+        local plain = message:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+            :gsub("|H.-|h", ""):gsub("|h", "")
+        local listedChannel, listedUsers = plain:match("^%[%d+%.%s*([^%]]+)%]%s*(.*)$")
+        if listedChannel and listedChannel:lower() == CHANNEL_NAME:lower() then
+            for candidate in tostring(listedUsers or ""):gmatch("[^,]+") do
+                if addName(candidate, true) then captured = true end
+            end
+        elseif #plain <= 80 and addName(plain) then
+            captured = true
+        elseif plain:lower():find(CHANNEL_NAME:lower(), 1, true) then
+            local tail = plain:match(":%s*(.+)$")
+            for candidate in tostring(tail or ""):gmatch("[^,]+") do
+                if addName(candidate, true) then captured = true end
+            end
+        end
+    end
+    if not captured and type(sender) == "string" and sender ~= ""
+        and sender:lower() ~= CHANNEL_NAME:lower() and not sender:find("[%s:%[%]]") then
+        adminPresence.users[fullNameKey(sender)] = sender
+    end
+end
+
+function RaceGrid:RequestAdminOnlineUsers()
+    if not iRC:IsTestAdmin() then return false end
+    self:EnsureChannel()
+    local channelId = getChannelId()
+    if not channelId then return false end
+    adminPresence.requestedAt = time()
+    adminPresence.requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
+    adminPresence.users = {}
+    adminPresence.displayIndex = nil
+    if ListChannelByName then
+        pcall(ListChannelByName, CHANNEL_NAME)
+    elseif SlashCmdList and SlashCmdList.CHATLIST then
+        pcall(SlashCmdList.CHATLIST, CHANNEL_NAME)
+    end
+    refreshAdminChannelRoster()
+    send(PREFIX, table.concat({ "ADMIN_PRESENCE_REQUEST", WIRE_VERSION, adminPresence.requestId,
+        tostring(iRC:GetPlayerName() or "") }, SEP), "CHANNEL", CHANNEL_NAME)
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.5, refreshAdminChannelRoster)
+        C_Timer.After(1.5, refreshAdminChannelRoster)
+    end
+    return true
+end
+
+function RaceGrid:GetAdminOnlineUsers()
+    if not iRC:IsTestAdmin() then return {}, { total = 0, known = 0, versions = {} } end
+    refreshAdminChannelRoster()
+    local rows, versionCounts, known = {}, {}, 0
+    for key, name in pairs(adminPresence.users) do
+        local observed = adminPresence.versions[key]
+        local version = observed and observed.version or nil
+        if key == fullNameKey(iRC:GetPlayerName()) then
+            version = tostring(iRC.Version or "Unknown")
+            observed = observed or { guildName = GetGuildInfo and GetGuildInfo("player") or "" }
+        end
+        if version and version ~= "" then
+            known = known + 1
+            versionCounts[version] = (versionCounts[version] or 0) + 1
+        end
+        rows[#rows + 1] = { name = name, version = version, guildName = observed and observed.guildName or "" }
+    end
+    table.sort(rows, function(a, b) return string.lower(a.name) < string.lower(b.name) end)
+    return rows, {
+        total = #rows,
+        known = known,
+        versions = versionCounts,
+        requestedAt = adminPresence.requestedAt,
+    }
+end
+
 local function hideChannelFromChatWindows(channelName)
     if not ChatFrame_RemoveChannel or not NUM_CHAT_WINDOWS then return end
     for index = 1, NUM_CHAT_WINDOWS do
@@ -348,13 +513,18 @@ function RaceGrid:GetLocalReport()
         members = guild.members, activePlayers = guild.activePlayers,
         membersLevel60 = guild.membersLevel60, activeLevel30 = guild.activeLevel30,
         activeMembers = guild.activeMembers, averageLevel = guild.averageLevel,
-        classes = guild.classes, guildDeaths = guild.guildDeaths,
+        classes = guild.classes, classBreakdownClasses = guild.classBreakdownClasses,
+        guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
         guildContacts = guild.guildContacts,
         guildContactsOnlineMask = guild.guildContactsOnlineMask,
         guildDescription = guild.guildDescription, guildDescriptionTimestamp = guild.guildDescriptionTimestamp,
         guildDescriptionEditedBy = guild.guildDescriptionEditedBy,
         guildHomepageIcon = guild.guildHomepageIcon,
+        guildHomepageTag = guild.guildHomepageTag,
+        classBreakdownMode = guild.classBreakdownMode,
+        classBreakdownMinLevel = guild.classBreakdownMinLevel,
+        classBreakdownMaxLevel = guild.classBreakdownMaxLevel,
         source = "iRC guild report", timestamp = time(), lastSeen = time(),
     }
 end
@@ -366,6 +536,22 @@ function RaceGrid:StoreGuildReport(report, silent)
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.race = normalizeRaceToken(report.race)
     if not report.race then return false end
+    if report.classBreakdownMode ~= "RANGE" and report.classBreakdownMode ~= "MAX" then
+        report.classBreakdownMode = "ALL"
+    end
+    if report.guildHomepageTag ~= "PVE" and report.guildHomepageTag ~= "PVP"
+        and report.guildHomepageTag ~= "RP" then
+        report.guildHomepageTag = "NORMAL"
+    end
+    report.classBreakdownMinLevel = math.max(1,
+        math.min(60, math.floor(tonumber(report.classBreakdownMinLevel) or 1)))
+    report.classBreakdownMaxLevel = math.max(report.classBreakdownMinLevel,
+        math.min(60, math.floor(tonumber(report.classBreakdownMaxLevel) or 60)))
+    if report.classBreakdownMode == "ALL" then
+        report.classBreakdownMinLevel, report.classBreakdownMaxLevel = 1, 60
+    elseif report.classBreakdownMode == "MAX" then
+        report.classBreakdownMinLevel, report.classBreakdownMaxLevel = 60, 60
+    end
     local reports = getServerStore().guildReports
     local key = normalizeGuildName(report.guildName)
     local old = reports[key]
@@ -417,12 +603,20 @@ function RaceGrid:BuildOwnGuildReports()
     local guildName = tostring(connection.guildName or (GetGuildInfo and GetGuildInfo("player")) or "")
     if not guildRace or guildName == "" then return {} end
     local rules = iRC:GetConnectionRules() or {}
+    local classBreakdown = iRC:GetGuildHomepageClassBreakdown()
+    local classBreakdownMode = classBreakdown.mode == "RANGE" and "RANGE"
+        or classBreakdown.mode == "MAX" and "MAX" or "ALL"
+    local classBreakdownMinLevel = classBreakdownMode == "MAX" and 60
+        or classBreakdownMode == "RANGE" and math.max(1, math.min(60, math.floor(tonumber(classBreakdown.minLevel) or 1))) or 1
+    local classBreakdownMaxLevel = classBreakdownMode == "MAX" and 60
+        or classBreakdownMode == "RANGE" and math.max(classBreakdownMinLevel,
+            math.min(60, math.floor(tonumber(classBreakdown.maxLevel) or 60))) or 60
     local group = {
         name = profile.name, guid = profile.guid, addonVersion = iRC.Version,
         race = guildRace, faction = UnitFactionGroup and UnitFactionGroup("player")
             or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
         guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
-        classes = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel30 = 0,
+        classes = {}, classBreakdownClasses = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel30 = 0,
         verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
         rulesKnown = connection.rulesBootstrap ~= true,
@@ -445,6 +639,10 @@ function RaceGrid:BuildOwnGuildReports()
         guildDescriptionEditedBy = tostring(connection.guildHomepageDescription.editedBy or ""):sub(1, 80),
         guildHomepageIcon = math.max(0, math.min(#iRC.GuildHomepageIcons,
             math.floor(tonumber(connection.guildHomepageIcon.icon) or 0))),
+        guildHomepageTag = iRC:GetGuildHomepageTag(),
+        classBreakdownMode = classBreakdownMode,
+        classBreakdownMinLevel = classBreakdownMinLevel,
+        classBreakdownMaxLevel = classBreakdownMaxLevel,
     }
     local counted, contactIndexes = {}, {}
     local contactIndex = 0
@@ -476,6 +674,9 @@ function RaceGrid:BuildOwnGuildReports()
             elseif participation == "compatible" then group.compatibleMembers = group.compatibleMembers + 1 end
             group.classes[class] = (group.classes[class] or 0) + 1
             group.classTotals[class] = (group.classTotals[class] or 0) + level
+            if level >= classBreakdownMinLevel and level <= classBreakdownMaxLevel then
+                group.classBreakdownClasses[class] = (group.classBreakdownClasses[class] or 0) + 1
+            end
             if level >= 60 then
                 group.membersLevel60 = group.membersLevel60 + 1
             end
@@ -540,6 +741,17 @@ local function serializeGuildReport(report, includeDescription)
         fields[#fields + 1] = tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength)
         fields[#fields + 1] = tostring(math.floor(tonumber(report.guildDescriptionTimestamp) or 0))
         fields[#fields + 1] = tostring(report.guildDescriptionEditedBy or ""):gsub("[%c]", ""):sub(1, 80)
+        fields[#fields + 1] = report.classBreakdownMode == "RANGE" and "RANGE"
+            or report.classBreakdownMode == "MAX" and "MAX" or "ALL"
+        fields[#fields + 1] = tostring(math.max(1, math.min(60,
+            math.floor(tonumber(report.classBreakdownMinLevel) or 1))))
+        fields[#fields + 1] = tostring(math.max(1, math.min(60,
+            math.floor(tonumber(report.classBreakdownMaxLevel) or 60))))
+        for _, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
+            fields[#fields + 1] = tostring((report.classBreakdownClasses or report.classes or {})[class] or 0)
+        end
+        fields[#fields + 1] = report.guildHomepageTag == "PVE" and "PVE"
+            or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
     end
     return table.concat(fields, SEP)
 end
@@ -572,6 +784,15 @@ function RaceGrid:BroadcastReport(fromClick)
     if descriptionTimestamp > 0 and descriptionEditor ~= "" then
         send(PREFIX, table.concat({ "GUILD_DESC", WIRE_VERSION, tostring(descriptionTimestamp), descriptionEditor, description }, SEP), "CHANNEL", CHANNEL_NAME)
     end
+    local classBreakdownFields = { "GUILD_CLASS_BREAKDOWN", WIRE_VERSION, tostring(report.timestamp or 0),
+        report.classBreakdownMode == "RANGE" and "RANGE" or report.classBreakdownMode == "MAX" and "MAX" or "ALL",
+        tostring(report.classBreakdownMinLevel or 1), tostring(report.classBreakdownMaxLevel or 60) }
+    for _, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
+        classBreakdownFields[#classBreakdownFields + 1] = tostring((report.classBreakdownClasses or report.classes or {})[class] or 0)
+    end
+    classBreakdownFields[#classBreakdownFields + 1] = report.guildHomepageTag == "PVE" and "PVE"
+        or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
+    send(PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
         report.activeMembers, report.activePlayers, report.members), 3)
     return true
@@ -676,17 +897,39 @@ local function parseGuildReport(parts)
     if #guildDescription > iRC.GuildHomepageDescriptionMaxLength or guildDescription:find("[%c]")
         or iRC:ContainsProfanity(guildDescription)
         or #guildDescriptionEditedBy > 80 or guildDescriptionEditedBy:find("[%c]") then return nil end
+    local classBreakdownMode = tostring(parts[descriptionStart + 3] or "ALL")
+    if classBreakdownMode ~= "RANGE" and classBreakdownMode ~= "MAX" then classBreakdownMode = "ALL" end
+    local classBreakdownMinLevel = validNumber(parts[descriptionStart + 4] or "1", 1, 60) or 1
+    local classBreakdownMaxLevel = validNumber(parts[descriptionStart + 5] or "60", classBreakdownMinLevel, 60) or 60
+    if classBreakdownMode == "ALL" then classBreakdownMinLevel, classBreakdownMaxLevel = 1, 60
+    elseif classBreakdownMode == "MAX" then classBreakdownMinLevel, classBreakdownMaxLevel = 60, 60 end
+    local classBreakdownClasses, classBreakdownTotal = {}, 0
+    for index, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
+        local count = validNumber(parts[descriptionStart + 5 + index] or tostring(classes[class] or 0), 0, members)
+        if not count then return nil end
+        classBreakdownClasses[class], classBreakdownTotal = count, classBreakdownTotal + count
+    end
+    if classBreakdownTotal > members then return nil end
+    local guildHomepageTag = tostring(parts[descriptionStart + 15] or "NORMAL")
+    if guildHomepageTag ~= "PVE" and guildHomepageTag ~= "PVP" and guildHomepageTag ~= "RP" then
+        guildHomepageTag = "NORMAL"
+    end
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
         activeLevel30 = activeLevel30, activeMembers = activeMembers,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
-        classes = classes, rules = rules, rulesKnown = rulesKnown,
+        classes = classes, classBreakdownClasses = classBreakdownClasses,
+        rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
         guildContactsOnlineMask = guildContactsOnlineMask,
         guildDescription = guildDescription, guildDescriptionTimestamp = guildDescriptionTimestamp,
         guildDescriptionEditedBy = guildDescriptionEditedBy,
         guildHomepageIcon = guildHomepageIcon,
+        guildHomepageTag = guildHomepageTag,
+        classBreakdownMode = classBreakdownMode,
+        classBreakdownMinLevel = classBreakdownMinLevel,
+        classBreakdownMaxLevel = classBreakdownMaxLevel,
         faction = faction,
         addonVersion = addonVersion,
         source = "iRC guild report",
@@ -1067,7 +1310,7 @@ end
 handleMessage = function(prefix, message, sender, distribution, queued)
     if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
-    if distribution == "CHANNEL" and isOwnGuildSender(sender) then return end
+    if distribution == "CHANNEL" and isOwnGuildSender(sender) and message:match("^GUILD_") then return end
     if not queued and distribution == "WHISPER" and message:match("^CACHE_DATA\t")
         and C_Timer and C_Timer.After then
         queueCacheChunk(prefix, message, sender, distribution)
@@ -1096,11 +1339,33 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         end, tonumber((split(message))[3]) or 0)
         return
     end
-    if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC"))
+    if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC")
+        or message:match("^GUILD_CLASS_BREAKDOWN"))
         and iRC:DeferLowTraffic("traffic:racegrid-report:" .. iRC:NormalizeName(sender), function()
             handleMessage(prefix, message, sender, distribution)
         end) then return end
     local parts = publicParts or split(message)
+    if parts[1] == "ADMIN_PRESENCE_REQUEST" and distribution == "CHANNEL" then
+        local requestId, requester = tostring(parts[3] or ""), tostring(parts[4] or "")
+        if parts[2] == WIRE_VERSION and requestId:match("^[0-9a-f]+$") and #requestId <= 24
+            and iRC:NormalizeName(requester) == iRC:NormalizeName(sender) then
+            local senderKey, now = fullNameKey(sender), GetTime and GetTime() or 0
+            if not adminProbeBySender[senderKey] or now - adminProbeBySender[senderKey] >= 30 then
+                adminProbeBySender[senderKey] = now
+                local guildName = GetGuildInfo and GetGuildInfo("player") or ""
+                send(PREFIX, table.concat({ "ADMIN_PRESENCE_RESPONSE", WIRE_VERSION, requestId,
+                    tostring(iRC.Version or "Unknown"), tostring(guildName or ""):gsub("[%c]", " "):sub(1, 80) }, SEP),
+                    "WHISPER", sender)
+            end
+        end
+        return
+    elseif parts[1] == "ADMIN_PRESENCE_RESPONSE" and distribution == "WHISPER" then
+        if iRC:IsTestAdmin() and parts[2] == WIRE_VERSION
+            and tostring(parts[3] or "") == tostring(adminPresence.requestId or "") then
+            rememberAdminVersion(sender, parts[4], parts[5])
+        end
+        return
+    end
     if parts[1] and parts[1]:match("^CACHE_") and handleCacheMessage(parts, sender, distribution) then return end
     if parts[1] == "GUILD_DESC" and parts[2] == WIRE_VERSION then
         local timestamp, editedBy, value = tonumber(parts[3]), tostring(parts[4] or ""), tostring(parts[5] or "")
@@ -1117,6 +1382,37 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             end
         end
         return
+    elseif parts[1] == "GUILD_CLASS_BREAKDOWN" and parts[2] == WIRE_VERSION then
+        local reportTimestamp = tonumber(parts[3])
+        local mode = tostring(parts[4] or "")
+        local minLevel, maxLevel = tonumber(parts[5]), tonumber(parts[6])
+        local filteredClasses, filteredTotal = {}, 0
+        local validClasses = true
+        for index, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
+            local count = tonumber(parts[6 + index])
+            if not count or count ~= math.floor(count) or count < 0 then validClasses = false break end
+            filteredClasses[class], filteredTotal = count, filteredTotal + count
+        end
+        if reportTimestamp and (mode == "ALL" or mode == "RANGE" or mode == "MAX")
+            and minLevel and minLevel == math.floor(minLevel) and minLevel >= 1 and minLevel <= 60
+            and maxLevel and maxLevel == math.floor(maxLevel) and maxLevel >= minLevel and maxLevel <= 60
+            and validClasses then
+            for _, report in pairs(getServerStore().guildReports) do
+                if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
+                    and tonumber(report.timestamp) == reportTimestamp and filteredTotal <= (tonumber(report.members) or 0) then
+                    report.classBreakdownMode = mode
+                    report.classBreakdownMinLevel = mode == "MAX" and 60 or mode == "ALL" and 1 or minLevel
+                    report.classBreakdownMaxLevel = mode == "MAX" and 60 or mode == "ALL" and 60 or maxLevel
+                    report.classBreakdownClasses = filteredClasses
+                    local guildHomepageTag = tostring(parts[16] or "NORMAL")
+                    report.guildHomepageTag = guildHomepageTag == "PVE" and "PVE"
+                        or guildHomepageTag == "PVP" and "PVP" or guildHomepageTag == "RP" and "RP" or "NORMAL"
+                    if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+                    break
+                end
+            end
+        end
+        return
     end
     local report = parseGuildReport(parts)
     -- WoW may qualify the channel sender with its realm while the profile in
@@ -1124,6 +1420,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     -- canonical character-name form without weakening the sender check.
     if not report or isMutedOlympusGuild(report.guildName)
         or iRC:NormalizeName(report.name) ~= iRC:NormalizeName(sender) then return end
+    rememberAdminVersion(sender, report.addonVersion, report.guildName)
     if distribution == "CHANNEL" then
         local ownGuildName = GetGuildInfo and GetGuildInfo("player")
         if ownGuildName and normalizeGuildName(report.guildName) == normalizeGuildName(ownGuildName) then return end
@@ -1190,6 +1487,13 @@ frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("CHAT_MSG_CHANNEL")
+frame:RegisterEvent("CHAT_MSG_SYSTEM")
+if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("CHANNEL_ROSTER_UPDATE") then
+    frame:RegisterEvent("CHANNEL_ROSTER_UPDATE")
+end
+if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("CHAT_MSG_CHANNEL_LIST") then
+    frame:RegisterEvent("CHAT_MSG_CHANNEL_LIST")
+end
 if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("CHANNEL_UI_UPDATE") then
     frame:RegisterEvent("CHANNEL_UI_UPDATE")
 end
@@ -1231,19 +1535,27 @@ frame:SetScript("OnEvent", function(_, event, ...)
             -- Wait for the rest of Blizzard's auto-joined channels to settle.
             RaceGrid:ScheduleChannelJoin(3)
         end
+    elseif event == "CHANNEL_ROSTER_UPDATE" then
+        local displayIndex, rosterCount = ...
+        if adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10 then
+            refreshAdminChannelRoster(displayIndex, rosterCount)
+        end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         handleMessage(prefix, message, sender, distribution)
+    elseif event == "CHAT_MSG_CHANNEL_LIST" or event == "CHAT_MSG_SYSTEM" then
+        captureAdminChannelList(...)
     elseif event == "CHAT_MSG_CHANNEL" then
         local message, sender = ...
         local channelName = select(9, ...)
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
-            -- Same-guild reports are already assembled locally; skip their
-            -- public chunks before hex decoding or debug logging.
-            if isOwnGuildSender(sender) then return end
             local decoded = decodeChannelWire(message, sender)
-            if decoded then handleMessage(PREFIX, decoded, sender, "CHANNEL") end
+            -- Same-guild reports are already assembled locally. Admin
+            -- presence probes still need to reach every channel member.
+            if decoded and (not isOwnGuildSender(sender) or not decoded:match("^GUILD_")) then
+                handleMessage(PREFIX, decoded, sender, "CHANNEL")
+            end
         end
     end
 end)

@@ -30,6 +30,10 @@ local function getGuildCardTag(group)
     if progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND" then
         return "Self-Found", { 1.00, 0.55, 0.55 }
     end
+    local homepageTag = tostring(group.guildHomepageTag or "NORMAL")
+    if homepageTag == "PVE" then return "PvE", { 0.38, 0.85, 0.45 } end
+    if homepageTag == "PVP" then return "PvP", { 1.00, 0.38, 0.32 } end
+    if homepageTag == "RP" then return "RP", { 0.72, 0.55, 1.00 } end
     return "Normal", { 0.72, 0.72, 0.72 }
 end
 
@@ -46,6 +50,8 @@ end
 local COLORS = {
     gold = iRC.ColorValues.Orange,
     green = iRC.ColorValues.Green,
+    red = { 1, 0.32, 0.28 },
+    gray = iRC.ColorValues.Gray,
     muted = iRC.ColorValues.Gray,
     parchment = iRC.ColorValues.Orange,
 }
@@ -112,6 +118,25 @@ local function createBackdrop(frame, color, border)
     frame:SetBackdropBorderColor(unpack(border))
 end
 
+local function makeIRCActionButton(parent, width, height, text, destructive)
+    local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    button:SetSize(width, height)
+    createBackdrop(button, destructive and { 0.16, 0.035, 0.025, 0.98 } or { 0.08, 0.06, 0.035, 0.98 },
+        destructive and { 0.72, 0.20, 0.12, 1 } or { 0.52, 0.38, 0.17, 1 })
+    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    button.text:SetPoint("CENTER", 0, 0)
+    button.text:SetText(text)
+    button.text:SetTextColor(destructive and 1 or COLORS.gold[1],
+        destructive and 0.55 or COLORS.gold[2], destructive and 0.40 or COLORS.gold[3])
+    button:SetFontString(button.text)
+    button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+    button.highlight:SetPoint("TOPLEFT", 3, -3)
+    button.highlight:SetPoint("BOTTOMRIGHT", -3, 3)
+    button.highlight:SetColorTexture(destructive and 1 or COLORS.gold[1],
+        destructive and 0.24 or COLORS.gold[2], destructive and 0.16 or COLORS.gold[3], 0.15)
+    return button
+end
+
 local function makeMemberRow(parent, index)
     local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -135,6 +160,16 @@ local function makeMemberRow(parent, index)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
     row.detail:SetJustifyH("LEFT")
     return row
+end
+
+local function resetInactiveMemberView(frame)
+    if not frame then return end
+    frame.inactiveMemberDays = 30
+    if frame.inactiveThreshold and frame.inactiveThreshold.input then
+        frame.inactiveThreshold.input:SetText("30")
+        frame.inactiveThreshold.input:ClearFocus()
+    end
+    for _, row in ipairs(frame.memberRows or {}) do row:SetAlpha(1) end
 end
 
 local function makeGuildRuleRow(parent, index)
@@ -360,11 +395,12 @@ local MAIN_NAVIGATION = {
     { id = "Guild Members", label = "Guild Members", child = true },
     { id = "Management", header = true, managementHeader = true },
     { id = "Guild Log", label = "Guild Log", child = true, anyPermission = true },
-    { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, permission = "verification", dashboardTab = "Verification" },
+    { id = "Inactive Member Management", label = "Inactive Members", child = true, permission = "memberRemoval" },
+    { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, permission = "verification", dashboardTab = "Verification", requiresConnection = true },
     { id = "Incident Management", label = iRC:Text("INCIDENT_TAB"), grandchild = true, permission = "incidents", dashboardTab = "Incidents" },
-    { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications" },
-    { id = "Homepage Management", label = iRC:Text("GUILD_HOMEPAGE_TAB"), child = true, permission = "homepage", panelKey = "homepage" },
-    { id = "Guild-Found Management", label = iRC:Text("GUILDFOUND_TOOLS_TAB"), child = true, permission = "tradeExceptions", panelKey = "guildFound" },
+    { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications", requiresConnection = true },
+    { id = "Homepage Management", label = iRC:Text("GUILD_HOMEPAGE_TAB"), child = true, permission = "homepage", panelKey = "homepage", requiresConnection = true },
+    { id = "Guild-Found Management", label = iRC:Text("GUILDFOUND_TOOLS_TAB"), child = true, permission = "tradeExceptions", panelKey = "guildFound", requiresGuildFound = true },
 }
 
 local MANAGEMENT_PANEL_KEYS = {
@@ -402,10 +438,51 @@ local function getProfile(frame)
     return profile
 end
 
+local function getEligibleInactiveMembers(threshold, testAdminPreview)
+    threshold = math.max(0, math.min(9999, math.floor(tonumber(threshold) or 30)))
+    local members = {}
+    local selfKey = iRC:NormalizeName(iRC:GetPlayerName())
+    local _, _, ownRank = GetGuildInfo and GetGuildInfo("player")
+    local nativeRemovalAvailable = not CanGuildRemove or CanGuildRemove()
+    local preview = testAdminPreview == true and iRC:IsTestAdmin()
+    if not preview and (not nativeRemovalAvailable or type(ownRank) ~= "number") then return members end
+    for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+        if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
+            and iRC:NormalizeName(member.name) ~= selfKey
+            and (preview or type(member.rankIndex) == "number" and member.rankIndex > ownRank) then
+            members[#members + 1] = member
+        end
+    end
+    table.sort(members, function(a, b)
+        if a.lastOnlineDays ~= b.lastOnlineDays then return a.lastOnlineDays > b.lastOnlineDays end
+        return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name)
+    end)
+    return members
+end
+
 local function setTabAppearance(button, active)
+    if button.unavailable then
+        button:SetBackdropColor(0.045, 0.045, 0.045, 0.78)
+        button:SetBackdropBorderColor(0.18, 0.18, 0.18, 0.72)
+        button.label:SetTextColor(0.42, 0.42, 0.42)
+        return
+    end
     button:SetBackdropColor(active and 0.24 or 0.08, active and 0.16 or 0.065, active and 0.04 or 0.05, 0.96)
     button:SetBackdropBorderColor(active and 1 or 0.34, active and 0.72 or 0.28, active and 0.18 or 0.20, 1)
     button.label:SetTextColor(unpack(active and COLORS.gold or COLORS.parchment))
+end
+
+local function getNavigationUnavailableReason(item)
+    if item.requiresConnection and not iRC:IsGuildConnectionActive() then
+        return iRC:Text("MANAGEMENT_REQUIRES_CONNECTION")
+    end
+    if item.requiresGuildFound then
+        if not iRC:IsGuildConnectionActive() then return iRC:Text("MANAGEMENT_REQUIRES_CONNECTION") end
+        local rules = iRC:GetConnectionRules()
+        if not rules or (rules.guildFoundOnly ~= true and rules.level60GuildFound ~= true) then
+            return iRC:Text("MANAGEMENT_REQUIRES_GUILD_FOUND")
+        end
+    end
 end
 
 local applyMemberSearch
@@ -604,6 +681,445 @@ function UI:Create()
     disableConfirm:Hide()
     frame.disableConfirm = disableConfirm
 
+    local removeMemberConfirm = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    removeMemberConfirm:SetSize(510, 205)
+    removeMemberConfirm:SetPoint("CENTER", frame, "CENTER", 0, 20)
+    removeMemberConfirm:SetFrameStrata("FULLSCREEN_DIALOG")
+    removeMemberConfirm:SetToplevel(true)
+    removeMemberConfirm:EnableMouse(true)
+    createBackdrop(removeMemberConfirm, { 0.025, 0.022, 0.018, 1 }, { 0.72, 0.30, 0.16, 1 })
+    removeMemberConfirm.title = removeMemberConfirm:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    removeMemberConfirm.title:SetPoint("TOPLEFT", 22, -20)
+    removeMemberConfirm.title:SetText("Remove inactive guild member?")
+    removeMemberConfirm.title:SetTextColor(unpack(COLORS.gold))
+    removeMemberConfirm.body = removeMemberConfirm:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    removeMemberConfirm.body:SetPoint("TOPLEFT", removeMemberConfirm.title, "BOTTOMLEFT", 0, -14)
+    removeMemberConfirm.body:SetPoint("TOPRIGHT", removeMemberConfirm, "TOPRIGHT", -22, -52)
+    removeMemberConfirm.body:SetJustifyH("LEFT")
+    removeMemberConfirm.body:SetJustifyV("TOP")
+    removeMemberConfirm.body:SetWordWrap(true)
+    local function makeRemoveConfirmButton(text, width)
+        local button = CreateFrame("Button", nil, removeMemberConfirm, "BackdropTemplate")
+        button:SetSize(width, 28)
+        createBackdrop(button, { 0.08, 0.06, 0.04, 1 }, { 0.48, 0.35, 0.16, 1 })
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("CENTER")
+        button.text:SetText(text)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(1, 0.72, 0.22, 0.12)
+        return button
+    end
+    removeMemberConfirm.cancel = makeRemoveConfirmButton("Cancel", 120)
+    removeMemberConfirm.cancel:SetPoint("BOTTOMRIGHT", removeMemberConfirm, "BOTTOMRIGHT", -22, 18)
+    removeMemberConfirm.cancel:SetScript("OnClick", function() removeMemberConfirm:Hide() end)
+    removeMemberConfirm.accept = makeRemoveConfirmButton("Remove member", 190)
+    removeMemberConfirm.accept:SetPoint("RIGHT", removeMemberConfirm.cancel, "LEFT", -10, 0)
+    removeMemberConfirm.accept:SetBackdropColor(0.20, 0.035, 0.025, 1)
+    removeMemberConfirm.accept:SetBackdropBorderColor(0.85, 0.20, 0.12, 1)
+
+    removeMemberConfirm.bulkList = CreateFrame("Frame", nil, removeMemberConfirm, "BackdropTemplate")
+    removeMemberConfirm.bulkList:SetPoint("TOPLEFT", removeMemberConfirm, "TOPLEFT", 22, -157)
+    removeMemberConfirm.bulkList:SetPoint("BOTTOMRIGHT", removeMemberConfirm, "BOTTOMRIGHT", -22, 58)
+    createBackdrop(removeMemberConfirm.bulkList, { 0.04, 0.032, 0.025, 0.98 }, { 0.42, 0.31, 0.15, 0.95 })
+    local bulkScroll = CreateFrame("ScrollFrame", nil, removeMemberConfirm.bulkList, "UIPanelScrollFrameTemplate")
+    bulkScroll:SetPoint("TOPLEFT", removeMemberConfirm.bulkList, "TOPLEFT", 7, -7)
+    bulkScroll:SetPoint("BOTTOMRIGHT", removeMemberConfirm.bulkList, "BOTTOMRIGHT", -28, 7)
+    local bulkChild = CreateFrame("Frame", nil, bulkScroll)
+    bulkChild:SetSize(492, 1)
+    bulkScroll:SetScrollChild(bulkChild)
+    removeMemberConfirm.bulkRows = {}
+    local function refreshBulkSelection()
+        local selected = 0
+        for _, candidate in ipairs(removeMemberConfirm.bulkCandidates or {}) do
+            if candidate.selected then selected = selected + 1 end
+        end
+        removeMemberConfirm.accept.text:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_SELECTED", selected))
+        removeMemberConfirm.accept:SetEnabled(selected > 0)
+        removeMemberConfirm.accept:SetAlpha(selected > 0 and 1 or 0.42)
+    end
+    local function setBulkCandidates(candidates)
+        removeMemberConfirm.bulkCandidates = {}
+        for index, member in ipairs(candidates or {}) do
+            local candidate = {
+                name = member.name,
+                lastOnlineDays = tonumber(member.lastOnlineDays) or 0,
+                rankName = member.rankName,
+                selected = true,
+            }
+            removeMemberConfirm.bulkCandidates[index] = candidate
+            local row = removeMemberConfirm.bulkRows[index]
+            if not row then
+                row = CreateFrame("Button", nil, bulkChild, "BackdropTemplate")
+                row:SetHeight(34)
+                createBackdrop(row, { 0.075, 0.06, 0.04, 0.96 }, { 0.27, 0.22, 0.13, 0.9 })
+                row.check = CreateFrame("Frame", nil, row, "BackdropTemplate")
+                row.check:SetSize(20, 20)
+                row.check:SetPoint("LEFT", row, "LEFT", 8, 0)
+                createBackdrop(row.check, { 0.035, 0.03, 0.02, 1 }, { 0.68, 0.46, 0.16, 1 })
+                row.mark = row.check:CreateTexture(nil, "OVERLAY")
+                row.mark:SetSize(24, 24)
+                row.mark:SetPoint("CENTER", 0, 0)
+                row.mark:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+                row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                row.name:SetPoint("LEFT", row.check, "RIGHT", 10, 0)
+                row.name:SetWidth(220)
+                row.name:SetJustifyH("LEFT")
+                row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                row.detail:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+                row.detail:SetWidth(210)
+                row.detail:SetJustifyH("RIGHT")
+                row.highlight = row:CreateTexture(nil, "HIGHLIGHT")
+                row.highlight:SetPoint("TOPLEFT", 3, -3)
+                row.highlight:SetPoint("BOTTOMRIGHT", -3, 3)
+                row.highlight:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.12)
+                row:SetScript("OnClick", function(self)
+                    if not self.candidate then return end
+                    self.candidate.selected = not self.candidate.selected
+                    self.mark:SetShown(self.candidate.selected)
+                    self:SetAlpha(self.candidate.selected and 1 or 0.52)
+                    refreshBulkSelection()
+                end)
+                removeMemberConfirm.bulkRows[index] = row
+            end
+            row.candidate = candidate
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", bulkChild, "TOPLEFT", 0, -((index - 1) * 36))
+            row:SetPoint("TOPRIGHT", bulkChild, "TOPRIGHT", 0, -((index - 1) * 36))
+            row.name:SetText(iRC:FormatPlayerName(candidate.name))
+            row.detail:SetText(math.floor(candidate.lastOnlineDays + 0.5) .. " days · "
+                .. tostring(candidate.rankName or "Unknown rank"))
+            row.mark:Show()
+            row:SetAlpha(1)
+            row:Show()
+        end
+        for index = #(candidates or {}) + 1, #removeMemberConfirm.bulkRows do
+            removeMemberConfirm.bulkRows[index]:Hide()
+        end
+        bulkChild:SetHeight(math.max(1, #(candidates or {}) * 36))
+        bulkScroll:SetVerticalScroll(0)
+        refreshBulkSelection()
+    end
+    removeMemberConfirm.setBulkCandidates = setBulkCandidates
+    removeMemberConfirm.bulkList:Hide()
+
+    local removalQueue = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    removalQueue:SetSize(590, 245)
+    removalQueue:SetPoint("CENTER", frame, "CENTER", 0, 20)
+    removalQueue:SetFrameStrata("FULLSCREEN_DIALOG")
+    removalQueue:SetToplevel(true)
+    removalQueue:EnableMouse(true)
+    createBackdrop(removalQueue, { 0.025, 0.022, 0.018, 1 }, { 0.72, 0.30, 0.16, 1 })
+    removalQueue.title = removalQueue:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    removalQueue.title:SetPoint("TOPLEFT", 22, -20)
+    removalQueue.title:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_TITLE"))
+    removalQueue.title:SetTextColor(unpack(COLORS.gold))
+    removalQueue.progress = removalQueue:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    removalQueue.progress:SetPoint("TOPRIGHT", -22, -23)
+    removalQueue.body = removalQueue:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    removalQueue.body:SetPoint("TOPLEFT", removalQueue.title, "BOTTOMLEFT", 0, -20)
+    removalQueue.body:SetPoint("TOPRIGHT", removalQueue, "TOPRIGHT", -22, -58)
+    removalQueue.body:SetJustifyH("LEFT")
+    removalQueue.body:SetJustifyV("TOP")
+    removalQueue.body:SetWordWrap(true)
+
+    local function makeQueueButton(text, width, secure)
+        local template = secure and "SecureActionButtonTemplate,BackdropTemplate" or "BackdropTemplate"
+        local button = CreateFrame("Button", nil, removalQueue, template)
+        button:SetSize(width, 30)
+        createBackdrop(button, { 0.08, 0.06, 0.04, 1 }, { 0.48, 0.35, 0.16, 1 })
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("CENTER")
+        button.text:SetText(text)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(1, 0.72, 0.22, 0.12)
+        return button
+    end
+
+    removalQueue.cancel = makeQueueButton(iRC:Text("INACTIVE_MEMBERS_QUEUE_CANCEL"), 140, false)
+    removalQueue.cancel:SetPoint("BOTTOMRIGHT", removalQueue, "BOTTOMRIGHT", -22, 18)
+    removalQueue.skip = makeQueueButton(iRC:Text("INACTIVE_MEMBERS_QUEUE_SKIP"), 90, false)
+    removalQueue.skip:SetPoint("RIGHT", removalQueue.cancel, "LEFT", -10, 0)
+    removalQueue.remove = makeQueueButton("Remove member", 245, true)
+    removalQueue.remove:SetPoint("RIGHT", removalQueue.skip, "LEFT", -10, 0)
+    removalQueue.remove:SetBackdropColor(0.20, 0.035, 0.025, 1)
+    removalQueue.remove:SetBackdropBorderColor(0.85, 0.20, 0.12, 1)
+    removalQueue.remove:RegisterForClicks("LeftButtonUp")
+    removalQueue.combatBlocker = makeQueueButton(iRC:Text("INACTIVE_MEMBERS_QUEUE_COMBAT_BUTTON"), 245, false)
+    removalQueue.combatBlocker:SetPoint("CENTER", removalQueue.remove, "CENTER", 0, 0)
+    removalQueue.combatBlocker:SetFrameLevel(removalQueue.remove:GetFrameLevel() + 10)
+    removalQueue.combatBlocker:Hide()
+    removalQueue.testRemove = makeQueueButton("Simulate removal", 245, false)
+    removalQueue.testRemove:SetPoint("CENTER", removalQueue.remove, "CENTER", 0, 0)
+    removalQueue.testRemove:SetFrameLevel(removalQueue.remove:GetFrameLevel() + 20)
+    removalQueue.testRemove:SetBackdropColor(0.12, 0.075, 0.025, 1)
+    removalQueue.testRemove:SetBackdropBorderColor(0.85, 0.58, 0.16, 1)
+    removalQueue.testRemove:Hide()
+
+    local advanceRemovalQueue
+    local function findQueueCandidate(name, threshold, testPreview)
+        if iRC.InvalidateGuildRosterSnapshot then iRC:InvalidateGuildRosterSnapshot() end
+        for _, member in ipairs(getEligibleInactiveMembers(threshold, testPreview)) do
+            if iRC:NormalizeName(member.name) == iRC:NormalizeName(name) then return member end
+        end
+        return nil
+    end
+
+    local function finishRemovalQueue()
+        if not removalQueue.active then return end
+        local removed = removalQueue.removed or 0
+        local skipped = removalQueue.skipped or 0
+        local failed = removalQueue.failed or 0
+        removalQueue.active = nil
+        removalQueue.waitingName = nil
+        removalQueue.timerTicket = nil
+        removalQueue:Hide()
+        if removalQueue.testPreview then
+            iRC:Print(iRC:Text("INACTIVE_MEMBERS_QUEUE_TEST_COMPLETE", removed, skipped))
+        else
+            iRC:Print(iRC:Text("INACTIVE_MEMBERS_QUEUE_COMPLETE", removed, skipped, failed))
+            iRC:RefreshGuildRoster()
+        end
+        removalQueue.testPreview = nil
+        UI:RefreshIfShown()
+    end
+
+    local function resolvePendingRemoval(finalCheck)
+        local name = removalQueue.waitingName
+        if not removalQueue.active or not name then return end
+        if iRC.InvalidateGuildRosterSnapshot then iRC:InvalidateGuildRosterSnapshot() end
+        local stillPresent = false
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            if iRC:NormalizeName(member.name) == iRC:NormalizeName(name) then
+                stillPresent = true
+                break
+            end
+        end
+        if stillPresent and not finalCheck then return end
+
+        removalQueue.waitingName = nil
+        removalQueue.timerTicket = nil
+        if stillPresent then
+            removalQueue.failed = (removalQueue.failed or 0) + 1
+            iRC:Print(iRC.Colors.Red .. iRC:Text("INACTIVE_MEMBERS_QUEUE_FAILED", iRC:FormatPlayerName(name))
+                .. iRC.Colors.Reset)
+        else
+            removalQueue.removed = (removalQueue.removed or 0) + 1
+            iRC:Print(iRC:Text("INACTIVE_MEMBERS_QUEUE_CONFIRMED", iRC:FormatPlayerName(name)))
+        end
+        removalQueue.index = (removalQueue.index or 1) + 1
+        advanceRemovalQueue()
+        UI:RefreshIfShown()
+    end
+
+    advanceRemovalQueue = function()
+        if not removalQueue.active or removalQueue.waitingName then return end
+        if not iRC:HasGuildPermission("memberRemoval") then
+            iRC:Print(iRC.Colors.Red .. "The removal queue stopped because your delegated permission is no longer active."
+                .. iRC.Colors.Reset)
+            removalQueue.active = nil
+            removalQueue:Hide()
+            return
+        end
+
+        while removalQueue.index <= removalQueue.total do
+            local requestedName = removalQueue.items[removalQueue.index]
+            local candidate = findQueueCandidate(requestedName, removalQueue.threshold, removalQueue.testPreview)
+            if candidate then
+                removalQueue.currentName = candidate.name
+                removalQueue.progress:SetText(tostring(removalQueue.index) .. " / " .. tostring(removalQueue.total))
+                if removalQueue.testPreview then
+                    removalQueue.testRemove.text:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_TEST_REMOVE",
+                        iRC:FormatPlayerName(candidate.name)))
+                    removalQueue.testRemove:Show()
+                    removalQueue.combatBlocker:Hide()
+                    removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_TEST_BODY",
+                        iRC:FormatPlayerName(candidate.name), removalQueue.index, removalQueue.total))
+                elseif InCombatLockdown and InCombatLockdown() then
+                    removalQueue.testRemove:Hide()
+                    removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_COMBAT"))
+                    removalQueue.combatBlocker:Show()
+                else
+                    removalQueue.testRemove:Hide()
+                    removalQueue.remove.text:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_REMOVE",
+                        iRC:FormatPlayerName(candidate.name)))
+                    local command = "/stopmacro [combat]\n" .. (SLASH_GUILD_UNINVITE1 or "/gremove") .. " "
+                        .. tostring(candidate.name):gsub("[\r\n]", "")
+                    removalQueue.remove:SetAttribute("type", "macro")
+                    removalQueue.remove:SetAttribute("macrotext", command)
+                    removalQueue.remove:SetEnabled(true)
+                    removalQueue.remove:SetAlpha(1)
+                    removalQueue.combatBlocker:Hide()
+                    removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_BODY",
+                        iRC:FormatPlayerName(candidate.name), removalQueue.index, removalQueue.total))
+                end
+                removalQueue.skip:SetEnabled(true)
+                removalQueue.skip:SetAlpha(1)
+                removalQueue:Show()
+                removalQueue:Raise()
+                return
+            end
+
+            removalQueue.skipped = (removalQueue.skipped or 0) + 1
+            iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_QUEUE_SKIPPED",
+                iRC:FormatPlayerName(requestedName)) .. iRC.Colors.Reset)
+            removalQueue.index = removalQueue.index + 1
+        end
+        finishRemovalQueue()
+    end
+
+    local function startRemovalQueue(names, threshold, testPreview)
+        if type(names) ~= "table" or #names == 0 then return false end
+        removalQueue.items = names
+        removalQueue.total = #names
+        removalQueue.index = 1
+        removalQueue.threshold = threshold
+        removalQueue.removed = 0
+        removalQueue.skipped = 0
+        removalQueue.failed = 0
+        removalQueue.currentName = nil
+        removalQueue.waitingName = nil
+        removalQueue.timerTicket = nil
+        removalQueue.testPreview = testPreview == true
+        removalQueue.active = true
+        advanceRemovalQueue()
+        return true
+    end
+
+    function removalQueue:Cancel()
+        self.active = nil
+        self.currentName = nil
+        self.waitingName = nil
+        self.timerTicket = nil
+        self.testPreview = nil
+        self:Hide()
+    end
+
+    removalQueue.cancel:SetScript("OnClick", function() removalQueue:Cancel() end)
+    removalQueue.skip:SetScript("OnClick", function()
+        if not removalQueue.active or removalQueue.waitingName then return end
+        removalQueue.skipped = (removalQueue.skipped or 0) + 1
+        removalQueue.index = (removalQueue.index or 1) + 1
+        advanceRemovalQueue()
+    end)
+    removalQueue.testRemove:SetScript("OnClick", function()
+        if not removalQueue.active or not removalQueue.testPreview or removalQueue.waitingName
+            or not removalQueue.currentName then return end
+        iRC:Print(iRC:Text("INACTIVE_MEMBERS_TEST_REMOVE",
+            iRC:FormatPlayerName(removalQueue.currentName)))
+        removalQueue.removed = (removalQueue.removed or 0) + 1
+        removalQueue.index = (removalQueue.index or 1) + 1
+        advanceRemovalQueue()
+    end)
+    removalQueue.remove:SetScript("PostClick", function()
+        if not removalQueue.active or removalQueue.waitingName or not removalQueue.currentName then return end
+        if InCombatLockdown and InCombatLockdown() then
+            removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_COMBAT"))
+            removalQueue.combatBlocker:Show()
+            return
+        end
+        removalQueue.waitingName = removalQueue.currentName
+        removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_WAITING",
+            iRC:FormatPlayerName(removalQueue.waitingName)))
+        removalQueue.remove:SetEnabled(false)
+        removalQueue.remove:SetAlpha(0.42)
+        removalQueue.skip:SetEnabled(false)
+        removalQueue.skip:SetAlpha(0.42)
+        iRC:RefreshGuildRoster()
+        if C_Timer and C_Timer.After then
+            local ticket = {}
+            removalQueue.timerTicket = ticket
+            C_Timer.After(8, function()
+                if removalQueue.timerTicket == ticket then resolvePendingRemoval(true) end
+            end)
+        else
+            resolvePendingRemoval(true)
+        end
+    end)
+    removalQueue:RegisterEvent("GUILD_ROSTER_UPDATE")
+    removalQueue:RegisterEvent("PLAYER_REGEN_DISABLED")
+    removalQueue:RegisterEvent("PLAYER_REGEN_ENABLED")
+    removalQueue:SetScript("OnEvent", function(_, event)
+        if not removalQueue.active then return end
+        if event == "GUILD_ROSTER_UPDATE" and removalQueue.waitingName then
+            if C_Timer and C_Timer.After then
+                C_Timer.After(0, function() resolvePendingRemoval(false) end)
+            else
+                resolvePendingRemoval(false)
+            end
+        elseif event == "PLAYER_REGEN_DISABLED" and not removalQueue.waitingName then
+            advanceRemovalQueue()
+        elseif event == "PLAYER_REGEN_ENABLED" and not removalQueue.waitingName then
+            advanceRemovalQueue()
+        end
+    end)
+    removalQueue:Hide()
+    frame.removalQueue = removalQueue
+
+    removeMemberConfirm.accept:SetScript("OnClick", function()
+        local removeAll = removeMemberConfirm.removeAll == true
+        local testPreview = removeMemberConfirm.testPreview == true
+        local selectedNames, selectedOrder = {}, {}
+        if removeAll then
+            for _, candidate in ipairs(removeMemberConfirm.bulkCandidates or {}) do
+                if candidate.selected then
+                    selectedNames[iRC:NormalizeName(candidate.name)] = candidate.name
+                    selectedOrder[#selectedOrder + 1] = candidate.name
+                end
+            end
+        end
+        local targetName = removeMemberConfirm.targetName
+        local threshold = math.max(0, math.min(9999,
+            math.floor(tonumber(removeMemberConfirm.threshold) or 30)))
+        removeMemberConfirm:Hide()
+        removeMemberConfirm.removeAll = nil
+        removeMemberConfirm.testPreview = nil
+        removeMemberConfirm.targetName = nil
+        if removeAll then
+            if not iRC:HasGuildPermission("memberRemoval") then return end
+            if testPreview then
+                startRemovalQueue(selectedOrder, threshold, true)
+                return
+            end
+            local eligible = getEligibleInactiveMembers(threshold)
+            if #eligible == 0 then
+                if testPreview then return end
+                iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
+                return
+            end
+            local removals = {}
+            for _, member in ipairs(eligible) do
+                if selectedNames[iRC:NormalizeName(member.name)] then removals[#removals + 1] = member.name end
+            end
+            if #removals == 0 then
+                iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
+                return
+            end
+            startRemovalQueue(removals, threshold)
+            return
+        end
+        if not targetName or not iRC:HasGuildPermission("memberRemoval") then return end
+        local candidate
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            if iRC:NormalizeName(member.name) == iRC:NormalizeName(targetName) then candidate = member break end
+        end
+        if not candidate or candidate.online or not candidate.lastOnlineDays
+            or candidate.lastOnlineDays < threshold or iRC:NormalizeName(candidate.name) == iRC:NormalizeName(iRC:GetPlayerName()) then
+            iRC:Print(iRC.Colors.Yellow .. "That member is no longer eligible for inactive-member removal." .. iRC.Colors.Reset)
+            return
+        end
+        local _, _, ownRank = GetGuildInfo and GetGuildInfo("player")
+        if type(ownRank) ~= "number" or type(candidate.rankIndex) ~= "number" or candidate.rankIndex <= ownRank
+            or (CanGuildRemove and not CanGuildRemove()) then
+            iRC:Print(iRC.Colors.Red .. "Your WoW guild rank cannot remove that member." .. iRC.Colors.Reset)
+            return
+        end
+        startRemovalQueue({ candidate.name }, threshold)
+    end)
+    removeMemberConfirm:Hide()
+    frame.removeMemberConfirm = removeMemberConfirm
+
     local header = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     header:SetPoint("TOPLEFT", 15, -10)
     header:SetPoint("TOPRIGHT", -15, -10)
@@ -664,7 +1180,13 @@ function UI:Create()
                 tab.label:SetText((item.child or item.grandchild) and "- " .. item.label or item.label)
                 tab.category = item.id
                 tab:SetScript("OnClick", function(self)
+                    if self.unavailable then return end
                     local previousCategory = frame.category
+                    if previousCategory ~= self.category
+                        and (previousCategory == "Inactive Member Management"
+                            or self.category == "Inactive Member Management") then
+                        resetInactiveMemberView(frame)
+                    end
                     frame.category = self.category
                     if self.category == "Guild Rules" and frame.scroll then frame.scroll:SetVerticalScroll(0) end
                     if self.category == "Race Overview" then
@@ -674,10 +1196,19 @@ function UI:Create()
                             iRC.RaceGrid:RequestGuildCacheFromOpen()
                         end
                     end
-                    if self.category == "Guild Members" then iRC:RefreshGuildRoster() end
+                    if self.category == "Guild Members" or self.category == "Inactive Member Management" then
+                        iRC:RefreshGuildRoster()
+                    end
                     if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
                     UI:Refresh()
                 end)
+                tab:SetScript("OnEnter", function(self)
+                    if not self.unavailable or not self.unavailableReason or not GameTooltip then return end
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetText(self.unavailableReason, 0.75, 0.75, 0.75, 1, true)
+                    GameTooltip:Show()
+                end)
+                tab:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
                 frame.tabs[item.id] = tab
                 item.widget = tab
             end
@@ -701,6 +1232,12 @@ function UI:Create()
             if widget then
                 widget:SetShown(visible)
                 if visible then
+                    if not item.header then
+                        widget.unavailableReason = getNavigationUnavailableReason(item)
+                        widget.unavailable = widget.unavailableReason ~= nil
+                        local highlight = widget.GetHighlightTexture and widget:GetHighlightTexture()
+                        if highlight then highlight:SetAlpha(widget.unavailable and 0 or 1) end
+                    end
                     visibleIndex = visibleIndex + 1
                     local y = -((visibleIndex - 1) * 35 + 14)
                     widget:ClearAllPoints()
@@ -711,7 +1248,8 @@ function UI:Create()
         end
         for _, item in ipairs(MAIN_NAVIGATION) do
             if item.id == frame.category and ((item.permission and not iRC:HasGuildPermission(item.permission))
-                or (item.anyPermission and not showManagement)) then
+                or (item.anyPermission and not showManagement) or getNavigationUnavailableReason(item)) then
+                if frame.category == "Inactive Member Management" then resetInactiveMemberView(frame) end
                 frame.category = "Guild Members"
                 break
             end
@@ -727,10 +1265,8 @@ function UI:Create()
     frame.contentTitle = main:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.contentTitle:SetPoint("TOPLEFT", 15, -14)
     frame.contentTitle:SetTextColor(unpack(COLORS.gold))
-    frame.raceRefresh = CreateFrame("Button", nil, main, "UIPanelButtonTemplate")
-    frame.raceRefresh:SetSize(125, 23)
+    frame.raceRefresh = makeIRCActionButton(main, 125, 25, iRC:Text("RL_GRID_REFRESH"), false)
     frame.raceRefresh:SetPoint("TOPRIGHT", -14, -9)
-    frame.raceRefresh:SetText(iRC:Text("RL_GRID_REFRESH"))
     frame.raceRefresh:SetScript("OnClick", function()
         if frame.category == "Race Overview" and frame.scroll then
             UI.preservedRaceScroll = frame.scroll:GetVerticalScroll()
@@ -762,6 +1298,7 @@ function UI:Create()
         self.cooldownElapsed = 0
         local remaining = iRC.RaceGrid and iRC.RaceGrid:GetRefreshCooldownRemaining() or 0
         self:SetEnabled(remaining <= 0)
+        self:SetAlpha(remaining <= 0 and 1 or 0.42)
         self:SetText(remaining > 0 and iRC:Text("RL_GRID_REFRESH_COOLDOWN", math.ceil(remaining)) or iRC:Text("RL_GRID_REFRESH"))
     end)
     frame.raceRefresh:Hide()
@@ -956,6 +1493,75 @@ function UI:Create()
     end)
     frame.guildLogSearch:Hide()
     frame.guildLogSearch.suggestions:Hide()
+
+    frame.inactiveThreshold = CreateFrame("Frame", nil, main)
+    frame.inactiveThreshold:SetSize(360, 26)
+    frame.inactiveThreshold:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -49)
+    frame.inactiveThreshold.label = frame.inactiveThreshold:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.inactiveThreshold.label:SetPoint("LEFT", frame.inactiveThreshold, "LEFT", 0, 0)
+    frame.inactiveThreshold.label:SetText(iRC:Text("INACTIVE_MEMBERS_THRESHOLD"))
+    frame.inactiveThreshold.input = CreateFrame("EditBox", nil, frame.inactiveThreshold, "InputBoxTemplate")
+    frame.inactiveThreshold.input:SetSize(58, 22)
+    frame.inactiveThreshold.input:SetPoint("LEFT", frame.inactiveThreshold.label, "RIGHT", 10, 0)
+    frame.inactiveThreshold.input:SetAutoFocus(false)
+    frame.inactiveThreshold.input:SetNumeric(true)
+    frame.inactiveThreshold.input:SetMaxLetters(4)
+    frame.inactiveThreshold.input:SetTextInsets(5, 5, 0, 0)
+    frame.inactiveThreshold.days = frame.inactiveThreshold:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.inactiveThreshold.days:SetPoint("LEFT", frame.inactiveThreshold.input, "RIGHT", 8, 0)
+    frame.inactiveThreshold.days:SetText(iRC:Text("INACTIVE_MEMBERS_DAYS"))
+    frame.inactiveThreshold.apply = makeIRCActionButton(frame.inactiveThreshold, 82, 25,
+        iRC:Text("INACTIVE_MEMBERS_APPLY"), false)
+    frame.inactiveThreshold.apply:SetPoint("LEFT", frame.inactiveThreshold.days, "RIGHT", 12, 0)
+    local function applyInactiveThreshold()
+        local days = math.max(0, math.min(9999,
+            math.floor(tonumber(frame.inactiveThreshold.input:GetText()) or frame.inactiveMemberDays or 30)))
+        frame.inactiveMemberDays = days
+        frame.inactiveThreshold.input:SetText(tostring(days))
+        frame.inactiveThreshold.input:ClearFocus()
+        if frame.scroll then frame.scroll:SetVerticalScroll(0) end
+        iRC:RefreshGuildRoster()
+        UI:Refresh()
+    end
+    frame.inactiveThreshold.apply:SetScript("OnClick", applyInactiveThreshold)
+    frame.inactiveThreshold.input:SetScript("OnEnterPressed", applyInactiveThreshold)
+    frame.inactiveThreshold.input:SetScript("OnEscapePressed", function(self)
+        self:SetText(tostring(frame.inactiveMemberDays or 30))
+        self:ClearFocus()
+    end)
+    frame.inactiveThreshold:Hide()
+    frame.inactiveRemoveAll = makeIRCActionButton(main, 190, 25,
+        iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", 0), true)
+    frame.inactiveRemoveAll:SetPoint("TOPRIGHT", main, "TOPRIGHT", -18, -50)
+    frame.inactiveRemoveAll:SetScript("OnClick", function()
+        local threshold = math.max(0, math.min(9999,
+            math.floor(tonumber(frame.inactiveMemberDays) or 30)))
+        local eligible = getEligibleInactiveMembers(threshold)
+        local testPreview = false
+        if #eligible == 0 and iRC:IsTestAdmin() then
+            eligible = getEligibleInactiveMembers(threshold, true)
+            testPreview = true
+        end
+        if #eligible == 0 and not testPreview then
+            iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
+            return
+        end
+        local confirm = frame.removeMemberConfirm
+        confirm.removeAll = true
+        confirm.targetName = nil
+        confirm.threshold = threshold
+        confirm.testPreview = testPreview
+        confirm:SetSize(570, 490)
+        confirm.bulkList:Show()
+        confirm.title:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_TITLE"))
+        local body = iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_BODY", #eligible, threshold)
+        if testPreview then body = body .. "\n\n" .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_TEST_PREVIEW") end
+        confirm.body:SetText(body)
+        confirm.setBulkCandidates(eligible)
+        confirm:Show()
+        confirm:Raise()
+    end)
+    frame.inactiveRemoveAll:Hide()
 
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 15, -78)
@@ -1239,9 +1845,12 @@ function UI:Create()
     memberMenu:Hide()
     frame.memberMenu = memberMenu
     frame:HookScript("OnHide", function()
+        resetInactiveMemberView(frame)
         memberMenu:Hide()
         professionReport:Hide()
         disableConfirm:Hide()
+        removeMemberConfirm:Hide()
+        removalQueue:Cancel()
         if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then
             iRC.ConnectionDashboard:HideEmbedded()
         end
@@ -1291,6 +1900,7 @@ function UI:RenderMemberRows()
             frame.memberRows[slot] = row
         end
         row:ClearAllPoints()
+        row:SetAlpha(1)
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
         local memberTag, tagColor
@@ -1509,6 +2119,7 @@ local function updateGuildLog(frame)
             row = makeMemberRow(frame.scrollContent, index)
             frame.memberRows[index] = row
         end
+        row:SetAlpha(1)
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
@@ -1540,6 +2151,105 @@ local function updateGuildLog(frame)
     frame.contentTitle:SetText("Guild Log")
     frame.contentSubtitle:SetText(#records > 0 and iRC:Text("GUILD_LOG_DESCRIPTION")
         or (query ~= "" and iRC:Text("GUILD_LOG_NO_SEARCH_RESULTS") or iRC:Text("GUILD_LOG_EMPTY")))
+end
+
+local function updateInactiveMembers(frame)
+    for _, card in ipairs(frame.raceCards) do card:Hide() end
+    for _, section in pairs(frame.factionSections) do section:Hide() end
+    frame.racePodium:Hide()
+
+    local threshold = math.max(0, math.min(9999,
+        math.floor(tonumber(frame.inactiveMemberDays) or 30)))
+    frame.inactiveMemberDays = threshold
+    if frame.inactiveThreshold and not frame.inactiveThreshold.input:HasFocus() then
+        frame.inactiveThreshold.input:SetText(tostring(threshold))
+    end
+    local members = {}
+    local selfKey = iRC:NormalizeName(iRC:GetPlayerName())
+    for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+        if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
+            and iRC:NormalizeName(member.name) ~= selfKey then
+            members[#members + 1] = member
+        end
+    end
+    table.sort(members, function(a, b)
+        if a.lastOnlineDays ~= b.lastOnlineDays then return a.lastOnlineDays > b.lastOnlineDays end
+        return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name)
+    end)
+
+    local _, _, ownRank = GetGuildInfo and GetGuildInfo("player")
+    local nativeRemovalAvailable = not CanGuildRemove or CanGuildRemove()
+    local eligibleCount = 0
+    for index, member in ipairs(members) do
+        local row = frame.memberRows[index]
+        if not row then
+            row = makeMemberRow(frame.scrollContent, index)
+            frame.memberRows[index] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
+        row.name:SetFontObject(GameFontNormal)
+        row.name:SetText(iRC:FormatPlayerName(member.name))
+        row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
+        local classColor = member.classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile]
+        if classColor then row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
+        else row.name:SetTextColor(unpack(COLORS.gold)) end
+        row.onlineTag:Hide()
+        local canRemove = nativeRemovalAvailable and type(ownRank) == "number" and type(member.rankIndex) == "number"
+            and member.rankIndex > ownRank
+        if canRemove then eligibleCount = eligibleCount + 1 end
+        row.tag:ClearAllPoints()
+        row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
+        row.tag:SetText(canRemove and "[Remove...]" or "[No native permission]")
+        row.tag:SetTextColor(unpack(canRemove and COLORS.red or COLORS.gray))
+        row.tag:Show()
+        local selectedMember = member
+        local days = math.floor(selectedMember.lastOnlineDays + 0.5)
+        row.detail:SetText("Offline for approximately " .. tostring(days) .. " days · "
+            .. tostring(selectedMember.rankName or "Unknown rank") .. " · Level " .. tostring(selectedMember.level or "?")
+            .. " " .. tostring(selectedMember.className or ""))
+        row:SetAlpha(canRemove and 1 or 0.58)
+        row:SetScript("OnClick", canRemove and function(_, button)
+            if button ~= "LeftButton" then return end
+            local confirm = frame.removeMemberConfirm
+            confirm.removeAll = nil
+            confirm.testPreview = nil
+            confirm.targetName = selectedMember.name
+            confirm.threshold = threshold
+            confirm:SetSize(510, 205)
+            confirm.bulkList:Hide()
+            confirm.title:SetText("Remove inactive guild member?")
+            confirm.accept.text:SetText("Remove member")
+            confirm.accept:SetEnabled(true)
+            confirm.accept:SetAlpha(1)
+            confirm.body:SetText("Remove " .. iRC:FormatPlayerName(selectedMember.name) .. " from the guild?\n\n"
+                .. "They have been offline for approximately " .. tostring(days)
+                .. " days. This is a manual, one-member action and still requires your WoW guild rank to permit removal.")
+            confirm:Show()
+            confirm:Raise()
+        end or nil)
+        row:SetScript("OnEnter", nil)
+        row:SetScript("OnLeave", nil)
+        row:Show()
+    end
+    for index = #members + 1, #frame.memberRows do
+        frame.memberRows[index]:SetAlpha(1)
+        frame.memberRows[index]:Hide()
+    end
+    if eligibleCount == 0 and iRC:IsTestAdmin() then
+        eligibleCount = #getEligibleInactiveMembers(threshold, true)
+    end
+    frame.scrollContent:SetHeight(math.max(1, #members * 60))
+    frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
+    local bulkEnabled = eligibleCount > 0 or iRC:IsTestAdmin()
+    frame.inactiveRemoveAll:SetEnabled(bulkEnabled)
+    frame.inactiveRemoveAll:SetAlpha(bulkEnabled and 1 or 0.42)
+    frame.contentTitle:SetText("Inactive Member Management")
+    frame.contentSubtitle:SetText(#members > 0
+        and (tostring(#members) .. " offline member(s) at or above " .. tostring(threshold)
+            .. " days. Click an eligible member to review a single removal.")
+        or ("No offline members have reached " .. tostring(threshold) .. " days."))
 end
 
 local function updateGuildRules(frame)
@@ -1868,6 +2578,16 @@ local CLASS_BREAKDOWN_ORDER = {
     "WARRIOR", "HUNTER", "MAGE", "ROGUE", "PRIEST", "WARLOCK", "PALADIN", "DRUID", "SHAMAN",
 }
 
+local function classBreakdownTitle(group)
+    local mode = group and group.classBreakdownMode or "ALL"
+    if mode == "MAX" then return iRC:Text("GUILD_STATS_CLASS_BREAKDOWN_MAX") end
+    if mode == "RANGE" then
+        return iRC:Text("GUILD_STATS_CLASS_BREAKDOWN_RANGE",
+            tonumber(group.classBreakdownMinLevel) or 1, tonumber(group.classBreakdownMaxLevel) or 60)
+    end
+    return iRC:Text("GUILD_STATS_CLASS_BREAKDOWN")
+end
+
 local function updateClassBreakdown(card, classes, totalMembers)
     local classGroups = {}
     totalMembers = 0
@@ -1986,13 +2706,13 @@ local function getGuildProfileLines(group)
     return lines
 end
 
-local function guildCardHeight(group)
-    if not expandedGuildCards[guildCardKey(group)] then return 158 end
+local function guildCardHeight(group, forceExpanded)
+    if not forceExpanded and not expandedGuildCards[guildCardKey(group)] then return 158 end
     local descriptionLines = math.max(1, math.ceil(#tostring(group.guildDescription or "") / 72))
     return 230 + #getGuildProfileLines(group) * 14 + (descriptionLines - 1) * 14
 end
 
-local function setRaceCard(card, group, rank)
+local function setRaceCard(card, group, rank, forceExpanded)
     local rules = group and group.rulesKnown and group.rules
     local accent = rules and rules.raceLock == true and (RACE_COLORS[group.race] or RACE_COLORS.Unknown)
         or isGuildFoundRules(rules)
@@ -2011,7 +2731,7 @@ local function setRaceCard(card, group, rank)
     card.totalMembers:SetText(formatNumber(group.members or 0))
     card.report = group
     card.guildKey = guildCardKey(group)
-    local expanded = expandedGuildCards[card.guildKey]
+    local expanded = forceExpanded or expandedGuildCards[card.guildKey]
     local reportTime = tonumber(group.timestamp) and group.timestamp > 0
         and date("%Y-%m-%d %H:%M", group.timestamp) or iRC:Text("RULESET_METADATA_UNKNOWN")
     local reportSender = iRC:FormatPlayerName(group.relayedBy or group.name or iRC:Text("RULESET_METADATA_UNKNOWN"))
@@ -2082,8 +2802,50 @@ local function setRaceCard(card, group, rank)
     else
         for _, button in ipairs(card.contactButtons) do button:Hide() end
     end
-    updateClassBreakdown(card, group.classes, group.members)
+    card.classesTitle:SetText(classBreakdownTitle(group))
+    updateClassBreakdown(card, group.classBreakdownClasses or group.classes, group.members)
     card:Show()
+end
+
+function UI:CreateGuildHomepagePreview(parent)
+    local preview = CreateFrame("Frame", nil, parent)
+    preview:SetHeight(470)
+
+    preview.title = preview:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    preview.title:SetPoint("TOPLEFT", preview, "TOPLEFT", 2, 0)
+    preview.title:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW"))
+    preview.title:SetTextColor(unpack(COLORS.gold))
+
+    preview.card = makeRaceCard(preview)
+    preview.card:SetPoint("TOPLEFT", preview, "TOPLEFT", 0, -22)
+    preview.card:SetPoint("TOPRIGHT", preview, "TOPRIGHT", 0, -22)
+    preview.card:SetScript("OnMouseUp", nil)
+    preview.card:EnableMouse(false)
+
+    preview.empty = preview:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    preview.empty:SetPoint("TOPLEFT", preview, "TOPLEFT", 16, -48)
+    preview.empty:SetPoint("TOPRIGHT", preview, "TOPRIGHT", -16, -48)
+    preview.empty:SetJustifyH("CENTER")
+    preview.empty:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW_UNAVAILABLE"))
+
+    function preview:Refresh()
+        local group = iRC.RaceGrid and iRC.RaceGrid:GetLocalReport()
+        if type(group) ~= "table" or not group.guildName or group.guildName == "" then
+            self.card:Hide()
+            self.empty:Show()
+            return
+        end
+
+        setRaceCard(self.card, group, 1, true)
+        self.card:SetHeight(guildCardHeight(group, true))
+        self.card.rank:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW_BADGE"))
+        self.card.expandHint:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW_EXPANDED"))
+        for _, button in ipairs(self.card.contactButtons) do button:EnableMouse(false) end
+        self.empty:Hide()
+    end
+
+    preview:Refresh()
+    return preview
 end
 
 local function updateRacePodium(frame, rankedGroups)
@@ -2289,6 +3051,8 @@ function UI:Refresh()
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     frame.guildStatsSearch:SetShown(not embeddedManagement and frame.category == "Race Overview")
     frame.guildLogSearch:SetShown(not embeddedManagement and frame.category == "Guild Log")
+    frame.inactiveThreshold:SetShown(not embeddedManagement and frame.category == "Inactive Member Management")
+    frame.inactiveRemoveAll:SetShown(not embeddedManagement and frame.category == "Inactive Member Management")
     if frame.category ~= "Guild Log" then frame.guildLogSearch.suggestions:Hide() end
     if frame.category ~= "Guild Rules" then
         for _, row in ipairs(frame.ruleRows or {}) do row:Hide() end
@@ -2310,6 +3074,7 @@ function UI:Refresh()
     end
     frame.scroll:ClearAllPoints()
     local usesSearchHeader = frame.category == "Race Overview" or frame.category == "Guild Log"
+        or frame.category == "Inactive Member Management"
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, usesSearchHeader and -112 or -78)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
@@ -2336,6 +3101,8 @@ function UI:Refresh()
         updateMemberRows(frame)
     elseif frame.category == "Guild Log" then
         updateGuildLog(frame)
+    elseif frame.category == "Inactive Member Management" then
+        updateInactiveMembers(frame)
     elseif frame.category == "Guild Rules" then
         frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
             .. "  Guild connection and shared rules" .. iRC.Colors.Reset)
@@ -2351,8 +3118,27 @@ end
 
 function UI:OpenCategory(category)
     local frame = self:Create()
-    if frame.tabs[category] then frame.category = category end
+    if frame.tabs[category] then
+        if frame.category ~= category and (frame.category == "Inactive Member Management"
+            or category == "Inactive Member Management") then
+            resetInactiveMemberView(frame)
+        end
+        frame.category = category
+    end
     return self:Open(nil, category == "Race Overview")
+end
+
+function UI:OpenInactiveMembers(days)
+    if not iRC:HasGuildPermission("memberRemoval") then
+        iRC:Print(iRC.Colors.Red .. "You do not have the delegated inactive-member management permission." .. iRC.Colors.Reset)
+        return false
+    end
+    local frame = self:Create()
+    frame.inactiveMemberDays = math.max(0, math.min(9999,
+        math.floor(tonumber(days) or 30)))
+    frame.category = "Inactive Member Management"
+    iRC:RefreshGuildRoster()
+    return self:Open(nil, false)
 end
 
 function UI:Open(subjectName, requestCacheFromOpen)
@@ -2365,7 +3151,7 @@ function UI:Open(subjectName, requestCacheFromOpen)
         guildStatsFilter = getCurrentGuildStatsFilter()
         self.preservedRaceScroll = 0
     end
-    if frame.category == "Guild Members" then iRC:RefreshGuildRoster() end
+    if frame.category == "Guild Members" or frame.category == "Inactive Member Management" then iRC:RefreshGuildRoster() end
     frame:SetScale(iRC:GetSettings().mainWindowScale or 1)
     self:Refresh()
     frame:Show()

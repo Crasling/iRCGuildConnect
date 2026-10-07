@@ -496,6 +496,10 @@ local function GetManagementConnectionStatus(connection, category)
             connection.guildHomepageDescription and connection.guildHomepageDescription.timestamp)
         addCandidate(connection.guildHomepageIcon and connection.guildHomepageIcon.editedBy,
             connection.guildHomepageIcon and connection.guildHomepageIcon.timestamp)
+        addCandidate(connection.guildHomepageTag and connection.guildHomepageTag.editedBy,
+            connection.guildHomepageTag and connection.guildHomepageTag.timestamp)
+        addCandidate(connection.guildHomepageClassBreakdown and connection.guildHomepageClassBreakdown.editedBy,
+            connection.guildHomepageClassBreakdown and connection.guildHomepageClassBreakdown.timestamp)
         addCandidate(connection.guildContactsSource, connection.guildContactsTimestamp)
     elseif connection and category == "guildFound" then
         addCandidate(connection.guildFoundTradeExceptionSettings and connection.guildFoundTradeExceptionSettings.source,
@@ -633,14 +637,13 @@ local roleplayContainer, roleplayContent = CreateTabContent()
 local aboutContainer, aboutContent = CreateTabContent()
 local iWRContainer, iWRContent = CreateTabContent()
 local iNIFContainer, iNIFContent = CreateTabContent()
-local iSPContainer, iSPContent = CreateTabContent()
 local iSTContainer, iSTContent = CreateTabContent()
 local guildFoundContainer, guildFoundContent = CreateTabContent()
 local adminContainer, adminContent = CreateTabContent()
 local guildNotificationsContainer, guildNotificationsContent = CreateTabContent()
 local guildHomepageContainer, guildHomepageContent = CreateTabContent()
 local diagnosticsContainer, diagnosticsContent, diagnosticsScroll = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSPContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer, diagnosticsContainer }
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer, diagnosticsContainer }
 local sidebarButtons = {}
 local selectedTab = 1
 
@@ -666,17 +669,16 @@ local sidebarItems = {
 local standardSidebarItems = {
     { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
-    { type = "tab", label = "Diagnostic Tools", index = 13 },
+    { type = "tab", label = "Diagnostic Tools", index = 12 },
     { type = "header", label = "Other Addons" },
     { type = "tab", label = "iWillRemember", index = 5 },
     { type = "tab", label = "iNeedIfYouNeed", index = 6 },
-    { type = "tab", label = "iSoundPlayer", index = 7 },
-    { type = "tab", label = "iSealTwist", index = 8 },
+    { type = "tab", label = "iSealTwist", index = 7 },
 }
 for _, item in ipairs(standardSidebarItems) do sidebarItems[#sidebarItems + 1] = item end
 if iRC:IsTestAdmin() then
     sidebarItems[#sidebarItems + 1] = { type = "header", label = L.TEST_ADMIN_HEADER }
-    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 10 }
+    sidebarItems[#sidebarItems + 1] = { type = "tab", label = L.TEST_ADMIN_TAB, index = 9 }
 end
 local sidebarY = -6
 for _, item in ipairs(sidebarItems) do
@@ -1387,6 +1389,12 @@ end
 (function()
 local homepageY = -12
 _, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_CONTACTS_HEADER, homepageY)
+homepageDescriptionUI.preview = iRC.MainUI and iRC.MainUI:CreateGuildHomepagePreview(guildHomepageContent)
+if homepageDescriptionUI.preview then
+    homepageDescriptionUI.preview:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 12, homepageY)
+    homepageDescriptionUI.preview:SetPoint("TOPRIGHT", guildHomepageContent, "TOPRIGHT", -12, homepageY)
+    homepageY = homepageY - homepageDescriptionUI.preview:GetHeight() - 12
+end
 managementConnectionCards.homepage, homepageY = CreateConnectionStatusCard(guildHomepageContent, homepageY)
 local iconCard, iconY = CreateManagementSettingsCard(guildHomepageContent,
     L.GUILD_HOMEPAGE_ICON_HEADER, L.GUILD_HOMEPAGE_ICON_DESC, homepageY - 2)
@@ -1421,6 +1429,104 @@ local iconRows = 3
 local iconCardHeight = math.abs(iconY) + iconRows * 44 + 8
 iconCard:SetHeight(iconCardHeight)
 homepageY = homepageY - iconCardHeight - 12
+local tagCard, tagY = CreateManagementSettingsCard(guildHomepageContent,
+    L.GUILD_HOMEPAGE_TAG_HEADER, L.GUILD_HOMEPAGE_TAG_DESC, homepageY)
+homepageDescriptionUI.guildTag, tagY = CreateSettingsDropdown("iRCGuildHomepageTag",
+    tagCard, L.GUILD_HOMEPAGE_TAG_LABEL, nil, tagY,
+    function() return iRC:GetGuildHomepageTag() end,
+    function(value) iRC:SetGuildHomepageTag(value) end,
+    function() return { "NORMAL", "PVE", "PVP", "RP" } end,
+    function(value)
+        if value == "PVE" then return L.GUILD_HOMEPAGE_TAG_PVE end
+        if value == "PVP" then return L.GUILD_HOMEPAGE_TAG_PVP end
+        if value == "RP" then return L.GUILD_HOMEPAGE_TAG_RP end
+        return L.GUILD_HOMEPAGE_TAG_NORMAL
+    end, true)
+homepageDescriptionUI.guildTag:Refresh()
+local tagCardHeight = math.abs(tagY) + 12
+tagCard:SetHeight(tagCardHeight)
+homepageY = homepageY - tagCardHeight - 12
+local classCard, classY = CreateManagementSettingsCard(guildHomepageContent,
+    L.GUILD_HOMEPAGE_CLASSES_HEADER, L.GUILD_HOMEPAGE_CLASSES_DESC, homepageY)
+homepageDescriptionUI.classBreakdownDraft = { mode = "ALL", minLevel = 1, maxLevel = 60 }
+local refreshClassBreakdownControls
+homepageDescriptionUI.classBreakdownMode, classY = CreateSettingsDropdown("iRCGuildHomepageClassBreakdownMode",
+    classCard, L.GUILD_HOMEPAGE_CLASSES_MODE, nil, classY,
+    function() return homepageDescriptionUI.classBreakdownDraft.mode end,
+    function(value)
+        homepageDescriptionUI.classBreakdownDraft.mode = value
+        if refreshClassBreakdownControls then refreshClassBreakdownControls(false) end
+    end,
+    function() return { "ALL", "RANGE", "MAX" } end,
+    function(value)
+        if value == "RANGE" then return L.GUILD_HOMEPAGE_CLASSES_RANGE end
+        if value == "MAX" then return L.GUILD_HOMEPAGE_CLASSES_MAX end
+        return L.GUILD_HOMEPAGE_CLASSES_ALL
+    end, true)
+local minLabel = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+minLabel:SetPoint("TOPLEFT", classCard, "TOPLEFT", 86, classY)
+minLabel:SetText(L.GUILD_HOMEPAGE_CLASSES_MIN)
+local minValue = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+minValue:SetPoint("LEFT", minLabel, "RIGHT", 8, 0)
+minValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+homepageDescriptionUI.classBreakdownMin = CreateFrame("Slider", "iRCGuildHomepageClassBreakdownMin", classCard, "OptionsSliderTemplate")
+homepageDescriptionUI.classBreakdownMin:SetPoint("TOPLEFT", classCard, "TOPLEFT", 86, classY - 22)
+homepageDescriptionUI.classBreakdownMin:SetWidth(205)
+homepageDescriptionUI.classBreakdownMin:SetMinMaxValues(1, 60)
+homepageDescriptionUI.classBreakdownMin:SetValueStep(1)
+_G[homepageDescriptionUI.classBreakdownMin:GetName() .. "Low"]:SetText("1")
+_G[homepageDescriptionUI.classBreakdownMin:GetName() .. "High"]:SetText("60")
+_G[homepageDescriptionUI.classBreakdownMin:GetName() .. "Text"]:SetText("")
+homepageDescriptionUI.classBreakdownMin:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value + 0.5)
+    homepageDescriptionUI.classBreakdownDraft.minLevel = value
+    minValue:SetText(tostring(value))
+end)
+local maxLabel = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+maxLabel:SetPoint("TOPLEFT", classCard, "TOPLEFT", 335, classY)
+maxLabel:SetText(L.GUILD_HOMEPAGE_CLASSES_MAXIMUM)
+local maxValue = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+maxValue:SetPoint("LEFT", maxLabel, "RIGHT", 8, 0)
+maxValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+homepageDescriptionUI.classBreakdownMax = CreateFrame("Slider", "iRCGuildHomepageClassBreakdownMax", classCard, "OptionsSliderTemplate")
+homepageDescriptionUI.classBreakdownMax:SetPoint("TOPLEFT", classCard, "TOPLEFT", 335, classY - 22)
+homepageDescriptionUI.classBreakdownMax:SetWidth(205)
+homepageDescriptionUI.classBreakdownMax:SetMinMaxValues(1, 60)
+homepageDescriptionUI.classBreakdownMax:SetValueStep(1)
+_G[homepageDescriptionUI.classBreakdownMax:GetName() .. "Low"]:SetText("1")
+_G[homepageDescriptionUI.classBreakdownMax:GetName() .. "High"]:SetText("60")
+_G[homepageDescriptionUI.classBreakdownMax:GetName() .. "Text"]:SetText("")
+homepageDescriptionUI.classBreakdownMax:SetScript("OnValueChanged", function(_, value)
+    value = math.floor(value + 0.5)
+    homepageDescriptionUI.classBreakdownDraft.maxLevel = value
+    maxValue:SetText(tostring(value))
+end)
+classY = classY - 70
+homepageDescriptionUI.classBreakdownApply, classY = CreateSettingsButton(classCard,
+    L.GUILD_HOMEPAGE_CLASSES_APPLY, 155, classY, function()
+        local draft = homepageDescriptionUI.classBreakdownDraft
+        iRC:SetGuildHomepageClassBreakdown(draft.mode, draft.minLevel, draft.maxLevel)
+    end)
+refreshClassBreakdownControls = function(fromSaved)
+    local draft = homepageDescriptionUI.classBreakdownDraft
+    if fromSaved then
+        local saved = iRC:GetGuildHomepageClassBreakdown()
+        draft.mode, draft.minLevel, draft.maxLevel = saved.mode, saved.minLevel, saved.maxLevel
+    end
+    local range = draft.mode == "RANGE"
+    homepageDescriptionUI.classBreakdownMin:SetValue(draft.minLevel or 1)
+    homepageDescriptionUI.classBreakdownMax:SetValue(draft.maxLevel or 60)
+    homepageDescriptionUI.classBreakdownMin:SetEnabled(range)
+    homepageDescriptionUI.classBreakdownMax:SetEnabled(range)
+    minLabel:SetTextColor(range and 1 or 0.5, range and 0.82 or 0.5, range and 0.36 or 0.5)
+    maxLabel:SetTextColor(range and 1 or 0.5, range and 0.82 or 0.5, range and 0.36 or 0.5)
+    homepageDescriptionUI.classBreakdownMode:Refresh()
+end
+homepageDescriptionUI.refreshClassBreakdownControls = refreshClassBreakdownControls
+refreshClassBreakdownControls(true)
+local classCardHeight = math.abs(classY) + 12
+classCard:SetHeight(classCardHeight)
+homepageY = homepageY - classCardHeight - 12
 local descriptionCard, descriptionY = CreateManagementSettingsCard(guildHomepageContent,
     L.GUILD_DESCRIPTION_HEADER, L.GUILD_DESCRIPTION_DESC, homepageY)
 local descriptionSyncBadge = CreateSyncBadge(descriptionCard, 0)
@@ -1761,7 +1867,6 @@ end
 local companionAddons = {
     { content = iWRContent, name = "iWillRemember", addonName = "iWillRemember", description = "A player notes addon for tracking and sharing memorable encounters with friends and guild members.", link = "curseforge.com/wow/addons/iwillremember", button = "Open iWR Settings", getFrame = function() return _G.iWR and _G.iWR.SettingsFrame end },
     { content = iNIFContent, name = "iNeedIfYouNeed", addonName = "iNeedIfYouNeed", description = "A smart loot companion that helps groups handle Need and Greed decisions for eligible items.", link = "curseforge.com/wow/addons/ineedifyouneed", button = "Open iNIF Settings", getFrame = function() return _G.iNIFSettingsFrame end },
-    { content = iSPContent, name = "iSoundPlayer", addonName = "iSoundPlayer", description = "A custom sound addon for playing your own sounds from game events, spells, buffs, and more.", link = "curseforge.com/wow/addons/isoundplayer", button = "Open iSP Settings", getFrame = function() return _G.iSPSettingsFrame end },
     { content = iSTContent, name = "iSealTwist", addonName = "iSealTwist", description = "A TBC Paladin seal-twist timing helper with a visual swing timer and latency-aware window.", link = "curseforge.com/wow/addons/isealtwist", button = "Open iST Settings", getFrame = function() return _G.iSTSettingsFrame end },
 }
 
@@ -2095,6 +2200,7 @@ do
         incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
         rosterHistory = "Guild Log and member history",
+        memberRemoval = "Review and remove inactive members",
     }
     local function rankValues()
         local values = {}
@@ -2112,7 +2218,7 @@ do
         return "Rank " .. tostring(value)
     end
     local permissionY = permissionStartY
-    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage", "rosterHistory" }) do
+    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage", "rosterHistory", "memberRemoval" }) do
         local permissionKey = permission
         rankPermissionDropdowns[permission], permissionY = CreateCompactManagementDropdown("iRCRankPermission" .. permission,
             permissionCard, permissionLabels[permission], permissionY,
@@ -2158,6 +2264,130 @@ if iRC:IsTestAdmin() then
     suppressRulesCheck, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_SUPPRESS_RULES, L.TEST_ADMIN_SUPPRESS_RULES_DESC, y,
         function() return iRC:SuppressesRuleSending() end,
         function(value) iRC:GetSettings().suppressRuleSending = value and true or false end)
+    _, y = CreateSubcategoryHeader(adminContent, L.TEST_ADMIN_ONLINE_HEADER, y - 5)
+    _, y = CreateInfoText(adminContent, L.TEST_ADMIN_ONLINE_DESC, y, "GameFontDisableSmall")
+    local adminOnlineStatus, adminOnlineRows = nil, {}
+    _, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ONLINE_REFRESH, 190, y - 3, function()
+        if not iRC.RaceGrid or not iRC.RaceGrid:RequestAdminOnlineUsers() then
+            iRC:Print(L.TEST_ADMIN_ONLINE_UNAVAILABLE)
+        end
+    end, L.TEST_ADMIN_ONLINE_DESC)
+    adminOnlineStatus = adminContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    adminOnlineStatus:SetPoint("TOPLEFT", adminContent, "TOPLEFT", 25, y - 1)
+    adminOnlineStatus:SetPoint("RIGHT", adminContent, "RIGHT", -20, 0)
+    adminOnlineStatus:SetHeight(34)
+    adminOnlineStatus:SetJustifyH("LEFT")
+    adminOnlineStatus:SetJustifyV("TOP")
+    adminOnlineStatus:SetText(L.TEST_ADMIN_ONLINE_EMPTY)
+    y = y - 39
+
+    local onlineList = CreateFrame("Frame", nil, adminContent, "BackdropTemplate")
+    onlineList:SetPoint("TOPLEFT", adminContent, "TOPLEFT", 20, y)
+    onlineList:SetPoint("TOPRIGHT", adminContent, "TOPRIGHT", -15, y)
+    onlineList:SetHeight(185)
+    onlineList:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    onlineList:SetBackdropColor(0.035, 0.035, 0.055, 0.94)
+    onlineList:SetBackdropBorderColor(0.34, 0.28, 0.20, 0.9)
+    local onlineHeader = CreateFrame("Frame", nil, onlineList)
+    onlineHeader:SetPoint("TOPLEFT", onlineList, "TOPLEFT", 5, -4)
+    onlineHeader:SetPoint("TOPRIGHT", onlineList, "TOPRIGHT", -24, -4)
+    onlineHeader:SetHeight(20)
+    local function CreateOnlineColumn(parent, text, point, width)
+        local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        label:SetPoint("LEFT", parent, "LEFT", point, 0)
+        label:SetWidth(width)
+        label:SetJustifyH("LEFT")
+        label:SetText(text)
+        label:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+        return label
+    end
+    CreateOnlineColumn(onlineHeader, "Player", 5, 175)
+    CreateOnlineColumn(onlineHeader, "Version", 185, 85)
+    CreateOnlineColumn(onlineHeader, "Guild", 275, 205)
+    local onlineScroll = CreateFrame("ScrollFrame", nil, onlineList, "UIPanelScrollFrameTemplate")
+    onlineScroll:SetPoint("TOPLEFT", onlineList, "TOPLEFT", 5, -25)
+    onlineScroll:SetPoint("BOTTOMRIGHT", onlineList, "BOTTOMRIGHT", -24, 5)
+    local onlineChild = CreateFrame("Frame", nil, onlineScroll)
+    onlineChild:SetSize(480, 1)
+    onlineScroll:SetScrollChild(onlineChild)
+    onlineList:EnableMouseWheel(true)
+    onlineList:SetScript("OnMouseWheel", function(_, delta)
+        local maximum = math.max(0, onlineChild:GetHeight() - onlineScroll:GetHeight())
+        onlineScroll:SetVerticalScroll(math.max(0, math.min(maximum, onlineScroll:GetVerticalScroll() - delta * 44)))
+    end)
+    y = y - 193
+
+    local function RefreshAdminOnlineUsers()
+        if not iRC.RaceGrid then return end
+        local rows, stats = iRC.RaceGrid:GetAdminOnlineUsers()
+        if (stats.total or 0) == 0 then
+            adminOnlineStatus:SetText(L.TEST_ADMIN_ONLINE_EMPTY)
+        else
+            local coverage = stats.total > 0 and stats.known * 100 / stats.total or 0
+            local versions = {}
+            for version, count in pairs(stats.versions or {}) do
+                versions[#versions + 1] = { version = version, count = count }
+            end
+            table.sort(versions, function(a, b)
+                if a.count ~= b.count then return a.count > b.count end
+                return a.version < b.version
+            end)
+            local labels = {}
+            for index, entry in ipairs(versions) do
+                if index > 5 then break end
+                labels[#labels + 1] = entry.version .. " (" .. entry.count .. ")"
+            end
+            if #versions > 5 then labels[#labels + 1] = "+" .. (#versions - 5) .. " more" end
+            adminOnlineStatus:SetText(iRC:Text("TEST_ADMIN_ONLINE_STATS", stats.total, stats.known, coverage) .. "\n"
+                .. iRC:Text("TEST_ADMIN_ONLINE_VERSIONS", #labels > 0 and table.concat(labels, ", ") or L.TEST_ADMIN_ONLINE_UNKNOWN))
+        end
+        for index, data in ipairs(rows) do
+            local row = adminOnlineRows[index]
+            if not row then
+                row = CreateFrame("Button", nil, onlineChild)
+                row:SetHeight(22)
+                row:RegisterForClicks("RightButtonUp")
+                row.bg = row:CreateTexture(nil, "BACKGROUND")
+                row.bg:SetAllPoints()
+                row.highlight = row:CreateTexture(nil, "HIGHLIGHT")
+                row.highlight:SetAllPoints()
+                row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.14)
+                row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                row.name:SetPoint("LEFT", row, "LEFT", 5, 0); row.name:SetWidth(175); row.name:SetJustifyH("LEFT")
+                row.version = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                row.version:SetPoint("LEFT", row, "LEFT", 185, 0); row.version:SetWidth(85); row.version:SetJustifyH("LEFT")
+                row.guild = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                row.guild:SetPoint("LEFT", row, "LEFT", 275, 0); row.guild:SetWidth(205); row.guild:SetJustifyH("LEFT")
+                row:SetScript("OnClick", function(self, mouseButton)
+                    if mouseButton == "RightButton" and self.playerName then
+                        iRC:OpenWhisper(self.playerName, L.TEST_ADMIN_ONLINE_WHISPER_MESSAGE)
+                    end
+                end)
+                row:SetScript("OnEnter", function(self)
+                    if not self.playerName or not GameTooltip then return end
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetText(iRC:FormatPlayerName(self.playerName), 1, 0.82, 0)
+                    GameTooltip:AddLine(iRC:Text("TEST_ADMIN_ONLINE_WHISPER", iRC:FormatPlayerName(self.playerName)), 1, 1, 1)
+                    GameTooltip:Show()
+                end)
+                row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+                adminOnlineRows[index] = row
+            end
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", onlineChild, "TOPLEFT", 0, -(index - 1) * 22)
+            row:SetPoint("TOPRIGHT", onlineChild, "TOPRIGHT", 0, -(index - 1) * 22)
+            row.bg:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.035 or 0.075)
+            row.playerName = data.name
+            row.name:SetText(iRC:FormatPlayerName(data.name))
+            row.version:SetText(data.version or L.TEST_ADMIN_ONLINE_UNKNOWN)
+            row.version:SetTextColor(data.version and 0.35 or 0.65, data.version and 1 or 0.65, data.version and 0.40 or 0.65)
+            row.guild:SetText(data.guildName ~= "" and data.guildName or "-")
+            row:Show()
+        end
+        for index = #rows + 1, #adminOnlineRows do adminOnlineRows[index]:Hide() end
+        onlineChild:SetHeight(math.max(1, #rows * 22))
+    end
     _, y = CreateSubcategoryHeader(adminContent, L.TEST_ADMIN_TRAFFIC_HEADER, y - 5)
     local trafficStatus
     _, y = CreateSettingsCheckbox(adminContent, L.TEST_ADMIN_TRAFFIC_OPTION, L.TEST_ADMIN_TRAFFIC_OPTION_DESC, y,
@@ -2196,6 +2426,7 @@ if iRC:IsTestAdmin() then
         trafficRefreshElapsed = trafficRefreshElapsed + elapsed
         if trafficRefreshElapsed < 1 then return end
         trafficRefreshElapsed = 0
+        RefreshAdminOnlineUsers()
         if iRC.TrafficMonitorEnabled then
             local incoming, outgoing = iRC:GetTrafficBytesLastMinute()
             trafficStatus:SetText(iRC:Text("TEST_ADMIN_TRAFFIC_BYTES", incoming, outgoing))
@@ -2298,7 +2529,7 @@ local function Refresh()
     local canSwitchRulesView = managementAvailable or iRC:IsTestAdminGuildMaster()
     RefreshRulesView(canSwitchRulesView)
     LayoutSidebar(managementAvailable)
-    if (selectedTab == 9 or selectedTab == 11 or selectedTab == 12) and not managementAvailable then ShowTab(1) end
+    if (selectedTab == 8 or selectedTab == 10 or selectedTab == 11) and not managementAvailable then ShowTab(1) end
     if guildFoundAuditText then
         local records = iRC.GetGuildFoundAuditRecords and iRC:GetGuildFoundAuditRecords() or {}
         local lines = {}
@@ -2368,6 +2599,17 @@ local function Refresh()
     refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local canEditHomepage = guildActive and iRC:HasGuildPermission("homepage")
+    if homepageDescriptionUI.preview then homepageDescriptionUI.preview:Refresh() end
+    homepageDescriptionUI.guildTag:Refresh()
+    if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.guildTag)
+    else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.guildTag) end
+    homepageDescriptionUI.refreshClassBreakdownControls(true)
+    local classRangeMode = homepageDescriptionUI.classBreakdownDraft.mode == "RANGE"
+    if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.classBreakdownMode)
+    else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.classBreakdownMode) end
+    homepageDescriptionUI.classBreakdownMin:SetEnabled(canEditHomepage and classRangeMode)
+    homepageDescriptionUI.classBreakdownMax:SetEnabled(canEditHomepage and classRangeMode)
+    homepageDescriptionUI.classBreakdownApply:SetEnabled(canEditHomepage and true or false)
     homepageDescriptionUI.edit:SetEnabled(canEditHomepage and true or false)
     homepageDescriptionUI.save:SetEnabled(canEditHomepage and true or false)
     if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.dropdown) else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.dropdown) end

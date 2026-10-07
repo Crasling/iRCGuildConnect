@@ -21,11 +21,10 @@ iRC.DisplayName = "iRC"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
--- Testing-only controls are restricted to these exact character/realm pairs.
+-- Testing-only controls accept exact character names and an explicit trailing
+-- wildcard for a shared first name.
 iRC.TestAdminNames = {
-    "Harani Steeleye",
-    "Crasling Terot",
-    "Wandy Nimsprocket",
+    "Crasling *",
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -564,7 +563,8 @@ end
 
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
-    tradeExceptions = 1, notifications = 1, homepage = 0, rosterHistory = 1,
+    tradeExceptions = 1, notifications = 1, homepage = 1, rosterHistory = 1,
+    memberRemoval = 1,
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -967,6 +967,7 @@ function iRC:StampConnectionRules(connection)
     -- Any deliberate Guild Master edit turns the local bootstrap defaults into
     -- a real ruleset. From this point normal timestamp protection applies.
     connection.rulesBootstrap = nil
+    connection.rulesAutomaticallyEstablished = nil
     connection.rulesLocallyConfigured = true
     connection.rulesEstablished = true
     local stamp = math.max(time(), decodeRulesTimestamp(connection.rulesTimestampHex) + 1)
@@ -1085,6 +1086,22 @@ function iRC:GetConnection()
     connection.guildHomepageIcon.icon = math.max(0, math.min(#self.GuildHomepageIcons, math.floor(tonumber(connection.guildHomepageIcon.icon) or 0)))
     connection.guildHomepageIcon.timestamp = tonumber(connection.guildHomepageIcon.timestamp) or 0
     connection.guildHomepageIcon.editedBy = tostring(connection.guildHomepageIcon.editedBy or "")
+    connection.guildHomepageTag = connection.guildHomepageTag
+        or { tag = "NORMAL", timestamp = 0, editedBy = "" }
+    if connection.guildHomepageTag.tag ~= "PVE" and connection.guildHomepageTag.tag ~= "PVP"
+        and connection.guildHomepageTag.tag ~= "RP" then connection.guildHomepageTag.tag = "NORMAL" end
+    connection.guildHomepageTag.timestamp = math.max(0,
+        math.floor(tonumber(connection.guildHomepageTag.timestamp) or 0))
+    connection.guildHomepageTag.editedBy = tostring(connection.guildHomepageTag.editedBy or "")
+    connection.guildHomepageClassBreakdown = connection.guildHomepageClassBreakdown
+        or { mode = "ALL", minLevel = 1, maxLevel = 60, timestamp = 0, editedBy = "" }
+    local classBreakdown = connection.guildHomepageClassBreakdown
+    if classBreakdown.mode ~= "RANGE" and classBreakdown.mode ~= "MAX" then classBreakdown.mode = "ALL" end
+    classBreakdown.minLevel = math.max(1, math.min(60, math.floor(tonumber(classBreakdown.minLevel) or 1)))
+    classBreakdown.maxLevel = math.max(classBreakdown.minLevel,
+        math.min(60, math.floor(tonumber(classBreakdown.maxLevel) or 60)))
+    classBreakdown.timestamp = math.max(0, math.floor(tonumber(classBreakdown.timestamp) or 0))
+    classBreakdown.editedBy = tostring(classBreakdown.editedBy or "")
     connection.rankPermissions = connection.rankPermissions or {}
     for permission, rankIndex in pairs(self.DefaultRankPermissions) do
         if connection.rankPermissions[permission] == nil then connection.rankPermissions[permission] = rankIndex end
@@ -1176,6 +1193,20 @@ function iRC:HasAnyManagementPermission()
     return false
 end
 
+function iRC:CanAutomaticallyEstablishGuildRules()
+    local connection = self:GetConnection()
+    if not connection then return false end
+    if self:IsGuildMaster() then return true end
+    local rankIndex = self:GetPlayerGuildRankIndex()
+    if rankIndex == nil then return false end
+    for permission, defaultRank in pairs(self.DefaultRankPermissions) do
+        local allowedRank = connection.rankPermissions and tonumber(connection.rankPermissions[permission])
+        if allowedRank == nil then allowedRank = defaultRank end
+        if allowedRank ~= nil and rankIndex <= allowedRank then return true end
+    end
+    return false
+end
+
 function iRC:GetGuildRankOptions()
     local found, options = {}, {}
     if GetNumGuildMembers and GetGuildRosterInfo then
@@ -1233,6 +1264,7 @@ end
 
 function iRC:IsTestAdminName(name)
     if type(name) ~= "string" or name == "" then return false end
+    local normalizedName = self:NormalizeName(name)
     local configuredNames = self.TestAdminNames or {}
     -- Retained as a test harness override; production uses TestAdminNames.
     if type(self.TestAdminName) == "string" and self.TestAdminName ~= "" then
@@ -1240,7 +1272,13 @@ function iRC:IsTestAdminName(name)
     end
     for _, configuredName in ipairs(configuredNames) do
         if type(configuredName) == "string" and configuredName ~= "" then
-            if self:NormalizeName(name) == self:NormalizeName(configuredName) then return true end
+            local normalizedConfiguredName = self:NormalizeName(configuredName)
+            if normalizedName == normalizedConfiguredName then return true end
+            if normalizedConfiguredName:sub(-1) == "*" then
+                local stem = normalizedConfiguredName:sub(1, -2):gsub("%s+$", "")
+                if stem ~= "" and (normalizedName == stem
+                    or normalizedName:sub(1, #stem + 1) == stem .. " ") then return true end
+            end
             if not self:IsForeverClient() then
                 local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
                 if testName and not name:find("-", 1, true) and string.lower(name) == string.lower(testName)
@@ -1415,17 +1453,30 @@ function iRC:IsGuildConnectionBootstrap()
     return connection and connection.active == true and connection.rulesBootstrap == true or false
 end
 
-function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimestamp, activationSource)
-    if not receivedFromGuild and not self:IsGuildMaster() then return false end
+function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimestamp, activationSource, automaticRules)
+    automaticRules = automaticRules == true
+    if not receivedFromGuild and not self:IsGuildMaster()
+        and not (automaticRules and self:CanAutomaticallyEstablishGuildRules()) then return false end
     local connection = self:GetConnection()
     if not connection then return false end
     active = active and true or false
     if not receivedFromGuild then
+        if automaticRules and isEstablishedConnection(connection) then return false end
         connection.rulesBootstrap = nil
-        connection.rulesLocallyConfigured = true
+        connection.rulesAutomaticallyEstablished = automaticRules and true or nil
+        connection.rulesLocallyConfigured = automaticRules and nil or true
         connection.rulesEstablished = true
+        if automaticRules then
+            -- Automatic activation is immediately usable as a real ruleset,
+            -- but its zero timestamp keeps it replaceable by any previously
+            -- established guild rules received after login.
+            connection.rulesTimestampHex = "0"
+            connection.rulesTimestampSource = self:GetPlayerName()
+            connection.rulesRelayedBy = self:GetPlayerName()
+            connection.rulesReceivedAt = time()
+        end
     end
-    if connection.active == active then
+    if connection.active == active and not automaticRules then
         if receivedFromGuild and tonumber(activationTimestamp)
             and tonumber(activationTimestamp) > (tonumber(connection.activationTimestamp) or 0) then
             connection.activationTimestamp = math.floor(tonumber(activationTimestamp))
@@ -1455,7 +1506,7 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimes
             connection.rules.guildMapEnabled = true
             rulesChanged = true
         end
-        if rulesChanged then self:StampConnectionRules(connection) end
+        if rulesChanged and not automaticRules then self:StampConnectionRules(connection) end
     end
     if not active then
         if self.ResetPresenceNotificationChecks then self:ResetPresenceNotificationChecks() end
@@ -1477,7 +1528,10 @@ end
 
 function iRC:ActivateNewGuildConnection()
     local connection = self:GetConnection()
-    if not connection or not pendingAutomaticActivation[connection] then return false end
+    if not connection then return false end
+    local canEstablishRules = self:CanAutomaticallyEstablishGuildRules()
+    local canPromoteSavedBootstrap = canEstablishRules and not isEstablishedConnection(connection)
+    if not pendingAutomaticActivation[connection] and not canPromoteSavedBootstrap then return false end
     pendingAutomaticActivation[connection] = nil
 
     -- The three-second first-use activation can still be pending while a test
@@ -1486,8 +1540,14 @@ function iRC:ActivateNewGuildConnection()
     -- replaceable bootstrap defaults when the delayed callback finally runs.
     if isEstablishedConnection(connection) then return false end
 
-    connection.activationBootstrap = true
-    local changed = self:SetGuildConnectionActive(true, true, 0, "")
+    local changed
+    if canEstablishRules then
+        connection.activationBootstrap = nil
+        changed = self:SetGuildConnectionActive(true, false, nil, nil, true)
+    else
+        connection.activationBootstrap = true
+        changed = self:SetGuildConnectionActive(true, true, 0, "")
+    end
     if self.SendHello then self:SendHello() end
     if self.RequestGuildActivation then self:RequestGuildActivation(true) end
     if self.RequestConnectionRules then self:RequestConnectionRules() end
@@ -1514,7 +1574,10 @@ function iRC:ScheduleNewGuildActivation(delay)
             if attempts < 5 then C_Timer.After(3, activateWhenReady) end
             return
         end
-        if pendingAutomaticActivation[connection] then iRC:ActivateNewGuildConnection() end
+        if pendingAutomaticActivation[connection]
+            or (connection.rulesBootstrap == true and iRC:CanAutomaticallyEstablishGuildRules()) then
+            iRC:ActivateNewGuildConnection()
+        end
     end
     C_Timer.After(math.max(0, tonumber(delay) or 3), activateWhenReady)
     return true
@@ -1539,7 +1602,40 @@ function iRC:SetGuildHomepageDescription(value)
     self:RecordManagementConnectionStatus("homepage", data.editedBy, data.timestamp, self:GetPlayerName(), data.timestamp)
     if self.SendGuildHomepageDescription then self:SendGuildHomepageDescription(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
+    if self.RaceGrid then
+        if self.RaceGrid.MarkLocalReportDirty then self.RaceGrid:MarkLocalReportDirty() end
+        self.RaceGrid:BroadcastReport(false)
+    end
+    return true
+end
+
+function iRC:GetGuildHomepageClassBreakdown()
+    local connection = self:GetConnection()
+    return connection and connection.guildHomepageClassBreakdown
+        or { mode = "ALL", minLevel = 1, maxLevel = 60, timestamp = 0, editedBy = "" }
+end
+
+function iRC:SetGuildHomepageClassBreakdown(mode, minLevel, maxLevel)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
+    mode = tostring(mode or "ALL"):upper()
+    if mode ~= "ALL" and mode ~= "RANGE" and mode ~= "MAX" then return false end
+    minLevel = math.max(1, math.min(60, math.floor(tonumber(minLevel) or 1)))
+    maxLevel = math.max(minLevel, math.min(60, math.floor(tonumber(maxLevel) or 60)))
+    if mode == "ALL" then minLevel, maxLevel = 1, 60
+    elseif mode == "MAX" then minLevel, maxLevel = 60, 60 end
+    local data = self:GetConnection().guildHomepageClassBreakdown
+    local now = GetServerTime and GetServerTime() or time()
+    data.mode, data.minLevel, data.maxLevel = mode, minLevel, maxLevel
+    data.timestamp = math.max(now, (tonumber(data.timestamp) or 0) + 1)
+    data.editedBy = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("homepage", data.editedBy, data.timestamp,
+        self:GetPlayerName(), data.timestamp)
+    if self.SendGuildHomepageClassBreakdown then self:SendGuildHomepageClassBreakdown(nil, true) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.RaceGrid then
+        if self.RaceGrid.MarkLocalReportDirty then self.RaceGrid:MarkLocalReportDirty() end
+        self.RaceGrid:BroadcastReport(false)
+    end
     return true
 end
 
@@ -1556,7 +1652,39 @@ function iRC:SetGuildHomepageIcon(icon)
     self:RecordManagementConnectionStatus("homepage", data.editedBy, data.timestamp, self:GetPlayerName(), data.timestamp)
     if self.SendGuildHomepageIcon then self:SendGuildHomepageIcon(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
+    if self.RaceGrid then
+        if self.RaceGrid.MarkLocalReportDirty then self.RaceGrid:MarkLocalReportDirty() end
+        self.RaceGrid:BroadcastReport(false)
+    end
+    return true
+end
+
+function iRC:GetGuildHomepageTag()
+    local connection = self:GetConnection()
+    local tag = connection and connection.guildHomepageTag and connection.guildHomepageTag.tag or "NORMAL"
+    if tag == "PVE" or tag == "PVP" or tag == "RP" then return tag end
+    return "NORMAL"
+end
+
+function iRC:SetGuildHomepageTag(tag)
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("homepage") then return false end
+    tag = tostring(tag or "NORMAL"):upper()
+    if tag ~= "NORMAL" and tag ~= "PVE" and tag ~= "PVP" and tag ~= "RP" then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    local data = connection.guildHomepageTag
+    local now = GetServerTime and GetServerTime() or time()
+    data.tag = tag
+    data.timestamp = math.max(now, math.floor(tonumber(data.timestamp) or 0) + 1)
+    data.editedBy = self:GetPlayerName()
+    self:RecordManagementConnectionStatus("homepage", data.editedBy, data.timestamp,
+        self:GetPlayerName(), data.timestamp)
+    if self.SendGuildHomepageTag then self:SendGuildHomepageTag(nil, true) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.RaceGrid then
+        if self.RaceGrid.MarkLocalReportDirty then self.RaceGrid:MarkLocalReportDirty() end
+        self.RaceGrid:BroadcastReport(false)
+    end
     return true
 end
 
@@ -1653,11 +1781,11 @@ function iRC:GetWhisperTargetName(name)
     return target
 end
 
-function iRC:OpenWhisper(name)
+function iRC:OpenWhisper(name, initialMessage)
     local target = self:GetWhisperTargetName(name)
     if target == "" then return false end
     if ChatFrame_OpenChat then
-        ChatFrame_OpenChat("/w " .. target .. " ", DEFAULT_CHAT_FRAME)
+        ChatFrame_OpenChat("/w " .. target .. " " .. tostring(initialMessage or ""), DEFAULT_CHAT_FRAME)
         return true
     end
     if ChatFrame_SendTell then
@@ -1877,7 +2005,10 @@ function iRC:SetGuildContacts(value)
     end
     if self.SendGuildContactMetadata then self:SendGuildContactMetadata(nil, nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
-    if self.RaceGrid then self.RaceGrid:BroadcastReport(false) end
+    if self.RaceGrid then
+        if self.RaceGrid.MarkLocalReportDirty then self.RaceGrid:MarkLocalReportDirty() end
+        self.RaceGrid:BroadcastReport(false)
+    end
     return true
 end
 

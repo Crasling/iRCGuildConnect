@@ -6,6 +6,7 @@ local L = iRC.L
 SLASH_IRC1 = "/irc"
 SlashCmdList.IRC = function(message)
     local command = (message or ""):match("^(%S*)")
+    local argument = (message or ""):match("^%S+%s+(%S+)")
     command = string.lower(command or "")
     if command == "" or command == "main" then
         iRC.MainUI:Open(nil, true)
@@ -22,6 +23,8 @@ SlashCmdList.IRC = function(message)
         else
             iRC:Print(L.COMMAND_NOT_CONNECTED)
         end
+    elseif command == "inactive" then
+        iRC.MainUI:OpenInactiveMembers(tonumber(argument) or 30)
     else
         iRC:Print(L.COMMAND_HELP)
     end
