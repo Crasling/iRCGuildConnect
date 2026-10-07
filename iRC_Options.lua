@@ -2199,7 +2199,7 @@ do
         verification = "Verification decisions", presence = "Presence checks and automatic warnings",
         incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
-        rosterHistory = "Guild Log and member history",
+        rosterHistory = "Guild Log and member history", identity = "Assign member mains and alts",
         memberRemoval = "Review and remove inactive members",
     }
     local function rankValues()
@@ -2218,7 +2218,12 @@ do
         return "Rank " .. tostring(value)
     end
     local permissionY = permissionStartY
-    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage", "rosterHistory", "memberRemoval" }) do
+    rankPermissionDropdowns.guildMasterRank, permissionY = CreateCompactManagementDropdown("iRCGuildMasterRankPermission",
+        permissionCard, "Guild master rank", permissionY,
+        function() return iRC:GetGuildMasterRank() end,
+        function(value) iRC:SetGuildMasterRank(value) end,
+        rankValues, rankLabel)
+    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage", "rosterHistory", "identity", "memberRemoval" }) do
         local permissionKey = permission
         rankPermissionDropdowns[permission], permissionY = CreateCompactManagementDropdown("iRCRankPermission" .. permission,
             permissionCard, permissionLabels[permission], permissionY,
@@ -2510,10 +2515,12 @@ local function RefreshGeneralNotificationAndAdminOptions()
     showAttentionRemindersCheck:SetEnabled(remindersEnabled)
     if showAttentionRemindersCheck.managementRow then showAttentionRemindersCheck.managementRow:SetAlpha(remindersEnabled and 1 or 0.48) end
     local guildMaster = iRC:IsGuildMaster()
-    for _, dropdown in pairs(rankPermissionDropdowns) do
+    local nativeGuildMaster = iRC:IsNativeGuildMaster()
+    for permission, dropdown in pairs(rankPermissionDropdowns) do
         dropdown:Refresh()
-        if guildMaster then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
-        if dropdown.managementRow then dropdown.managementRow:SetAlpha(guildMaster and 1 or 0.48) end
+        local canEdit = permission == "guildMasterRank" and nativeGuildMaster or (permission ~= "guildMasterRank" and guildMaster)
+        if canEdit then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
+        if dropdown.managementRow then dropdown.managementRow:SetAlpha(canEdit and 1 or 0.48) end
     end
     local welcomeConflict = iRC:GetPendingManagementConflict("WELCOME")
     welcomeConflictText:SetText(welcomeConflict and iRC:Text("MANAGEMENT_CONFLICT_INLINE", iRC:FormatPlayerName(welcomeConflict.source)) or "")
@@ -2607,8 +2614,8 @@ local function Refresh()
     local classRangeMode = homepageDescriptionUI.classBreakdownDraft.mode == "RANGE"
     if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.classBreakdownMode)
     else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.classBreakdownMode) end
-    homepageDescriptionUI.classBreakdownMin:SetEnabled(canEditHomepage and classRangeMode)
-    homepageDescriptionUI.classBreakdownMax:SetEnabled(canEditHomepage and classRangeMode)
+    homepageDescriptionUI.classBreakdownMin:SetEnabled(canEditHomepage == true and classRangeMode == true)
+    homepageDescriptionUI.classBreakdownMax:SetEnabled(canEditHomepage == true and classRangeMode == true)
     homepageDescriptionUI.classBreakdownApply:SetEnabled(canEditHomepage and true or false)
     homepageDescriptionUI.edit:SetEnabled(canEditHomepage and true or false)
     homepageDescriptionUI.save:SetEnabled(canEditHomepage and true or false)

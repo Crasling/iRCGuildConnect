@@ -337,7 +337,7 @@ end
 local trafficBuckets = { incoming = {}, outgoing = {} }
 local trafficTypeBuckets = {}
 local trafficFrame
-local monitoredPrefixes = { iRCConnV1 = true, iRCGridV1 = true, iRCIconV1 = true, iRCGFRoster = true, RLAddon = true }
+local monitoredPrefixes = { iRCConnV1 = true, iRCGridV1 = true, iRCIconV1 = true, iRCGFRoster = true }
 
 function iRC:RecordTrafficBytes(direction, bytes, prefix, message)
     if not self.TrafficMonitorEnabled then return end
@@ -515,6 +515,7 @@ local DEFAULT_SETTINGS = {
     showFunctionProfilerForTesting = false,
     showOfficerSettingsForTesting = false,
     showAttentionReminders = true,
+    excludeAltsFromGuildSnapshot = true,
     showGuildMap = true,
     guildMapPinSize = 8,
     shareGuildMapPosition = true,
@@ -524,6 +525,7 @@ local startupSettings = {}
 
 iRC.DefaultConnectionRules = {
     guildRace = "",
+    requireIRC = false,
     raceLock = false,
     nativeTongueOnly = false,
     selfFoundOnly = false,
@@ -564,7 +566,7 @@ end
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     tradeExceptions = 1, notifications = 1, homepage = 1, rosterHistory = 1,
-    memberRemoval = 1,
+    identity = 1, memberRemoval = 1,
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -736,11 +738,9 @@ function iRC:SupportsTBCPlayableRaces()
     return self:IsForeverClient() or (tonumber(self.GameTocVersion) or 0) >= 20000
 end
 
--- Native iRC replies and supported compatibility replies both prove that a
--- member currently has a working addon. UI code should not have to duplicate
--- this distinction every time it evaluates a verification state.
+-- Only a current iRC reply proves that a member has the required addon.
 function iRC:IsLiveAddonState(state)
-    return state == "verified" or state == "compatible"
+    return state == "verified"
 end
 
 function iRC:IsAttentionVerificationState(state)
@@ -1103,13 +1103,26 @@ function iRC:GetConnection()
     classBreakdown.timestamp = math.max(0, math.floor(tonumber(classBreakdown.timestamp) or 0))
     classBreakdown.editedBy = tostring(classBreakdown.editedBy or "")
     connection.rankPermissions = connection.rankPermissions or {}
+    connection.guildMasterRank = math.max(0, math.min(9,
+        math.floor(tonumber(connection.guildMasterRank) or 0)))
+    connection.guildMasterRankTimestamp = math.max(0,
+        math.floor(tonumber(connection.guildMasterRankTimestamp) or 0))
     for permission, rankIndex in pairs(self.DefaultRankPermissions) do
         if connection.rankPermissions[permission] == nil then connection.rankPermissions[permission] = rankIndex end
     end
     connection.members = connection.members or {}
+    -- Compatibility presence was removed; discard legacy cached profiles.
+    connection.compatibilityMembers = nil
     connection.rules = connection.rules or {}
     for key, value in pairs(self.DefaultConnectionRules) do
         if connection.rules[key] == nil then connection.rules[key] = value end
+    end
+    -- Rulesets saved before 0.5.15 cannot contain Require iRC. Preserve that
+    -- known-false extension separately so non-GM relays cannot alter it while
+    -- retaining the older base rules fingerprint.
+    if connection.receivedRulesBackupVersion == 1 and type(connection.receivedRulesBackup) == "string"
+        and connection.receivedRulesRequireIRC == nil then
+        connection.receivedRulesRequireIRC = false
     end
     if not self:IsOfficialHardcoreRealm() then connection.rules.enableGuildDeathMessage = false end
     normalizeProgressionRules(connection.rules)
@@ -1185,6 +1198,16 @@ function iRC:GetGuildRankPermission(permission)
     return math.max(0, math.min(9, math.floor(tonumber(value) or 0)))
 end
 
+function iRC:GuildRankHasPermission(rankIndex, permission)
+    if type(rankIndex) ~= "number" or self.DefaultRankPermissions[permission] == nil then return false end
+    if rankIndex == 0 then return true end
+    local connection = self:GetConnection()
+    local guildMasterRank = math.max(0, math.min(9,
+        math.floor(tonumber(connection and connection.guildMasterRank) or 0)))
+    if guildMasterRank > 0 and rankIndex <= guildMasterRank then return true end
+    return rankIndex <= self:GetGuildRankPermission(permission)
+end
+
 function iRC:HasAnyManagementPermission()
     if not self:GetConnection() then return false end
     for permission in pairs(self.DefaultRankPermissions) do
@@ -1237,10 +1260,42 @@ function iRC:SetGuildRankPermission(permission, rankIndex)
     return true
 end
 
-function iRC:IsGuildMaster()
+function iRC:IsNativeGuildMaster()
     if not self:IsInGuildConnection() then return false end
     if self:IsTestGuildMaster() or self:IsTestAdminGuildMaster() then return true end
     return self:GetPlayerGuildRankIndex() == 0
+end
+
+function iRC:GetGuildMasterRank()
+    local connection = self:GetConnection()
+    return math.max(0, math.min(9, math.floor(tonumber(connection and connection.guildMasterRank) or 0)))
+end
+
+function iRC:SetGuildMasterRank(rankIndex)
+    if not self:IsNativeGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.guildMasterRank = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
+    connection.guildMasterRankTimestamp = math.max(time(),
+        (tonumber(connection.guildMasterRankTimestamp) or 0) + 1)
+    if self.SendRankPermissions then self:SendRankPermissions(nil, true) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    return true
+end
+
+function iRC:IsGuildMaster()
+    if not self:IsInGuildConnection() then return false end
+    if self:IsTestGuildMaster() or self:IsTestAdminGuildMaster() then return true end
+    local rankIndex = self:GetPlayerGuildRankIndex()
+    if rankIndex == 0 then return true end
+    -- Avoid re-entering GetConnection while a newly discovered guild is being
+    -- initialized; native rank zero above remains authoritative during setup.
+    if self.checkingDelegatedGuildMaster then return false end
+    self.checkingDelegatedGuildMaster = true
+    local connection = self:GetConnection()
+    self.checkingDelegatedGuildMaster = nil
+    local delegatedRank = connection and tonumber(connection.guildMasterRank) or 0
+    return rankIndex ~= nil and delegatedRank > 0 and rankIndex <= delegatedRank
 end
 
 function iRC:IsTestGuildMasterName(name)
@@ -1318,12 +1373,10 @@ end
 
 function iRC:IsGuildMasterName(name)
     if self:IsTestGuildMasterName(name) or self:IsTestAdminName(name) then return true end
-    if type(name) ~= "string" or not GetNumGuildMembers or not GetGuildRosterInfo then return false end
-    for index = 1, GetNumGuildMembers(true) do
-        local memberName, _, rankIndex = GetGuildRosterInfo(index)
-        if self:NormalizeName(memberName) == self:NormalizeName(name) then return rankIndex == 0 end
-    end
-    return false
+    local rankIndex = self:GetGuildMemberRankIndex(name)
+    if rankIndex == 0 then return true end
+    local delegatedRank = self:GetGuildMasterRank()
+    return rankIndex ~= nil and delegatedRank > 0 and rankIndex <= delegatedRank
 end
 
 function iRC:IsGuildMemberName(name)
@@ -1517,7 +1570,6 @@ function iRC:SetGuildConnectionActive(active, receivedFromGuild, activationTimes
     if active and not receivedFromGuild then
         if self.SendConnectionRules then self:SendConnectionRules(nil, true) end
         if self.SendHello then self:SendHello() end
-        if self.Compatibility and self.Compatibility.BroadcastAll then self.Compatibility:BroadcastAll() end
     end
     if active and self.RaceLockedSync then self.RaceLockedSync:Broadcast() end
     if active and self.RefreshGuildRoster then self:RefreshGuildRoster() end
@@ -1551,7 +1603,6 @@ function iRC:ActivateNewGuildConnection()
     if self.SendHello then self:SendHello() end
     if self.RequestGuildActivation then self:RequestGuildActivation(true) end
     if self.RequestConnectionRules then self:RequestConnectionRules() end
-    if self.Compatibility and self.Compatibility.BroadcastAll then self.Compatibility:BroadcastAll() end
     if self.RaceGrid and self.RaceGrid.Refresh then self.RaceGrid:Refresh() end
     return changed
 end
@@ -1697,7 +1748,7 @@ function iRC:IsAddonResponseRequired(connection)
     connection = connection or self:GetConnection()
     if not connection or connection.active ~= true or connection.rulesBootstrap == true then return false end
     local rules = connection.rules or self.DefaultConnectionRules
-    return rules.raceLock == true or rules.nativeTongueOnly == true
+    return rules.requireIRC == true or rules.raceLock == true or rules.nativeTongueOnly == true
         or rules.selfFoundOnly == true or rules.guildFoundOnly == true or rules.level60GuildFound == true
         or rules.sameRaceGroupsOnly == true or rules.guildGroupsOnly == true
 end
@@ -2043,15 +2094,6 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)
         iRC:PrintLoaded()
         iRC:ScheduleNewGuildActivation(3)
-        C_Timer.After(5, function()
-            local settings = iRC:GetSettings()
-            if settings.raceLockedForkReminderShown then return end
-            local isLoaded = C_AddOns and C_AddOns.IsAddOnLoaded
-            if isLoaded and isLoaded("RaceLockedForkEU") then
-                settings.raceLockedForkReminderShown = true
-                iRC:Print(iRC:Text("RACELOCKED_FORK_DISABLE_REMINDER"))
-            end
-        end)
     elseif event == "PLAYER_REGEN_DISABLED" then
         iRC:EnterLowTrafficMode()
         iRC:CloseAllWindows()

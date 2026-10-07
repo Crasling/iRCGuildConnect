@@ -584,8 +584,8 @@ function RaceGrid:MarkLocalReportDirty()
     localReportDirty = true
 end
 
--- Verification and compatible participation remain useful metadata, but the
--- guild statistics themselves count the complete current roster.
+-- Verification participation remains useful metadata, but guild statistics
+-- themselves count the complete current roster.
 function RaceGrid:GetRosterParticipation(member)
     if iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName()) then return "verified" end
     local state = member.verification and member.verification.state
@@ -617,10 +617,11 @@ function RaceGrid:BuildOwnGuildReports()
             or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
         guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
         classes = {}, classBreakdownClasses = {}, classTotals = {}, classAverageLevels = {}, membersLevel60 = 0, activeLevel30 = 0,
-        verifiedMembers = 0, compatibleMembers = 0, populationSource = "irc_guild_roster",
+        verifiedMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
         rulesKnown = connection.rulesBootstrap ~= true,
         rules = {
+            requireIRC = rules.requireIRC == true,
             raceLock = rules.raceLock == true,
             nativeTongueOnly = rules.nativeTongueOnly and true or false,
             selfFoundOnly = rules.selfFoundOnly and true or false,
@@ -670,8 +671,7 @@ function RaceGrid:BuildOwnGuildReports()
                 group.guildContactsOnlineMask = group.guildContactsOnlineMask + 2 ^ (inviteIndex - 1)
             end
             if recentlyOnline then group.activeMembers = group.activeMembers + 1 end
-            if participation == "verified" then group.verifiedMembers = group.verifiedMembers + 1
-            elseif participation == "compatible" then group.compatibleMembers = group.compatibleMembers + 1 end
+            if participation == "verified" then group.verifiedMembers = group.verifiedMembers + 1 end
             group.classes[class] = (group.classes[class] or 0) + 1
             group.classTotals[class] = (group.classTotals[class] or 0) + level
             if level >= classBreakdownMinLevel and level <= classBreakdownMaxLevel then

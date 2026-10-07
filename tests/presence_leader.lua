@@ -174,7 +174,7 @@ db.active = false
 assert(not iRC:IsPresenceNotificationLeader(), "inactive guild never elects a notifier")
 
 -- Exercise actual guild roster -> Race Overview with offline characters whose
--- races are unavailable, mixed addon sources, duplicate rows and a departed member.
+-- races are unavailable, duplicate rows and a departed member.
 assert(loadfile("iRC_RaceGrid.lua"))("iRC", private)
 db.active, player = true, "Crasjin"
 roster[2].online, roster[3].online, roster[6].online = false, false, false
@@ -182,60 +182,47 @@ db.members = {
     aleader = { name = "Aleader", lastSeen = now - 5000 },
     departed = { name = "Departed", lastSeen = now },
 }
-local compatibleMembers = {
-    aleader = { presence = { source = "RaceLockedForkEU", lastSeen = now - 5000 } },
-    aofficer = { presence = { source = "RaceLockedForkEU", lastSeen = now - 5000 } },
-    zofficer = { presence = { source = "RaceLockedForkEU", lastSeen = now } },
-}
-db.compatibilityMembers = compatibleMembers
-function iRC:GetCompatibilityMember(name) return compatibleMembers[self:NormalizeName(name)] end
 roster[#roster + 1] = roster[2] -- Same character must still only count once.
 local group = assert(iRC.RaceGrid:BuildOwnGuildReports()[1])
-assert(group.members == 6 and group.activePlayers == 3 and group.verifiedMembers == 1 and group.compatibleMembers == 1,
-    string.format("guild snapshot totals: %s/%s/%s/%s", group.members, group.activePlayers, group.verifiedMembers, group.compatibleMembers))
+assert(group.members == 6 and group.activePlayers == 3 and group.verifiedMembers == 1,
+    string.format("guild snapshot totals: %s/%s/%s", group.members, group.activePlayers, group.verifiedMembers))
 assert(group.averageLevel == 10, "averages use the same participant population")
 local classTotal = 0; for _, count in pairs(group.classes) do classTotal = classTotal + count end
 assert(classTotal == 6, "class breakdown uses the full guild roster")
 assert(iRC:GetMemberVerification("Aofficer", false).state == "offline", "live verification behavior remains unchanged")
 db.members.member = { name = "Member", guid = "Player-1-Member", race = "Troll", lastSeen = now, addonVersion = "0.2.4" }
-db.compatibilityMembers.member = { guid = "Player-1-Member", presence = { source = "RaceLockedForkEU", lastSeen = now } }
 local sourceRows = iRC:GetGuildRosterRows()
 local sourced
 for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
-assert(sourced and sourced.profile and not sourced.compatibility and sourced.source == "iRC", "fresh iRC suppresses the compatible source for the same character")
-db.members.member.lastSeen = now - 136
-db.compatibilityMembers.member.presence.lastSeen = now - 100
+assert(sourced and sourced.profile and sourced.source == "iRC", "fresh iRC is the member's only addon source")
+db.members.member.lastSeen = now - 91
 iRC:InvalidateGuildMemberRows()
 sourceRows = iRC:GetGuildRosterRows()
 for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
-assert(sourced and not sourced.profile and sourced.compatibility and sourced.source == "RaceLockedForkEU", "newer compatible presence replaces and clears an expired iRC profile")
-assert(db.members.member == nil, "expired iRC profile is removed from the connection cache after native takeover")
-db.compatibilityMembers.member.presence.lastSeen = now - 136
-assert(iRC:GetMemberVerification("Member", true).state == "missing", "RaceLockedForkEU compatibility expires after 135 seconds")
+assert(sourced and sourced.profile and sourced.source == "iRC" and sourced.verification.state == "stale",
+    "expired iRC presence remains stale until another iRC response arrives")
 db.members.member = { name = "Member", guid = "Player-OLD-Member", race = "Troll", lastSeen = now }
-db.compatibilityMembers.member = { guid = "Player-OLD-Member", presence = { source = "RaceLockedForkEU", lastSeen = now } }
 db.guildFoundRoster = { member = { source = "RaceLocked", lastSeen = now } }
 iRC:InvalidateGuildMemberRows()
 local identityRows = iRC:GetGuildRosterRows()
 local recreated
 for _, row in ipairs(identityRows) do if iRC:NormalizeName(row.name) == "member" then recreated = row break end end
 assert(recreated and not recreated.profile and recreated.verification.state == "missing", "same-name character with a new GUID cannot inherit cached verification")
-assert(db.members.member == nil and db.compatibilityMembers.member == nil and db.guildFoundRoster.member == nil, "all name-keyed identity caches are cleared after a GUID change")
+assert(db.members.member == nil and db.guildFoundRoster.member == nil, "all name-keyed identity caches are cleared after a GUID change")
 assert(db.newMemberChecks["guid:Player-1-Member"], "a recreated character receives a new GUID-scoped confirmation check")
-print("Race Overview population tests passed: verified + compatible, offline/unknown race, dual-source deduplication, departed/undetected exclusions and native overwrite protection.")
+print("Race Overview population tests passed: iRC verification, offline/unknown race, duplicate rows, departed members and identity reset protection.")
 print("Presence leader tests passed: iRC-only officers, test overrides, fresh/session/offline checks, deterministic election and profile wire round trip.")
 
 -- Large-guild regression: one roster read per member, constant connection
 -- lookups, and explicit invalidation when incoming member data changes.
 assert(loadfile("iRC_RaceLockedSync.lua"))("iRC", private)
-roster, db.members, db.compatibilityMembers, db.guildFoundRoster = {}, {}, {}, {}
+roster, db.members, db.guildFoundRoster = {}, {}, {}
 iRC:InvalidateGuildRosterSnapshot()
 for index = 1, 1000 do
     local name = index == 1 and "Crasjin" or string.format("Member%04d", index)
     local key = iRC:NormalizeName(name)
     roster[index] = { name = name, rank = 5, online = index % 2 == 0 or index == 1 }
     if index % 3 == 0 then db.members[key] = { name = name, race = "Troll", lastSeen = now } end
-    if index % 5 == 0 then db.compatibilityMembers[key] = { presence = { source = "RaceLockedForkEU", lastSeen = now } } end
     if index % 7 == 0 then db.guildFoundRoster[key] = { source = "RaceLocked", lastSeen = now, verified = true, clean = true } end
 end
 local getConnection, getRoster = iRC.GetConnection, GetGuildRosterInfo
@@ -246,10 +233,10 @@ local rosterRows = iRC:GetGuildRosterRows()
 assert(#rosterRows == 1000 and rosterReads == 1000 and connectionReads <= 3, "large roster must use constant connection lookups")
 assert(iRC:GetGuildRosterRows() == rosterRows and rosterReads == 1000, "unchanged guild rows are reused without another roster pass")
 local priorChangedRow, priorUntouchedRow = rosterRows[2], rosterRows[3]
-db.compatibilityMembers.member0002 = { presence = { source = "RaceLockedForkEU", lastSeen = now } }
+db.members.member0002 = { name = "Member0002", race = "Troll", lastSeen = now }
 iRC:InvalidateGuildMemberRow("Member0002")
 local refreshed = iRC:GetGuildRosterRows()
-assert(refreshed[2].verification.state == "compatible", "next pass sees newly received presence immediately")
+assert(refreshed[2].verification.state == "verified", "next pass sees newly received iRC presence immediately")
 assert(refreshed == rosterRows and refreshed[2] == priorChangedRow and refreshed[3] == priorUntouchedRow,
     "a member update overwrites its existing row without replacing other rows")
 local expiringRow = refreshed[6]

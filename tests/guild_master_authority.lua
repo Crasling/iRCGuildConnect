@@ -27,4 +27,9 @@ assert(private.iRC:IsGuildMaster(), "roster rank 0 retains Guild Master authorit
 rosterRank = 1
 assert(not private.iRC:IsGuildMaster(), "nonzero roster ranks do not receive Guild Master authority")
 
-print("Guild Master authority tests passed: direct-rank fallback and non-GM rejection.")
+private.iRC.GetConnection = function() return { guildMasterRank = 1 } end
+assert(private.iRC:IsGuildMaster(), "the configured Guild master rank receives iRC Guild Master authority")
+rosterRank = 2
+assert(not private.iRC:IsGuildMaster(), "ranks below the configured Guild master rank remain regular members")
+
+print("Guild Master authority tests passed: native, delegated, and lower-rank handling.")

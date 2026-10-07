@@ -54,7 +54,6 @@ assert(loadfile("Localization/enUS.lua"))("iRC", private)
 assert(loadfile("iRC_Guild.lua"))("iRC", private)
 local guildFrame = frames[#frames]
 assert(loadfile("iRC_Connection.lua"))("iRC", private)
-assert(loadfile("iRC_Compatibility.lua"))("iRC", private)
 local iRC = private.iRC
 iRCDB, iRCCharDB = {}, {}
 function iRC:DebugMsg() end
@@ -65,7 +64,7 @@ local function reset(login)
     timers, addonMessages, notices = {}, {}, {}
     db.active, own = true, "Bofficer"
     db.rules.raceLock = true
-    db.members, db.compatibilityMembers, db.newMemberChecks, db.newMemberWelcomeNotices = {}, {}, {}, {}
+    db.members, db.newMemberChecks, db.newMemberWelcomeNotices = {}, {}, {}
     db.rosterBaselineReady = false
     roster[2].online, roster[3].online = false, true
     C_ChatInfo.SendAddonMessage = sendAddon
@@ -77,7 +76,9 @@ local function respond(name)
 end
 local function probeCount()
     local count = 0
-    for _, packet in ipairs(addonMessages) do if packet[1] == "RLAddon" and packet[2]:match("^PING,") then count = count + 1 end end
+    for _, packet in ipairs(addonMessages) do
+        if packet[1] == iRC.Prefix and packet[2]:match("^PRESENCE_REQUEST") then count = count + 1 end
+    end
     return count
 end
 
@@ -89,6 +90,14 @@ assert(iRC:GetMemberVerification("Target", true).state == "optional", "missing a
 iRC:CheckPresenceMismatches(); advance(360)
 assert(#notices == 0 and probeCount() == 0, "optional addon presence causes no probes or warnings")
 db.rules.guildMapEnabled = false
+
+reset(true)
+db.rules.raceLock = false
+db.rules.requireIRC = true
+assert(iRC:IsAddonResponseRequired(db), "standalone Require iRC rule requires addon presence")
+assert(iRC:GetMemberVerification("Target", true).state == "missing",
+    "Require iRC makes a missing addon response a violation without progression rules")
+db.rules.requireIRC = false
 
 reset(true)
 iRC:CheckPresenceMismatches()
@@ -110,18 +119,10 @@ advance(15)
 assert(#notices == 5 and notices[5][2] == "GUILD" and now == firstNotice + 300, "escalation rechecks before officer/whisper/guild notice")
 
 reset()
-iRC:CheckPresenceMismatches(); advance(20)
-iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
-advance(60)
-assert(#notices == 0, "late RaceLockedForkEU response cancels pending notice")
-
-reset()
 respond("Target")
-iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
-advance(136)
-assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "stale", "compatibility cached alongside iRC cannot outlive that iRC profile")
-iRC.Compatibility:StoreSelfFound("Target", true, "RaceLockedForkEU")
-assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "compatible", "a newer compatibility response can take over after iRC expires")
+advance(91)
+assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "stale",
+    "an expired iRC profile remains stale until iRC responds again")
 
 reset()
 iRC:CheckPresenceMismatches(); advance(30)
@@ -189,4 +190,4 @@ iRC:CheckPresenceMismatches(); advance(60)
 assert(#notices == 0, "test admin warning suppression blocks officer, whisper, and guild messages")
 iRC:GetSettings().suppressPresenceWarnings = false
 iRC.TestAdminName = nil
-print("Presence confirmation tests passed: three-probe confirmation, reload grace, late iRC/RaceLockedForkEU replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")
+print("Presence confirmation tests passed: three-probe confirmation, reload grace, late iRC replies, offline/relogin, welcome, escalation, officer handoff and unavailable transport.")

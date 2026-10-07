@@ -140,13 +140,13 @@ end
 local function makeMemberRow(parent, index)
     local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    row:SetHeight(54)
-    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 60))
-    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 60))
+    row:SetHeight(44)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 48))
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 48))
     createBackdrop(row, { 0.10, 0.085, 0.07, 0.96 }, { 0.28, 0.25, 0.20, 1 })
     row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    row.name:SetPoint("TOPLEFT", 14, -10)
+    row.name:SetPoint("TOPLEFT", 14, -6)
     row.name:SetWidth(220)
     row.name:SetJustifyH("LEFT")
     row.onlineTag = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -156,10 +156,19 @@ local function makeMemberRow(parent, index)
     row.tag = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     row.tag:SetPoint("LEFT", row.onlineTag, "RIGHT", 6, 0)
     row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -5)
+    row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
     row.detail:SetJustifyH("LEFT")
     return row
+end
+
+local function setMemberRowDensity(row, compact)
+    row:SetHeight(compact and 40 or 44)
+    row.name:ClearAllPoints()
+    row.name:SetPoint("TOPLEFT", 14, -6)
+    row.detail:ClearAllPoints()
+    row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
+    row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
 end
 
 local function resetInactiveMemberView(frame)
@@ -174,30 +183,30 @@ end
 
 local function makeGuildRuleRow(parent, index)
     local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
-    row:SetHeight(54)
-    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 60))
-    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 60))
+    row:SetHeight(44)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 48))
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 48))
     createBackdrop(row, { 0.075, 0.065, 0.05, 0.96 }, { 0.30, 0.26, 0.19, 1 })
     row.accent = row:CreateTexture(nil, "ARTWORK")
     row.accent:SetWidth(3)
     row.accent:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -5)
     row.accent:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 5)
     row.title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    row.title:SetPoint("TOPLEFT", 15, -7)
-    row.title:SetPoint("RIGHT", row, "RIGHT", -137, 0)
+    row.title:SetPoint("TOPLEFT", 15, -5)
+    row.title:SetPoint("RIGHT", row, "RIGHT", -127, 0)
     row.title:SetJustifyH("LEFT")
     row.description = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    row.description:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -3)
-    row.description:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -137, 6)
+    row.description:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -1)
+    row.description:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -127, 4)
     row.description:SetJustifyH("LEFT")
     row.description:SetJustifyV("TOP")
     row.description:SetWordWrap(true)
     row.stateBackground = row:CreateTexture(nil, "ARTWORK")
-    row.stateBackground:SetSize(112, 28)
-    row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -11, 0)
+    row.stateBackground:SetSize(102, 24)
+    row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -9, 0)
     row.state = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.state:SetPoint("CENTER", row.stateBackground, "CENTER", 0, 0)
-    row.state:SetWidth(104)
+    row.state:SetWidth(96)
     row.state:SetJustifyH("CENTER")
     row.dependencyVertical = row:CreateTexture(nil, "ARTWORK")
     row.dependencyVertical:SetColorTexture(0.72, 0.48, 0.18, 0.85)
@@ -213,7 +222,7 @@ end
 
 local function makeRaceCard(parent)
     local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    card:SetHeight(158)
+    card:SetHeight(138)
     createBackdrop(card, { 0.045, 0.055, 0.075, 0.98 }, { 0.30, 0.31, 0.34, 1 })
 
     card.accent = card:CreateTexture(nil, "ARTWORK")
@@ -222,12 +231,12 @@ local function makeRaceCard(parent)
     card.accent:SetPoint("BOTTOMLEFT", 4, 5)
 
     card.iconFrame = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.iconFrame:SetSize(46, 46)
-    card.iconFrame:SetPoint("TOPLEFT", 13, -12)
+    card.iconFrame:SetSize(40, 40)
+    card.iconFrame:SetPoint("TOPLEFT", 13, -9)
     createBackdrop(card.iconFrame, { 0.03, 0.03, 0.03, 1 }, { 0.58, 0.49, 0.25, 1 })
     card.icon = card.iconFrame:CreateTexture(nil, "ARTWORK")
     card.icon:SetPoint("CENTER")
-    card.icon:SetSize(38, 38)
+    card.icon:SetSize(32, 32)
 
     card.race = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     card.race:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -1)
@@ -238,7 +247,7 @@ local function makeRaceCard(parent)
     card.rank:SetPoint("TOPRIGHT", -14, -16)
     card.rank:SetTextColor(unpack(COLORS.gold))
     card.freshness = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.freshness:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -27)
+    card.freshness:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -23)
     card.freshness:SetPoint("RIGHT", card, "RIGHT", -14, 0)
     card.freshness:SetJustifyH("LEFT")
     card.guildLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -253,19 +262,19 @@ local function makeRaceCard(parent)
     card.guild:Hide()
 
     card.averageLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.averageLabel:SetPoint("TOP", card, "TOP", -240, -58)
+    card.averageLabel:SetPoint("TOP", card, "TOP", -240, -48)
     card.averageLabel:SetWidth(145)
     card.averageLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_LEVEL_30"))
     card.membersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.membersLabel:SetPoint("TOP", card, "TOP", -80, -58)
+    card.membersLabel:SetPoint("TOP", card, "TOP", -80, -48)
     card.membersLabel:SetWidth(145)
     card.membersLabel:SetText(iRC:Text("GUILD_STATS_ONLINE_PEAK"))
     card.totalLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.totalLabel:SetPoint("TOP", card, "TOP", 80, -58)
+    card.totalLabel:SetPoint("TOP", card, "TOP", 80, -48)
     card.totalLabel:SetWidth(145)
     card.totalLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_MEMBERS"))
     card.totalMembersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.totalMembersLabel:SetPoint("TOP", card, "TOP", 240, -58)
+    card.totalMembersLabel:SetPoint("TOP", card, "TOP", 240, -48)
     card.totalMembersLabel:SetWidth(145)
     card.totalMembersLabel:SetText(iRC:Text("GUILD_STATS_TOTAL_MEMBERS"))
     card.average = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -278,41 +287,41 @@ local function makeRaceCard(parent)
     card.totalMembers:SetPoint("TOP", card.totalMembersLabel, "BOTTOM", 0, -3)
 
     card.classesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -97)
+    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -81)
     card.classesTitle:SetText(iRC:Text("GUILD_STATS_CLASS_BREAKDOWN"))
     card.classText = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.classText:SetPoint("TOPLEFT", 15, -109)
-    card.classText:SetPoint("TOPRIGHT", -15, -109)
+    card.classText:SetPoint("TOPLEFT", 15, -93)
+    card.classText:SetPoint("TOPRIGHT", -15, -93)
     card.classText:SetJustifyH("CENTER")
     card.classText:SetWordWrap(false)
     card.classBar = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.classBar:SetPoint("TOPLEFT", 16, -126)
-    card.classBar:SetPoint("TOPRIGHT", -16, -126)
-    card.classBar:SetHeight(14)
+    card.classBar:SetPoint("TOPLEFT", 16, -108)
+    card.classBar:SetPoint("TOPRIGHT", -16, -108)
+    card.classBar:SetHeight(12)
     createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
     card.classSegments = {}
     card.classLabels = {}
     card.expandHint = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.expandHint:SetPoint("TOPRIGHT", -16, -143)
+    card.expandHint:SetPoint("TOPRIGHT", -16, -123)
     card.expandHint:SetWidth(630)
     card.expandHint:SetJustifyH("RIGHT")
     card.rulesSeparator = card:CreateTexture(nil, "ARTWORK")
     card.rulesSeparator:SetColorTexture(0.35, 0.29, 0.16, 0.8)
-    card.rulesSeparator:SetPoint("TOPLEFT", 16, -159)
-    card.rulesSeparator:SetPoint("TOPRIGHT", -16, -159)
+    card.rulesSeparator:SetPoint("TOPLEFT", 16, -139)
+    card.rulesSeparator:SetPoint("TOPRIGHT", -16, -139)
     card.rulesSeparator:SetHeight(1)
     card.rulesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.rulesTitle:SetPoint("TOPLEFT", 16, -169)
+    card.rulesTitle:SetPoint("TOPLEFT", 16, -149)
     card.rulesTitle:SetText(iRC:Text("GUILD_STATS_GUILD_PROFILE"))
     card.rulesTitle:SetTextColor(unpack(COLORS.gold))
     card.rulesText = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.rulesText:SetPoint("TOPLEFT", 20, -188)
-    card.rulesText:SetPoint("TOPRIGHT", -20, -188)
+    card.rulesText:SetPoint("TOPLEFT", 20, -168)
+    card.rulesText:SetPoint("TOPRIGHT", -20, -168)
     card.rulesText:SetJustifyH("LEFT")
     card.rulesText:SetJustifyV("TOP")
     card.rulesText:SetWordWrap(true)
     card.contactsLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.contactsLabel:SetPoint("TOPLEFT", 20, -202)
+    card.contactsLabel:SetPoint("TOPLEFT", 20, -182)
     card.contactsLabel:SetText(iRC:Text("GUILD_CONTACTS_LABEL") .. ":")
     card.contactsLabel:SetTextColor(unpack(COLORS.gold))
     card.contactButtons = {}
@@ -391,6 +400,7 @@ local MAIN_NAVIGATION = {
     { id = "Current Server", header = true },
     { id = "Race Overview", label = iRC:Text("GUILD_STATS_TITLE") },
     { id = "Current Guild", header = true },
+    { id = "Guild Snapshot", label = "Guild Snapshot", child = true },
     { id = "Guild Rules", label = "Guild Rules", child = true },
     { id = "Guild Members", label = "Guild Members", child = true },
     { id = "Management", header = true, managementHeader = true },
@@ -1188,7 +1198,9 @@ function UI:Create()
                         resetInactiveMemberView(frame)
                     end
                     frame.category = self.category
-                    if self.category == "Guild Rules" and frame.scroll then frame.scroll:SetVerticalScroll(0) end
+                    if (self.category == "Guild Snapshot" or self.category == "Guild Rules") and frame.scroll then
+                        frame.scroll:SetVerticalScroll(0)
+                    end
                     if self.category == "Race Overview" then
                         guildStatsFilter = getCurrentGuildStatsFilter()
                         UI.preservedRaceScroll = 0
@@ -1196,7 +1208,8 @@ function UI:Create()
                             iRC.RaceGrid:RequestGuildCacheFromOpen()
                         end
                     end
-                    if self.category == "Guild Members" or self.category == "Inactive Member Management" then
+                    if self.category == "Guild Snapshot" or self.category == "Guild Members"
+                        or self.category == "Inactive Member Management" then
                         iRC:RefreshGuildRoster()
                     end
                     if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
@@ -1215,9 +1228,15 @@ function UI:Create()
         end
     end
     frame.LayoutNavigation = function()
-        local showManagement = iRC:HasAnyManagementPermission()
+        local testAdmin = iRC:IsTestAdmin()
+        local function hasNavigationPermission(item)
+            if not item.permission then return true end
+            if item.id == "Inactive Member Management" and testAdmin then return true end
+            return iRC:HasGuildPermission(item.permission)
+        end
+        local showManagement = iRC:HasAnyManagementPermission() or testAdmin
         for _, navigationItem in ipairs(MAIN_NAVIGATION) do
-            if navigationItem.permission and iRC:HasGuildPermission(navigationItem.permission) then
+            if navigationItem.permission and hasNavigationPermission(navigationItem) then
                 showManagement = true
                 break
             end
@@ -1226,7 +1245,7 @@ function UI:Create()
         for _, item in ipairs(MAIN_NAVIGATION) do
             local visible = not item.hidden
                 and (not item.managementHeader or showManagement)
-                and (not item.permission or iRC:HasGuildPermission(item.permission))
+                and hasNavigationPermission(item)
                 and (not item.anyPermission or showManagement)
             local widget = item.widget
             if widget then
@@ -1247,7 +1266,7 @@ function UI:Create()
             end
         end
         for _, item in ipairs(MAIN_NAVIGATION) do
-            if item.id == frame.category and ((item.permission and not iRC:HasGuildPermission(item.permission))
+            if item.id == frame.category and ((item.permission and not hasNavigationPermission(item))
                 or (item.anyPermission and not showManagement) or getNavigationUnavailableReason(item)) then
                 if frame.category == "Inactive Member Management" then resetInactiveMemberView(frame) end
                 frame.category = "Guild Members"
@@ -1302,6 +1321,30 @@ function UI:Create()
         self:SetText(remaining > 0 and iRC:Text("RL_GRID_REFRESH_COOLDOWN", math.ceil(remaining)) or iRC:Text("RL_GRID_REFRESH"))
     end)
     frame.raceRefresh:Hide()
+    frame.guildOverviewRefresh = makeIRCActionButton(main, 105, 25, "Refresh", false)
+    frame.guildOverviewRefresh:SetPoint("TOPRIGHT", -14, -9)
+    frame.guildOverviewRefresh:SetScript("OnClick", function()
+        if iRC.InvalidateGuildRosterSnapshot then iRC:InvalidateGuildRosterSnapshot() end
+        iRC:RefreshGuildRoster()
+        UI:Refresh()
+    end)
+    frame.guildOverviewRefresh:Hide()
+    frame.guildOverviewAltToggle = makeIRCActionButton(main, 150, 25, "Exclude alts: ON", false)
+    frame.guildOverviewAltToggle:SetPoint("RIGHT", frame.guildOverviewRefresh, "LEFT", -8, 0)
+    frame.guildOverviewAltToggle:SetScript("OnClick", function()
+        local settings = iRC:GetSettings()
+        settings.excludeAltsFromGuildSnapshot = settings.excludeAltsFromGuildSnapshot == false
+        UI:Refresh()
+    end)
+    frame.guildOverviewAltToggle:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Snapshot roster scope")
+        GameTooltip:AddLine("Exclude linked and assigned alts from every Guild Snapshot total and calculation.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    frame.guildOverviewAltToggle:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    frame.guildOverviewAltToggle:Hide()
     frame.rulesViewToggle = CreateFrame("Button", nil, main, "BackdropTemplate")
     frame.rulesViewToggle:SetSize(150, 27)
     frame.rulesViewToggle:SetPoint("TOPRIGHT", main, "TOPRIGHT", -14, -9)
@@ -1698,6 +1741,113 @@ function UI:Create()
         if button.arrow then button.arrow:SetTextColor(color[1], color[2], color[3]) end
     end
     frame.styleMemberMenuButton = styleMemberMenuButton
+
+    local assignAltPopup = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    assignAltPopup:SetSize(440, 218)
+    assignAltPopup:SetPoint("CENTER", frame, "CENTER", 0, 20)
+    assignAltPopup:SetFrameStrata("FULLSCREEN_DIALOG")
+    assignAltPopup:SetToplevel(true)
+    assignAltPopup:EnableMouse(true)
+    createBackdrop(assignAltPopup, { 0.025, 0.022, 0.018, 1 }, { COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1 })
+
+    assignAltPopup.title = assignAltPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    assignAltPopup.title:SetPoint("TOPLEFT", 22, -20)
+    assignAltPopup.title:SetText("Assign Alt to Main")
+    assignAltPopup.title:SetTextColor(unpack(COLORS.gold))
+    assignAltPopup.body = assignAltPopup:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    assignAltPopup.body:SetPoint("TOPLEFT", assignAltPopup.title, "BOTTOMLEFT", 0, -13)
+    assignAltPopup.body:SetPoint("TOPRIGHT", assignAltPopup, "TOPRIGHT", -22, -52)
+    assignAltPopup.body:SetJustifyH("LEFT")
+    assignAltPopup.body:SetWordWrap(true)
+
+    assignAltPopup.dropdownLabel = assignAltPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    assignAltPopup.dropdownLabel:SetPoint("TOPLEFT", assignAltPopup, "TOPLEFT", 22, -91)
+    assignAltPopup.dropdownLabel:SetText("Main character")
+    assignAltPopup.dropdownLabel:SetTextColor(unpack(COLORS.gold))
+    assignAltPopup.dropdown = CreateFrame("Frame", "iRCAssignAltMainDropdown", assignAltPopup, "UIDropDownMenuTemplate")
+    assignAltPopup.dropdown:SetPoint("TOPLEFT", assignAltPopup, "TOPLEFT", 7, -103)
+    UIDropDownMenu_SetWidth(assignAltPopup.dropdown, 365)
+    UIDropDownMenu_JustifyText(assignAltPopup.dropdown, "LEFT")
+
+    local function makeAssignPopupButton(text, width)
+        local button = CreateFrame("Button", nil, assignAltPopup, "BackdropTemplate")
+        button:SetSize(width, 28)
+        createBackdrop(button, { 0.08, 0.06, 0.04, 1 }, { 0.48, 0.35, 0.16, 1 })
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("CENTER")
+        button.text:SetText(text)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(1, 0.72, 0.22, 0.12)
+        return button
+    end
+
+    assignAltPopup.cancel = makeAssignPopupButton("Cancel", 110)
+    assignAltPopup.cancel:SetPoint("BOTTOMRIGHT", assignAltPopup, "BOTTOMRIGHT", -22, 18)
+    assignAltPopup.cancel:SetScript("OnClick", function() assignAltPopup:Hide() end)
+    assignAltPopup.accept = makeAssignPopupButton("Assign Alt", 130)
+    assignAltPopup.accept:SetPoint("RIGHT", assignAltPopup.cancel, "LEFT", -10, 0)
+    assignAltPopup.accept:SetScript("OnClick", function()
+        local targetName, mainName = assignAltPopup.targetName, assignAltPopup.selectedMain
+        if not targetName or not mainName or not iRC.Identity
+            or not iRC.Identity:AssignGuildCharacter(targetName, mainName, "ALT") then
+            iRC:Print("Could not assign the Alt. Both characters must be current guild members.")
+            return
+        end
+        assignAltPopup:Hide()
+        iRC:Print(iRC:FormatPlayerName(targetName) .. " assigned as an Alt of " .. iRC:FormatPlayerName(mainName) .. ".")
+        UI:RefreshIfShown()
+    end)
+
+    UIDropDownMenu_Initialize(assignAltPopup.dropdown, function(_, level)
+        if level ~= 1 then return end
+        for _, member in ipairs(assignAltPopup.candidates or {}) do
+            local memberName = member.name
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = iRC:FormatPlayerName(memberName)
+            if member.rankName and member.rankName ~= "" then info.text = info.text .. "  |cFF888888" .. member.rankName .. "|r" end
+            info.value = memberName
+            info.checked = iRC:NormalizeName(assignAltPopup.selectedMain) == iRC:NormalizeName(memberName)
+            info.func = function()
+                assignAltPopup.selectedMain = memberName
+                UIDropDownMenu_SetSelectedValue(assignAltPopup.dropdown, memberName)
+                UIDropDownMenu_SetText(assignAltPopup.dropdown, iRC:FormatPlayerName(memberName))
+                assignAltPopup.accept:SetEnabled(true)
+                assignAltPopup.accept:SetAlpha(1)
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+
+    function assignAltPopup:Open(targetName)
+        self.targetName = targetName
+        self.selectedMain = nil
+        self.candidates = {}
+        local targetKey = iRC:NormalizeName(targetName)
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            if iRC:NormalizeName(member.name) ~= targetKey then
+                self.candidates[#self.candidates + 1] = member
+            end
+        end
+        table.sort(self.candidates, function(a, b)
+            return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name)
+        end)
+        local existing = iRC.Identity and iRC.Identity:GetManagedAssignment(targetName)
+        if existing and existing.mainName and iRC:IsGuildMemberName(existing.mainName) then
+            self.selectedMain = existing.mainName
+        end
+        self.body:SetText("Choose the Main character for " .. iRC:FormatPlayerName(targetName) .. ".")
+        UIDropDownMenu_SetSelectedValue(self.dropdown, self.selectedMain)
+        UIDropDownMenu_SetText(self.dropdown, self.selectedMain and iRC:FormatPlayerName(self.selectedMain)
+            or (#self.candidates > 0 and "Select a guild member..." or "No eligible guild members"))
+        self.accept:SetEnabled(self.selectedMain ~= nil)
+        self.accept:SetAlpha(self.selectedMain and 1 or 0.42)
+        self:Show()
+        self:Raise()
+    end
+
+    assignAltPopup:Hide()
+    frame.assignAltPopup = assignAltPopup
     local memberMenu = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     memberMenu:SetSize(270, 214)
     memberMenu:SetFrameStrata("DIALOG")
@@ -1842,6 +1992,56 @@ function UI:Create()
     memberMenu.alts:SetScript("OnClick", function()
         memberMenu.altMenu:SetShown(not memberMenu.altMenu:IsShown())
     end)
+
+    memberMenu.identityLabel = memberMenu:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    memberMenu.identityLabel:SetPoint("TOPLEFT", 18, -202)
+    memberMenu.identityLabel:SetText("Guild identity management")
+    memberMenu.identityLabel:SetTextColor(unpack(COLORS.gold))
+
+    memberMenu.assignAlt = CreateFrame("Button", nil, memberMenu, "BackdropTemplate")
+    memberMenu.assignAlt:SetSize(154, 29)
+    memberMenu.assignAlt:SetPoint("TOPLEFT", 16, -218)
+    createBackdrop(memberMenu.assignAlt, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.assignAlt.text = memberMenu.assignAlt:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.assignAlt.text:SetPoint("CENTER")
+    memberMenu.assignAlt.text:SetText("Assign Alt to Main...")
+    memberMenu.assignAlt:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.assignAlt, "character", true)
+    memberMenu.assignAlt:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if not profile or not iRC.Identity then return end
+        assignAltPopup:Open(profile.name)
+    end)
+
+    memberMenu.clearIdentity = CreateFrame("Button", nil, memberMenu, "BackdropTemplate")
+    memberMenu.clearIdentity:SetSize(80, 29)
+    memberMenu.clearIdentity:SetPoint("LEFT", memberMenu.assignAlt, "RIGHT", 4, 0)
+    createBackdrop(memberMenu.clearIdentity, { 0.07, 0.055, 0.04, 0.98 }, { 0.30, 0.24, 0.16, 1 })
+    memberMenu.clearIdentity.text = memberMenu.clearIdentity:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    memberMenu.clearIdentity.text:SetPoint("CENTER")
+    memberMenu.clearIdentity.text:SetText("Clear Link")
+    memberMenu.clearIdentity:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    styleMemberMenuButton(memberMenu.clearIdentity, "danger", false)
+    memberMenu.clearIdentity:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if not profile or not iRC.Identity then return end
+        StaticPopupDialogs.IRC_CLEAR_MEMBER_IDENTITY = StaticPopupDialogs.IRC_CLEAR_MEMBER_IDENTITY or {
+            text = "Clear the managed Main/Alt link for %s?",
+            button1 = YES or "Yes", button2 = NO or "No",
+            timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+            OnAccept = function(_, data)
+                if data and iRC.Identity:AssignGuildCharacter(data.target, nil, "REMOVE") then
+                    iRC:Print("Cleared the managed identity link for " .. iRC:FormatPlayerName(data.target) .. ".")
+                end
+            end,
+        }
+        StaticPopup_Show("IRC_CLEAR_MEMBER_IDENTITY", iRC:FormatPlayerName(profile.name), nil, { target = profile.name })
+    end)
+    memberMenu.identityLabel:Hide()
+    memberMenu.assignAlt:Hide()
+    memberMenu.clearIdentity:Hide()
     memberMenu:Hide()
     frame.memberMenu = memberMenu
     frame:HookScript("OnHide", function()
@@ -1849,6 +2049,7 @@ function UI:Create()
         memberMenu:Hide()
         professionReport:Hide()
         disableConfirm:Hide()
+        assignAltPopup:Hide()
         removeMemberConfirm:Hide()
         removalQueue:Cancel()
         if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then
@@ -1888,10 +2089,10 @@ function UI:RenderMemberRows()
     local frame = self.frame
     if not frame or frame.category ~= "Guild Members" then return end
     local profiles = frame.memberData or {}
-    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / 60) + 1
+    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / 48) + 1
     local scrollHeight = frame.scroll:GetHeight() or 0
     if scrollHeight < 1 then scrollHeight = 480 end
-    local visible = math.max(0, math.min(#profiles - first + 1, math.ceil(scrollHeight / 60) + 1))
+    local visible = math.max(0, math.min(#profiles - first + 1, math.ceil(scrollHeight / 48) + 1))
     for slot = 1, visible do
         local index, profile = first + slot - 1, profiles[first + slot - 1]
         local row = frame.memberRows[slot]
@@ -1899,10 +2100,11 @@ function UI:RenderMemberRows()
             row = makeMemberRow(frame.scrollContent, index)
             frame.memberRows[slot] = row
         end
+        setMemberRowDensity(row, false)
         row:ClearAllPoints()
         row:SetAlpha(1)
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 48))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 48))
         local memberTag, tagColor
         local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(profile.name)
         row.name:SetFontObject(GameFontHighlight)
@@ -1979,8 +2181,17 @@ function UI:RenderMemberRows()
             frame.styleMemberMenuButton(menu.altMenu.main, "detail", not isMain)
             frame.styleMemberMenuButton(menu.altMenu.bank, "bank", not isMain)
             frame.styleMemberMenuButton(menu.altMenu.remove, "danger", registered and not isMain)
+            local canManageIdentity = iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("identity")
+            menu.identityLabel:SetShown(canManageIdentity)
+            menu.assignAlt:SetShown(canManageIdentity)
+            menu.clearIdentity:SetShown(canManageIdentity)
+            if canManageIdentity then
+                local managedAssignment = iRC.Identity and iRC.Identity:GetManagedAssignment(profile.name)
+                frame.styleMemberMenuButton(menu.assignAlt, "character", true)
+                frame.styleMemberMenuButton(menu.clearIdentity, "danger", managedAssignment ~= nil)
+            end
             menu.altMenu:Hide()
-            menu:SetHeight(214)
+            menu:SetHeight(canManageIdentity and 260 or 214)
             local cursorX, cursorY = GetCursorPosition()
             menu:ClearAllPoints()
             -- Match the Verification popup: convert physical cursor pixels to
@@ -2018,7 +2229,7 @@ applyMemberSearch = function(frame)
         profiles = filtered
     end
     frame.memberData = profiles
-    frame.scrollContent:SetHeight(math.max(1, #profiles * 60))
+    frame.scrollContent:SetHeight(math.max(1, #profiles * 48))
     frame.scroll:SetVerticalScroll(0)
     UI:RenderMemberRows()
 end
@@ -2119,10 +2330,11 @@ local function updateGuildLog(frame)
             row = makeMemberRow(frame.scrollContent, index)
             frame.memberRows[index] = row
         end
+        setMemberRowDensity(row, true)
         row:SetAlpha(1)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 44))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 44))
         row.name:SetFontObject(GameFontNormal)
         row.name:SetText(record.name or "Unknown member")
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
@@ -2147,7 +2359,7 @@ local function updateGuildLog(frame)
         row:Show()
     end
     for index = #records + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
-    frame.scrollContent:SetHeight(math.max(1, #records * 60))
+    frame.scrollContent:SetHeight(math.max(1, #records * 44))
     frame.contentTitle:SetText("Guild Log")
     frame.contentSubtitle:SetText(#records > 0 and iRC:Text("GUILD_LOG_DESCRIPTION")
         or (query ~= "" and iRC:Text("GUILD_LOG_NO_SEARCH_RESULTS") or iRC:Text("GUILD_LOG_EMPTY")))
@@ -2186,9 +2398,10 @@ local function updateInactiveMembers(frame)
             row = makeMemberRow(frame.scrollContent, index)
             frame.memberRows[index] = row
         end
+        setMemberRowDensity(row, false)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 60))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 48))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 48))
         row.name:SetFontObject(GameFontNormal)
         row.name:SetText(iRC:FormatPlayerName(member.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
@@ -2240,7 +2453,7 @@ local function updateInactiveMembers(frame)
     if eligibleCount == 0 and iRC:IsTestAdmin() then
         eligibleCount = #getEligibleInactiveMembers(threshold, true)
     end
-    frame.scrollContent:SetHeight(math.max(1, #members * 60))
+    frame.scrollContent:SetHeight(math.max(1, #members * 48))
     frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
     local bulkEnabled = eligibleCount > 0 or iRC:IsTestAdmin()
     frame.inactiveRemoveAll:SetEnabled(bulkEnabled)
@@ -2250,6 +2463,276 @@ local function updateInactiveMembers(frame)
         and (tostring(#members) .. " offline member(s) at or above " .. tostring(threshold)
             .. " days. Click an eligible member to review a single removal.")
         or ("No offline members have reached " .. tostring(threshold) .. " days."))
+end
+
+local GUILD_HEALTH_CLASS_ORDER = {
+    "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID",
+}
+
+local function makeGuildHealthPanel(parent, title, width, height)
+    local panel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    panel:SetSize(width, height)
+    createBackdrop(panel, { 0.04, 0.038, 0.035, 0.98 }, { 0.30, 0.26, 0.19, 1 })
+    panel.title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    panel.title:SetPoint("TOPLEFT", 11, -10)
+    panel.title:SetText(title)
+    panel.title:SetTextColor(unpack(COLORS.gold))
+    panel.subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    panel.subtitle:SetPoint("TOPLEFT", panel.title, "BOTTOMLEFT", 0, -3)
+    panel.subtitle:SetPoint("RIGHT", panel, "RIGHT", -10, 0)
+    panel.subtitle:SetJustifyH("LEFT")
+    return panel
+end
+
+local function makeGuildHealthBarRow(parent, y, labelWidth, trackWidth)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, y)
+    row:SetPoint("RIGHT", parent, "RIGHT", -10, 0)
+    row:SetHeight(16)
+    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.label:SetPoint("LEFT", 0, 0)
+    row.label:SetWidth(labelWidth)
+    row.label:SetJustifyH("LEFT")
+    row.track = row:CreateTexture(nil, "BACKGROUND")
+    row.track:SetPoint("LEFT", row.label, "RIGHT", 5, 0)
+    row.track:SetSize(trackWidth, 8)
+    row.track:SetColorTexture(0.16, 0.15, 0.14, 1)
+    row.fill = row:CreateTexture(nil, "ARTWORK")
+    row.fill:SetPoint("LEFT", row.track, "LEFT", 0, 0)
+    row.fill:SetHeight(8)
+    row.value = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.value:SetPoint("LEFT", row.track, "RIGHT", 7, 0)
+    row.value:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+    row.value:SetJustifyH("RIGHT")
+    row.highlight = row:CreateTexture(nil, "HIGHLIGHT")
+    row.highlight:SetAllPoints()
+    row.highlight:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.12)
+    return row
+end
+
+local function setGuildHealthBar(row, label, value, maximum, color, valueText)
+    row.label:SetText(label)
+    row.value:SetText(valueText or tostring(value))
+    local fraction = maximum > 0 and math.max(0, math.min(1, value / maximum)) or 0
+    row.fill:SetWidth(math.max(1, row.track:GetWidth() * fraction))
+    row.fill:SetColorTexture(color[1], color[2], color[3], 0.95)
+    row.fill:SetShown(value > 0)
+end
+
+local updateGuildOverview
+
+local function ensureGuildOverview(frame)
+    if frame.guildOverview then return frame.guildOverview end
+    local root = CreateFrame("Frame", nil, frame.scrollContent)
+    root:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, 0)
+    root:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, 0)
+    root:SetHeight(462)
+    root.metrics = {}
+    for index, label in ipairs({ "Roster Size", "Online at Present", "Seen Within 30d", "Review Signals" }) do
+        local card = CreateFrame("Frame", nil, root, "BackdropTemplate")
+        card:SetSize(160, 66)
+        card:SetPoint("TOPLEFT", root, "TOPLEFT", (index - 1) * 170, 0)
+        createBackdrop(card, { 0.055, 0.05, 0.043, 0.98 }, { 0.34, 0.29, 0.20, 1 })
+        card.accent = card:CreateTexture(nil, "ARTWORK")
+        card.accent:SetPoint("TOPLEFT", 4, -4)
+        card.accent:SetPoint("BOTTOMLEFT", 4, 4)
+        card.accent:SetWidth(3)
+        card.label = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        card.label:SetPoint("TOPLEFT", 12, -10)
+        card.label:SetText(label)
+        card.value = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        card.value:SetPoint("TOPLEFT", 12, -25)
+        card.detail = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        card.detail:SetPoint("BOTTOMLEFT", 12, 7)
+        card.detail:SetPoint("RIGHT", card, "RIGHT", -8, 0)
+        card.detail:SetJustifyH("LEFT")
+        root.metrics[index] = card
+    end
+
+    root.levels = makeGuildHealthPanel(root, "Level Spread", 330, 188)
+    root.levels:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -76)
+    root.levels.rows = {}
+    for index = 1, 6 do root.levels.rows[index] = makeGuildHealthBarRow(root.levels, -45 - (index - 1) * 23, 82, 160) end
+
+    root.classes = makeGuildHealthPanel(root, "Class Balance", 340, 188)
+    root.classes:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -76)
+    root.classes.rows = {}
+    for index = 1, #GUILD_HEALTH_CLASS_ORDER do
+        root.classes.rows[index] = makeGuildHealthBarRow(root.classes, -41 - (index - 1) * 16, 72, 155)
+    end
+
+    root.retention = makeGuildHealthPanel(root, "Activity Recency", 330, 190)
+    root.retention:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -272)
+    root.retention.rows = {}
+    for index = 1, 6 do root.retention.rows[index] = makeGuildHealthBarRow(root.retention, -45 - (index - 1) * 24, 108, 134) end
+
+    root.vitality = makeGuildHealthPanel(root, "Roster Momentum", 340, 190)
+    root.vitality:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -272)
+    root.vitality.score = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+    root.vitality.score:SetPoint("TOP", root.vitality, "TOP", 0, -43)
+    root.vitality.explanation = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    root.vitality.explanation:SetPoint("TOP", root.vitality.score, "BOTTOM", 0, -5)
+    root.vitality.explanation:SetWidth(300)
+    root.vitality.explanation:SetJustifyH("CENTER")
+    root.vitality.separator = root.vitality:CreateTexture(nil, "ARTWORK")
+    root.vitality.separator:SetPoint("TOPLEFT", 14, -105)
+    root.vitality.separator:SetPoint("TOPRIGHT", -14, -105)
+    root.vitality.separator:SetHeight(1)
+    root.vitality.separator:SetColorTexture(0.30, 0.26, 0.19, 0.8)
+    root.vitality.activity = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    root.vitality.activity:SetPoint("TOPLEFT", 16, -119)
+    root.vitality.coverage = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    root.vitality.coverage:SetPoint("TOPLEFT", 16, -142)
+    root.vitality.risk = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    root.vitality.risk:SetPoint("TOPLEFT", 16, -165)
+    frame.guildOverview = root
+    return root
+end
+
+updateGuildOverview = function(frame)
+    for _, card in ipairs(frame.raceCards) do card:Hide() end
+    for _, section in pairs(frame.factionSections) do section:Hide() end
+    for _, row in ipairs(frame.memberRows) do row:Hide() end
+    frame.racePodium:Hide()
+
+    local overview = ensureGuildOverview(frame)
+    frame.scroll:SetVerticalScroll(0)
+    local excludeAlts = iRC:GetSettings().excludeAltsFromGuildSnapshot ~= false
+    frame.guildOverviewAltToggle:SetText(excludeAlts and "Exclude alts: ON" or "Exclude alts: OFF")
+    frame.guildOverviewAltToggle:SetBackdropColor(excludeAlts and 0.18 or 0.055,
+        excludeAlts and 0.09 or 0.045, excludeAlts and 0.025 or 0.035, 0.98)
+    frame.guildOverviewAltToggle:SetBackdropBorderColor(excludeAlts and COLORS.gold[1] or 0.28,
+        excludeAlts and COLORS.gold[2] or 0.23, excludeAlts and COLORS.gold[3] or 0.16, excludeAlts and 1 or 0.9)
+    local rosterMembers, members = iRC:GetGuildRosterRows(), {}
+    for _, member in ipairs(rosterMembers) do
+        if not excludeAlts or not (iRC.Identity and iRC.Identity:IsAlt(member.name)) then
+            members[#members + 1] = member
+        end
+    end
+    local total, online, active30, verifiedOnline, attention = #members, 0, 0, 0, 0
+    local levelCounts = { 0, 0, 0, 0, 0, 0 }
+    local classTotals, classActive = {}, {}
+    local retention = { 0, 0, 0, 0, 0, 0 }
+    local retentionPoints, knownActivity, recencyTotal = 0, 0, 0
+    local responseRequired = iRC:IsAddonResponseRequired()
+
+    for _, member in ipairs(members) do
+        local level = math.max(1, math.min(60, math.floor(tonumber(member.level) or 1)))
+        levelCounts[math.min(6, math.floor((level - 1) / 10) + 1)] = levelCounts[math.min(6, math.floor((level - 1) / 10) + 1)] + 1
+        local class = tostring(member.class or "UNKNOWN"):upper():gsub("[^A-Z]", "")
+        classTotals[class] = (classTotals[class] or 0) + 1
+        if member.online then online = online + 1 end
+        if member.online and member.verification and member.verification.state == "verified" then verifiedOnline = verifiedOnline + 1 end
+
+        local recencyAttention = false
+        recencyTotal = recencyTotal + 1
+        local bucket, weight
+        local days = tonumber(member.lastOnlineDays)
+        if member.online or days and days <= 7 then bucket, weight = 1, 1
+        elseif days and days <= 13 then bucket, weight = 2, 0.8
+        elseif days and days <= 29 then bucket, weight = 3, 0.5
+        elseif days and days <= 59 then bucket, weight = 4, 0.2
+        elseif days then bucket, weight = 5, 0
+        else bucket = 6 end
+        retention[bucket] = retention[bucket] + 1
+        if bucket <= 3 then
+            active30 = active30 + 1
+            classActive[class] = (classActive[class] or 0) + 1
+        end
+        if weight then
+            retentionPoints = retentionPoints + weight
+            knownActivity = knownActivity + 1
+        end
+        recencyAttention = bucket == 4 or bucket == 5
+        local needsIRC = responseRequired and member.online
+            and (not member.verification or member.verification.state ~= "verified")
+        if recencyAttention or needsIRC then attention = attention + 1 end
+    end
+
+    local metricValues = {
+        { total, excludeAlts and (total == 1 and "non-alt roster entry" or "non-alt roster entries")
+            or (total == 1 and "roster entry" or "roster entries"), COLORS.gold },
+        { online, total > 0 and (math.floor(online / total * 100 + 0.5) .. "% of roster") or "No roster data", COLORS.green },
+        { active30, recencyTotal > 0 and (math.floor(active30 / recencyTotal * 100 + 0.5)
+            .. (excludeAlts and "% of non-alts" or "% of roster"))
+            or (excludeAlts and "No non-alt roster data" or "No roster data"), { 0.32, 0.75, 1 } },
+        { attention, responseRequired and "quiet members or missing iRC" or "quiet-member review", attention > 0 and COLORS.red or COLORS.green },
+    }
+    for index, values in ipairs(metricValues) do
+        local card, color = overview.metrics[index], values[3]
+        card.value:SetText(tostring(values[1]))
+        card.value:SetTextColor(color[1], color[2], color[3])
+        card.detail:SetText(values[2])
+        card.accent:SetColorTexture(color[1], color[2], color[3], 0.95)
+    end
+
+    overview.levels.subtitle:SetText(tostring(total) .. (excludeAlts and " non-alt roster entries grouped by level"
+        or " roster entries grouped by level"))
+    local maxLevelCount = 0
+    for _, count in ipairs(levelCounts) do maxLevelCount = math.max(maxLevelCount, count) end
+    for index, count in ipairs(levelCounts) do
+        setGuildHealthBar(overview.levels.rows[index], "Level " .. tostring((index - 1) * 10 + 1) .. "-" .. tostring(index * 10),
+            count, maxLevelCount, { 0.32, 0.66, 1 })
+    end
+
+    overview.classes.subtitle:SetText(excludeAlts and "Seen in 30d / non-alt roster" or "Seen in 30d / full roster")
+    local maxClassTotal = 0
+    for _, class in ipairs(GUILD_HEALTH_CLASS_ORDER) do
+        maxClassTotal = math.max(maxClassTotal, classTotals[class] or 0)
+    end
+    for index, class in ipairs(GUILD_HEALTH_CLASS_ORDER) do
+        local totalClass, activeClass = classTotals[class] or 0, classActive[class] or 0
+        local rawColor = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class] or FALLBACK_CLASS_COLORS[class] or COLORS.gray
+        local color = { rawColor.r or rawColor[1], rawColor.g or rawColor[2], rawColor.b or rawColor[3] }
+        local label = _G.LOCALIZED_CLASS_NAMES_MALE and _G.LOCALIZED_CLASS_NAMES_MALE[class]
+            or class:sub(1, 1) .. class:sub(2):lower()
+        setGuildHealthBar(overview.classes.rows[index], label, totalClass, maxClassTotal, color,
+            tostring(activeClass) .. " / " .. tostring(totalClass))
+        overview.classes.rows[index].label:SetTextColor(color[1], color[2], color[3])
+    end
+
+    overview.retention.subtitle:SetText(excludeAlts and "Last-online recency; alts excluded" or "Last-online recency; alts included")
+    local retentionLabels = { "Seen this week", "Seen last week", "Seen this month", "Quiet for 30-59d", "Away for 60d+", "No history" }
+    local retentionColors = { { 0.30, 0.85, 0.48 }, { 1, 0.67, 0.25 }, { 1, 0.47, 0.18 }, { 0.95, 0.25, 0.18 }, { 0.50, 0.18, 0.16 }, COLORS.gray }
+    local retentionThresholds = { 0, 8, 14, 30, 60 }
+    local canReviewInactive = iRC:HasGuildPermission("memberRemoval") or iRC:IsTestAdmin()
+    for index, count in ipairs(retention) do
+        local row = overview.retention.rows[index]
+        setGuildHealthBar(row, retentionLabels[index], count, math.max(1, recencyTotal), retentionColors[index])
+        local threshold = retentionThresholds[index]
+        local clickable = canReviewInactive and threshold ~= nil and count > 0
+        row:EnableMouse(clickable)
+        row:SetScript("OnMouseUp", clickable and function(_, button)
+            if button == "LeftButton" then UI:OpenInactiveMembers(threshold) end
+        end or nil)
+        row:SetScript("OnEnter", clickable and function(self)
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Open Inactive Members")
+            GameTooltip:AddLine("Review offline members from " .. tostring(threshold) .. " days onward.", 1, 1, 1, true)
+            GameTooltip:Show()
+        end or nil)
+        row:SetScript("OnLeave", clickable and function() if GameTooltip then GameTooltip:Hide() end end or nil)
+    end
+
+    local vitality = knownActivity > 0 and math.floor(retentionPoints / knownActivity * 100 + 0.5) or 0
+    local vitalityColor = vitality >= 70 and COLORS.green or vitality >= 40 and COLORS.gold or COLORS.red
+    overview.vitality.subtitle:SetText("Recency-weighted roster activity")
+    overview.vitality.score:SetText(tostring(vitality) .. " / 100")
+    overview.vitality.score:SetTextColor(vitalityColor[1], vitalityColor[2], vitalityColor[3])
+    overview.vitality.explanation:SetText(knownActivity > 0
+        and (tostring(knownActivity) .. " member(s) with usable last-online data") or "No last-online history is available yet")
+    overview.vitality.activity:SetText((excludeAlts and "Non-alts" or "Members") .. " seen within 30d:  "
+        .. tostring(active30) .. " / " .. tostring(recencyTotal))
+    overview.vitality.coverage:SetText("Online with iRC:  " .. tostring(verifiedOnline) .. " / " .. tostring(online))
+    overview.vitality.risk:SetText("Quiet for 30d+:  " .. tostring(retention[4] + retention[5]) .. " member(s)")
+
+    overview:Show()
+    frame.scrollContent:SetHeight(462)
+    frame.contentTitle:SetText("Guild Snapshot")
+    local updated = date and date("%H:%M") or "now"
+    frame.contentSubtitle:SetText("Current roster patterns, recent presence, class balance, and iRC participation. Updated "
+        .. updated .. ".")
 end
 
 local function updateGuildRules(frame)
@@ -2278,6 +2761,15 @@ local function updateGuildRules(frame)
             requiredWhenInactive = true,
             activation = true,
             set = function(value) return iRC:SetGuildConnectionActive(value) end,
+        },
+        {
+            section = "Guild Connection",
+            title = "Require iRC AddOn",
+            description = "Requires every online guild member to run and respond with iRC, even when no progression or group rule is active.",
+            active = rules.requireIRC == true,
+            activeLabel = "REQUIRED",
+            inactiveLabel = "OPTIONAL",
+            set = function(value) return iRC:SetConnectionRule("requireIRC", value) end,
         },
         {
             section = "Race-Locked",
@@ -2537,7 +3029,7 @@ local function updateGuildRules(frame)
             if currentEntry.set(not currentEntry.active) ~= false then UI:Refresh() end
         end)
         row:Show()
-        yOffset = yOffset + 60
+        yOffset = yOffset + 48
     end
     for index = #visible + 1, #frame.ruleRows do frame.ruleRows[index]:Hide() end
     for index = sectionIndex + 1, #frame.ruleSectionHeaders do frame.ruleSectionHeaders[index]:Hide() end
@@ -2663,6 +3155,7 @@ end
 local function getActiveRuleLines(group)
     if not group.rulesKnown or type(group.rules) ~= "table" then return { iRC:Text("GUILD_STATS_RULES_UNKNOWN") } end
     local rules, lines = group.rules, {}
+    if rules.requireIRC then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_REQUIRE_IRC") end
     if rules.raceLock then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_RACE_LOCK") end
     if rules.raceLock and rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NATIVE_TONGUE") end
     local progressionMode = iRC:GetProgressionMode(rules)
@@ -2707,9 +3200,9 @@ local function getGuildProfileLines(group)
 end
 
 local function guildCardHeight(group, forceExpanded)
-    if not forceExpanded and not expandedGuildCards[guildCardKey(group)] then return 158 end
+    if not forceExpanded and not expandedGuildCards[guildCardKey(group)] then return 138 end
     local descriptionLines = math.max(1, math.ceil(#tostring(group.guildDescription or "") / 72))
-    return 230 + #getGuildProfileLines(group) * 14 + (descriptionLines - 1) * 14
+    return 210 + #getGuildProfileLines(group) * 14 + (descriptionLines - 1) * 14
 end
 
 local function setRaceCard(card, group, rank, forceExpanded)
@@ -2809,7 +3302,7 @@ end
 
 function UI:CreateGuildHomepagePreview(parent)
     local preview = CreateFrame("Frame", nil, parent)
-    preview:SetHeight(470)
+    preview:SetHeight(450)
 
     preview.title = preview:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     preview.title:SetPoint("TOPLEFT", preview, "TOPLEFT", 2, 0)
@@ -3037,6 +3530,8 @@ function UI:Refresh()
     frame.guildNameHeader:SetText(currentGuildNavigationName())
     local embeddedManagement = managementPanelKey or dashboardTab
     frame.raceRefresh:SetShown(not embeddedManagement and frame.category == "Race Overview")
+    frame.guildOverviewRefresh:SetShown(not embeddedManagement and frame.category == "Guild Snapshot")
+    frame.guildOverviewAltToggle:SetShown(not embeddedManagement and frame.category == "Guild Snapshot")
     local showRulesViewToggle = frame.category == "Guild Rules" and iRC:IsGuildMaster()
     frame.rulesViewToggle:SetShown(showRulesViewToggle)
     if showRulesViewToggle then
@@ -3059,6 +3554,7 @@ function UI:Refresh()
         for _, header in ipairs(frame.ruleSectionHeaders or {}) do header:Hide() end
         if frame.rulesEmpty then frame.rulesEmpty:Hide() end
     end
+    if frame.category ~= "Guild Snapshot" and frame.guildOverview then frame.guildOverview:Hide() end
     for _, button in ipairs(frame.guildStatsFilters or {}) do
         local shown = frame.category == "Race Overview"
         button:SetShown(shown)
@@ -3078,6 +3574,9 @@ function UI:Refresh()
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, usesSearchHeader and -112 or -78)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
+    if frame.scroll.ScrollBar then
+        frame.scroll.ScrollBar:SetShown(frame.category ~= "Guild Snapshot")
+    end
     frame.contentTitle:SetShown(not embeddedManagement)
     frame.contentSubtitle:SetShown(not embeddedManagement)
     frame.cacheUpdating:SetShown(frame.category == "Race Overview" and iRC.RaceGrid and iRC.RaceGrid:IsCacheUpdating())
@@ -3097,7 +3596,11 @@ function UI:Refresh()
     local race, class, level = profile and profile.race or "Unknown", profile and profile.class or "Unknown", profile and profile.level or 1
     frame.player:SetText(name .. "  " .. iRC.Colors.Gray .. race .. " " .. class .. " · Level " .. level .. iRC.Colors.Reset)
     for category, tab in pairs(frame.tabs) do setTabAppearance(tab, frame.category == category) end
-    if frame.category == "Guild Members" then
+    if frame.category == "Guild Snapshot" then
+        frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
+            .. "  Roster patterns and iRC participation" .. iRC.Colors.Reset)
+        updateGuildOverview(frame)
+    elseif frame.category == "Guild Members" then
         updateMemberRows(frame)
     elseif frame.category == "Guild Log" then
         updateGuildLog(frame)
@@ -3129,7 +3632,7 @@ function UI:OpenCategory(category)
 end
 
 function UI:OpenInactiveMembers(days)
-    if not iRC:HasGuildPermission("memberRemoval") then
+    if not iRC:HasGuildPermission("memberRemoval") and not iRC:IsTestAdmin() then
         iRC:Print(iRC.Colors.Red .. "You do not have the delegated inactive-member management permission." .. iRC.Colors.Reset)
         return false
     end
@@ -3151,7 +3654,8 @@ function UI:Open(subjectName, requestCacheFromOpen)
         guildStatsFilter = getCurrentGuildStatsFilter()
         self.preservedRaceScroll = 0
     end
-    if frame.category == "Guild Members" or frame.category == "Inactive Member Management" then iRC:RefreshGuildRoster() end
+    if frame.category == "Guild Snapshot" or frame.category == "Guild Members"
+        or frame.category == "Inactive Member Management" then iRC:RefreshGuildRoster() end
     frame:SetScale(iRC:GetSettings().mainWindowScale or 1)
     self:Refresh()
     frame:Show()

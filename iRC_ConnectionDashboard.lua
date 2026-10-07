@@ -9,19 +9,11 @@ local ORANGE = iRC.ColorValues.Orange
 local GREEN = iRC.ColorValues.Green
 local GRAY = iRC.ColorValues.Gray
 local RED = { 1, 0.25, 0.18 }
+local LIST_ROW_HEIGHT, LIST_ROW_SPACING = 44, 48
 local COLUMN_X = { 14, 139, 254, 309, 499, 624 }
 local COLUMN_WIDTH = { 115, 105, 45, 180, 115, 75 }
 local OVERVIEW_COLUMN_X = { 14, 164, 324, 484 }
 local OVERVIEW_COLUMN_WIDTH = { 136, 146, 146, 224 }
-
-local function sourceLabel(source)
-    if source == "iRC" then return iRC.Colors.Green .. "iRC" .. iRC.Colors.Reset end
-    local compatibleSource = type(source) == "string" and source:match("^iRC %+ (.+)$")
-    if compatibleSource then
-        return iRC.Colors.Green .. "iRC" .. iRC.Colors.Reset .. " + " .. iRC.Colors.Red .. compatibleSource .. iRC.Colors.Reset
-    end
-    return iRC.Colors.Red .. (source or "RaceLocked") .. iRC.Colors.Reset
-end
 
 local function displayMemberName(name)
     if type(name) ~= "string" then return "Unknown" end
@@ -89,9 +81,9 @@ local function makeRow(parent, index)
     local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
     row:EnableMouse(true)
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    row:SetHeight(54)
-    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 60))
-    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * 60))
+    row:SetHeight(LIST_ROW_HEIGHT)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * LIST_ROW_SPACING))
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * LIST_ROW_SPACING))
     setBackdrop(row, { 0.08, 0.07, 0.06, 0.96 }, { 0.32, 0.27, 0.18, 1 })
     row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     row.columns = {}
@@ -228,9 +220,6 @@ function Dashboard:Create()
         iRC:RefreshGuildRoster()
         iRC:SendHello()
         iRC:RequestGuildPresence()
-        if iRC.Compatibility and iRC.Compatibility.BroadcastAll then
-            iRC.Compatibility:BroadcastAll()
-        end
         if iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
         Dashboard:Refresh()
     end)
@@ -266,7 +255,7 @@ function Dashboard:Create()
     frame.summaryCards = {}
     for index = 1, 5 do
         local card = makeSummaryCard(main)
-        card:SetSize(172, 54)
+        card:SetSize(172, 46)
         card:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 178, -66)
         frame.summaryCards[index] = card
     end
@@ -274,7 +263,7 @@ function Dashboard:Create()
     for index = 1, 5 do
         local button = CreateFrame("Button", nil, main, "BackdropTemplate")
         button:SetSize(160, 27)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 166, -124)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 166, -116)
         setBackdrop(button, { 0.055, 0.045, 0.035, 0.96 }, { 0.28, 0.23, 0.16, 0.9 })
         button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
         button.activeGlow:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
@@ -303,7 +292,7 @@ function Dashboard:Create()
     for column = 1, #COLUMN_X do
         local button = CreateFrame("Button", nil, main)
         button:SetSize(COLUMN_WIDTH[column], 18)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", COLUMN_X[column] + 1, -156)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", COLUMN_X[column] + 1, -148)
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         button.text:SetAllPoints(button)
         button.text:SetJustifyH(column == 1 and "LEFT" or "CENTER")
@@ -321,7 +310,7 @@ function Dashboard:Create()
         frame.headers[column] = button
     end
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 14, -176)
+    scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 14, -168)
     scroll:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -31, 14)
     frame.scroll = scroll
     frame.content = CreateFrame("Frame", nil, scroll)
@@ -748,7 +737,7 @@ local function setSummaryCards(frame, cards)
         local item = cards[index] or {}
         if not item.label then card:Hide() else
         local five = #cards == 5
-        card:SetSize(five and 135 or 172, 54)
+        card:SetSize(five and 135 or 172, 46)
         card:ClearAllPoints()
         card:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (five and 141 or 178), -66)
         card.label:SetText(item.label or "")
@@ -791,15 +780,15 @@ end
 function Dashboard:RenderVisibleRows()
     local frame = self.frame
     if not frame or not frame.rowData then return end
-    local first = math.floor(frame.scroll:GetVerticalScroll() / 60) + 1
-    local visible = math.max(0, math.min(#frame.rowData - first + 1, math.ceil(frame.scroll:GetHeight() / 60) + 1))
+    local first = math.floor(frame.scroll:GetVerticalScroll() / LIST_ROW_SPACING) + 1
+    local visible = math.max(0, math.min(#frame.rowData - first + 1, math.ceil(frame.scroll:GetHeight() / LIST_ROW_SPACING) + 1))
     for slot = 1, visible do
         local index = first + slot - 1
         local row = frame.rows[slot]
         if not row then row = makeRow(frame.content, index); frame.rows[slot] = row end
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 0, -((index - 1) * 60))
-        row:SetPoint("TOPRIGHT", frame.content, "TOPRIGHT", 0, -((index - 1) * 60))
+        row:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 0, -((index - 1) * LIST_ROW_SPACING))
+        row:SetPoint("TOPRIGHT", frame.content, "TOPRIGHT", 0, -((index - 1) * LIST_ROW_SPACING))
         renderRow(row, frame.rowData[index])
     end
     for slot = visible + 1, #frame.rows do frame.rows[slot]:Hide() end
@@ -968,7 +957,7 @@ function Dashboard:Refresh()
             setRow(frame, count, { group.race, group.members .. " / " .. group.averageLevel, group.addonUsers .. " / " .. group.selfFound, classSummary(group.classes) }, ORANGE)
         end
     elseif frame.tab == "Verification" then
-        local verified, compatible, optional, attention, offline = 0, 0, 0, 0, 0
+        local verified, optional, attention, offline = 0, 0, 0, 0
         local members = iRC:GetGuildRosterRows()
         local rules = iRC:GetConnectionRules() or {}
         local responseRequired = iRC:IsAddonResponseRequired(connection)
@@ -992,21 +981,19 @@ function Dashboard:Refresh()
         for _, member in ipairs(members) do
             local state = effectiveVerificationState(member)
             if state == "verified" then verified = verified + 1
-            elseif state == "compatible" then compatible = compatible + 1
             elseif state == "optional" then optional = optional + 1
             elseif state == "offline" or state == "inactive" then offline = offline + 1
             else attention = attention + 1 end
         end
         local cards = {
             { label = "Verified", value = tostring(verified), color = GREEN },
-            { label = "Compatible", value = tostring(compatible), color = ORANGE },
         }
         if not responseRequired then cards[#cards + 1] = { label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), value = tostring(optional), color = GRAY } end
         cards[#cards + 1] = { label = "Needs attention", value = tostring(attention), color = RED }
         cards[#cards + 1] = { label = "Offline", value = tostring(offline), color = GRAY }
         setSummaryCards(frame, cards)
         local filters = { { id = "all", label = "All members" }, { id = "attention", label = "Needs attention", flash = attention > 0 },
-            { id = "verified", label = "Verified" }, { id = "compatible", label = "Compatible" } }
+            { id = "verified", label = "Verified" } }
         if not responseRequired then filters[#filters + 1] = { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD") } end
         local filter = setFilters(frame, filters)
         frame.title:SetText("Guild verification")
@@ -1047,10 +1034,8 @@ function Dashboard:Refresh()
         for _, member in ipairs(members) do
             count = count + 1
             local verification = member.verification or { state = "missing", label = "Addon not detected" }
-            local compatiblePresence = member.compatibilityMember and member.compatibilityMember.presence
-            local addon = verification.state == "compatible" and compatiblePresence and (sourceLabel(compatiblePresence.source) .. " · " .. verification.label)
-                or (member.profile and (sourceLabel("iRC") .. " v" .. (member.addonVersion or "?") .. " · " .. verification.label))
-                or (member.compatibility and (sourceLabel(member.source) .. " · " .. verification.label))
+            local addon = member.profile and (iRC.Colors.Green .. "iRC" .. iRC.Colors.Reset
+                    .. " v" .. (member.addonVersion or "?") .. " · " .. verification.label)
                 or verification.label
             local attentionTimer = formatAttentionTimer(member.attentionSince)
             local raceWarning
@@ -1104,9 +1089,8 @@ function Dashboard:Refresh()
             local lowerLevelStatusOK = iRC:IsLiveAddonState(liveState)
             local lowerLevelOffline = liveState == "offline" or liveState == "inactive"
             local selfFoundViolation = not personalBank
-                and ((progressionMode == "SELF_FOUND" and belowMaxLevel and lowerLevelStatusOK and member.selfFound ~= true)
-                or (progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and liveState == "compatible" and member.selfFound ~= true
-                    and not (guildFoundStatus and guildFoundStatus.verified == true)))
+                and progressionMode == "SELF_FOUND" and belowMaxLevel
+                and lowerLevelStatusOK and member.selfFound ~= true
             local cleanText = selfFoundViolation and iRC:Text("VERIFICATION_SELF_FOUND_INACTIVE_STATUS")
                 or (belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
                 or (lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")) or iRC:Text("RL_STATUS_UNKNOWN")
@@ -1119,7 +1103,7 @@ function Dashboard:Refresh()
                 and guildFoundStatus and guildFoundStatus.clean ~= nil then
                 cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text(guildFoundStatus.clean and "RL_CLEAN" or "RL_FLAGGED"))
             end
-            -- Presence is authoritative. Without a live supported-addon
+            -- Presence is authoritative. Without a live iRC
             -- response, progression and audit state are unknown and must not
             -- be inferred from an older report or a manual GM decision.
             if not hasLiveAddon then
@@ -1139,8 +1123,7 @@ function Dashboard:Refresh()
             local effectiveState = effectiveVerificationState(member)
             local color = effectiveState == "attention" and RED
                 or (verification.state == "verified" and GREEN
-                or (verification.state == "compatible" and RED
-                or ((verification.state == "offline" or verification.state == "inactive" or verification.state == "optional") and GRAY or RED)))
+                or ((verification.state == "offline" or verification.state == "inactive" or verification.state == "optional") and GRAY or RED))
             local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
                 if mouseButton == "RightButton" then
                     openMemberManagementMenu(frame, selectedMember)
@@ -1204,8 +1187,8 @@ function Dashboard:Refresh()
             }, RED, nil, incident.reason)
         end
     end
-    frame.content:SetHeight(math.max(1, count * 60))
-    frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll(), math.max(0, count * 60 - frame.scroll:GetHeight())))
+    frame.content:SetHeight(math.max(1, count * LIST_ROW_SPACING))
+    frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll(), math.max(0, count * LIST_ROW_SPACING - frame.scroll:GetHeight())))
     self:RenderVisibleRows()
 end
 

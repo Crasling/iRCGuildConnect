@@ -202,6 +202,15 @@ function Identity:IsPersonalCharacter(name)
     return store and key and store.characters[key] ~= nil or false
 end
 
+function Identity:IsAlt(name)
+    local store, key = guildStore(false), characterKey(name)
+    if not store or not key then return false end
+    if store.characters[key] then return store.main ~= key end
+    local assignment = store.identityAssignments[key]
+    return assignment ~= nil and assignment.mainKey ~= key
+        and (assignment.role == "ALT" or assignment.role == "BANK")
+end
+
 function Identity:SetMain(name)
     local store, key = guildStore(true), characterKey(name)
     if not store or not key or not store.characters[key] then return false end
@@ -244,6 +253,14 @@ function Identity:GetIdentityLabel(name)
         if assignment.role == "BANK" then return "Personal Bank Alt of " .. assignment.mainName end
         return "Alt of " .. assignment.mainName
     end
+    for _, linked in pairs(store.identityAssignments) do
+        if linked.mainKey == key then return "Main" end
+    end
+end
+
+function Identity:GetManagedAssignment(name)
+    local store, key = guildStore(false), characterKey(name)
+    return store and key and store.identityAssignments[key] or nil
 end
 
 function Identity:GetLinkedCharacters(name)
@@ -252,18 +269,62 @@ function Identity:GetLinkedCharacters(name)
     local characters = store.characters[key] and store.characters or nil
     if not characters then
         local assignment = store.identityAssignments[key]
-        if assignment then
-            characters = {}
-            for assignedKey, linked in pairs(store.identityAssignments) do
-                if linked.mainKey == assignment.mainKey then
-                    characters[assignedKey] = linked.name
-                end
+        local mainKey = assignment and assignment.mainKey or key
+        characters = {}
+        for assignedKey, linked in pairs(store.identityAssignments) do
+            if linked.mainKey == mainKey then
+                characters[assignedKey] = linked.name
+                characters[mainKey] = linked.mainName
             end
         end
     end
     for _, characterName in pairs(characters or {}) do result[#result + 1] = characterName end
     table.sort(result)
     return result
+end
+
+local function applyManagedAssignment(store, memberName, mainName, role, updatedAt, source)
+    local memberKey = characterKey(memberName)
+    if not store or not memberKey then return false end
+    local current = store.identityAssignments[memberKey]
+    if current and (tonumber(current.updatedAt) or 0) >= updatedAt then return false end
+    if role == "REMOVE" then
+        store.identityAssignments[memberKey] = nil
+    else
+        local mainKey = characterKey(mainName)
+        if not mainKey or mainKey == memberKey then return false end
+        store.identityAssignments[memberKey] = {
+            name = iRC:FormatPlayerName(memberName), mainKey = mainKey,
+            mainName = iRC:FormatPlayerName(mainName), role = role,
+            updatedAt = updatedAt, source = iRC:FormatPlayerName(source), managed = true,
+        }
+    end
+    for id, request in pairs(store.identityLinkRequests) do
+        if characterKey(request.target) == memberKey then store.identityLinkRequests[id] = nil end
+    end
+    if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+    return true
+end
+
+function Identity:AssignGuildCharacter(memberName, mainName, role)
+    if not iRC:IsGuildConnectionActive() or not iRC:HasGuildPermission("identity") then return false end
+    role = role == "BANK" and "BANK" or (role == "REMOVE" and "REMOVE" or "ALT")
+    memberName = iRC:FormatPlayerName(memberName)
+    mainName = role == "REMOVE" and "" or iRC:FormatPlayerName(mainName)
+    if not iRC:IsGuildMemberName(memberName)
+        or role ~= "REMOVE" and (not iRC:IsGuildMemberName(mainName)
+            or characterKey(memberName) == characterKey(mainName)) then return false end
+    local store = guildStore(true)
+    local memberKey = characterKey(memberName)
+    local updatedAt = math.max(time(), (tonumber(store.identityMemberUpdatedAt[memberKey]) or 0) + 1)
+    store.identityMemberUpdatedAt[memberKey] = updatedAt
+    local applied = applyManagedAssignment(store, memberName, mainName, role, updatedAt, iRC:GetPlayerName())
+    if not applied and role ~= "REMOVE" then return false end
+    local payload = table.concat({ "IDENT_ADMIN_MEMBER", IDENTITY_WIRE_VERSION, tostring(updatedAt),
+        cleanWireText(memberName, 80), cleanWireText(mainName, 80), role }, "\t")
+    iRC:SendAddonTraffic(iRC.Prefix, payload, "GUILD")
+    return true
 end
 
 function Identity:GetFormerMembers()
@@ -523,6 +584,21 @@ end
 function Identity:ReceiveSync(parts, sender)
     if parts[2] ~= IDENTITY_WIRE_VERSION then return false end
     local senderRank = iRC:GetGuildMemberRankIndex(sender)
+    if parts[1] == "IDENT_ADMIN_MEMBER" then
+        local timestamp = tonumber(parts[3])
+        local memberName, mainName, role = cleanWireText(parts[4], 80), cleanWireText(parts[5], 80), parts[6]
+        local now = time()
+        local senderAuthorized = iRC:GuildRankHasPermission(senderRank, "identity")
+        if not senderAuthorized or not timestamp
+            or timestamp > now + 300 or timestamp < now - 180 * 86400
+            or (role ~= "ALT" and role ~= "BANK" and role ~= "REMOVE")
+            or not iRC:IsGuildMemberName(memberName)
+            or role ~= "REMOVE" and (not iRC:IsGuildMemberName(mainName)
+                or characterKey(memberName) == characterKey(mainName)) then return false end
+        local store = guildStore(true)
+        store.identityMemberUpdatedAt[characterKey(memberName)] = timestamp
+        return applyManagedAssignment(store, memberName, mainName, role, timestamp, sender)
+    end
     if parts[1] == "IDENT_MEMBER" then
         local timestamp = tonumber(parts[3])
         local memberName, mainName, role = cleanWireText(parts[4], 80), cleanWireText(parts[5], 80), parts[6]
@@ -610,7 +686,7 @@ function Identity:ReceiveSync(parts, sender)
         end
         return true
     end
-    if senderRank == nil or senderRank > iRC:GetGuildRankPermission("rosterHistory") then return false end
+    if not iRC:GuildRankHasPermission(senderRank, "rosterHistory") then return false end
     if parts[1] ~= "IDENT_EVENT" then return false end
     local id, occurredAt = cleanWireText(parts[3], 12), tonumber(parts[4])
     local eventType, name = cleanWireText(parts[5], 18), cleanWireText(parts[6], 80)

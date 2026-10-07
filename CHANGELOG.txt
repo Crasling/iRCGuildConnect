@@ -2,6 +2,19 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.15 - Guild Snapshot & Guild Authority
+--------------------------------------------------------------------------------
+[ADDED] Guild Snapshot gives every member a compact one-page view of roster size, current activity, level spread, class balance, activity recency, review signals, iRC coverage, and roster momentum
+[ADDED] Authorized managers and test admins can open Inactive Members directly from populated activity-recency rows
+[ADDED] Guild Snapshot excludes linked and assigned alts from every metric by default, with a prominent saved toggle for full-roster calculations
+[ADDED] Native Guild Masters can select a Guild master rank whose members receive iRC Guild Master authority; only the native Guild Master can change this rank
+[ADDED] Guild Masters and members with the delegated identity permission can manually assign a roster character as another member's Alt or clear that managed link
+[ADDED] Guild Rules includes a standalone Require iRC rule for guilds that want addon verification without enabling a progression restriction
+[CHANGED] Only a current iRC response satisfies addon verification; legacy compatible-addon presence, UI states, traffic, and cached profiles have been removed
+[CHANGED] Guild cards, member rows, Guild Rules, Guild Log, Inactive Members, and Verification use denser layouts so more useful information fits without oversized cards
+[FIX] Guild Homepage controls always pass strict boolean values to enabled-state APIs, preventing an options-window Lua error when guild management is unavailable
+[FIX] Manual Alt assignment uses an iRC-styled roster dropdown instead of relying on an incompatible static-popup edit box
+
 v0.5.14 - Guild Homepage & Management
 --------------------------------------------------------------------------------
 [ADDED] Guild Homepage management can show class breakdowns for all levels, a custom inclusive level range, or max-level characters only

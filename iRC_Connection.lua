@@ -276,8 +276,17 @@ local function getRulesRank(name, connection)
     return type(rankIndex) == "number" and rankIndex >= 0 and rankIndex or nil
 end
 
+local function rankHasGuildMasterAuthority(rankIndex, connection)
+    if type(rankIndex) ~= "number" then return false end
+    if rankIndex == 0 then return true end
+    local delegatedRank = math.max(0, math.min(9,
+        math.floor(tonumber(connection and connection.guildMasterRank) or 0)))
+    return delegatedRank > 0 and rankIndex <= delegatedRank
+end
+
 local function rankHasDelegatedPermission(rankIndex, connection)
     if type(rankIndex) ~= "number" or not connection then return false end
+    if rankHasGuildMasterAuthority(rankIndex, connection) then return true end
     for permission, defaultRank in pairs(iRC.DefaultRankPermissions) do
         local allowedRank = connection.rankPermissions and tonumber(connection.rankPermissions[permission])
         if allowedRank == nil then allowedRank = defaultRank end
@@ -419,6 +428,17 @@ function iRC:SendRankPermissions(targetName, force)
     if not force and self:DeferLowTraffic("traffic:rank-permissions:" .. tostring(targetName or "guild"), function() iRC:SendRankPermissions(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:IsGuildMaster() then return false end
     local connection = self:GetConnection()
+    if self:IsNativeGuildMaster() then
+        local guildMasterRank = tostring(self:GetGuildMasterRank())
+        local guildMasterTimestamp = math.floor(tonumber(connection.guildMasterRankTimestamp) or 0)
+        if guildMasterTimestamp <= 0 then
+            guildMasterTimestamp = time()
+            connection.guildMasterRankTimestamp = guildMasterTimestamp
+        end
+        send(self.Prefix, table.concat({ "GUILD_MASTER_RANK", WIRE_VERSION, guildMasterRank,
+            tostring(guildMasterTimestamp), rulesBackupChecksum(guildMasterRank .. SEP .. guildMasterTimestamp) }, SEP),
+            targetName and "WHISPER" or "GUILD", targetName)
+    end
     local timestamp = math.floor(tonumber(connection.rankPermissionsTimestamp) or 0)
     if timestamp <= 0 then
         timestamp = time(); connection.rankPermissionsTimestamp = timestamp
@@ -434,6 +454,10 @@ function iRC:SendRankPermissions(targetName, force)
         or self.DefaultRankPermissions.memberRemoval))))
     send(self.Prefix, table.concat({ "MEMBER_REMOVAL_PERMISSION", WIRE_VERSION, memberRemoval, tostring(timestamp),
         rulesBackupChecksum(memberRemoval .. SEP .. timestamp) }, SEP), targetName and "WHISPER" or "GUILD", targetName)
+    local identity = tostring(math.max(0, math.min(9, math.floor(tonumber(connection.rankPermissions.identity)
+        or self.DefaultRankPermissions.identity))))
+    send(self.Prefix, table.concat({ "IDENTITY_PERMISSION", WIRE_VERSION, identity, tostring(timestamp),
+        rulesBackupChecksum(identity .. SEP .. timestamp) }, SEP), targetName and "WHISPER" or "GUILD", targetName)
     return true
 end
 
@@ -831,7 +855,8 @@ function iRC:SendConnectionRules(targetName, force)
     -- edited values while retaining the Guild Master's timestamp and source.
     if not self:IsGuildMaster() and not automaticRules
         and (connection.receivedRulesBackupVersion ~= 1
-            or connection.receivedRulesBackup ~= rulesBackupFingerprint(rules, timestampHex, timestampSource)) then
+            or connection.receivedRulesBackup ~= rulesBackupFingerprint(rules, timestampHex, timestampSource)
+            or connection.receivedRulesRequireIRC ~= (rules.requireIRC == true)) then
         self:DebugMsg(self:Text("RULES_RELAY_BLOCKED_BACKUP"), 2)
         return false
     end
@@ -869,6 +894,10 @@ function iRC:SendConnectionRules(targetName, force)
             timestampHex, tostring(timestampSource or ""),
         }, SEP)),
         automaticRules and "1" or "0",
+        rules.requireIRC and "1" or "0",
+        rulesBackupChecksum(table.concat({
+            rules.requireIRC and "1" or "0", timestampHex, tostring(timestampSource or ""),
+        }, SEP)),
     }, SEP), distribution, targetName)
     if self:IsGuildMaster() and self.SendGuildContacts then self:SendGuildContacts(targetName, force) end
     if self:IsGuildMaster() and self.SendRankPermissions then self:SendRankPermissions(targetName, force) end
@@ -1126,7 +1155,7 @@ local function handleMessage(prefix, message, distribution, sender)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
-    if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_MEMBER"
+    if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_MEMBER" or kind == "IDENT_ADMIN_MEMBER"
         or kind == "IDENT_LINK_REQUEST" or kind == "IDENT_LINK_DECLINE" then
         if iRC.Identity and iRC:IsGuildMemberName(sender) then iRC.Identity:ReceiveSync(parts, sender) end
         return
@@ -1254,12 +1283,25 @@ local function handleMessage(prefix, message, distribution, sender)
                 players = cleanWireText(parts[7], 60),
             })
         end
+    elseif kind == "GUILD_MASTER_RANK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local connection = iRC:GetConnection()
+        local senderRank = getRulesRank(sender, connection)
+        local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
+        local now = time()
+        if senderRank == 0 and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
+            and timestamp <= now + 300 and checksum == rulesBackupChecksum(tostring(parts[3]) .. SEP .. timestamp)
+            and timestamp >= math.floor(tonumber(connection.guildMasterRankTimestamp) or 0) then
+            connection.guildMasterRank = math.floor(value)
+            connection.guildMasterRankTimestamp = math.floor(timestamp)
+            if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        end
     elseif kind == "RANK_PERMISSIONS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
         local wire, timestamp, checksum = tostring(parts[3] or ""), tonumber(parts[4]), tostring(parts[5] or ""):lower()
         local now = time()
-        if senderRank == 0 and timestamp and timestamp > 0 and timestamp <= now + 300
+        if rankHasGuildMasterAuthority(senderRank, connection) and timestamp and timestamp > 0 and timestamp <= now + 300
             and checksum == rulesBackupChecksum(wire .. SEP .. timestamp)
             and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
             local values, count = {}, 0
@@ -1283,7 +1325,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local senderRank = getRulesRank(sender, connection)
         local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
         local now = time()
-        if senderRank == 0 and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
+        if rankHasGuildMasterAuthority(senderRank, connection) and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
             and timestamp <= now + 300 and checksum == rulesBackupChecksum(tostring(parts[3]) .. SEP .. timestamp)
             and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
             connection.rankPermissions.rosterHistory = math.floor(value)
@@ -1295,25 +1337,37 @@ local function handleMessage(prefix, message, distribution, sender)
         local senderRank = getRulesRank(sender, connection)
         local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
         local now = time()
-        if senderRank == 0 and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
+        if rankHasGuildMasterAuthority(senderRank, connection) and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
             and timestamp <= now + 300 and checksum == rulesBackupChecksum(tostring(parts[3]) .. SEP .. timestamp)
             and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
             connection.rankPermissions.memberRemoval = math.floor(value)
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
         end
+    elseif kind == "IDENTITY_PERMISSION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local connection = iRC:GetConnection()
+        local senderRank = getRulesRank(sender, connection)
+        local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
+        local now = time()
+        if rankHasGuildMasterAuthority(senderRank, connection) and value and value >= 0 and value <= 9 and timestamp and timestamp > 0
+            and timestamp <= now + 300 and checksum == rulesBackupChecksum(tostring(parts[3]) .. SEP .. timestamp)
+            and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
+            connection.rankPermissions.identity = math.floor(value)
+            if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        end
     elseif kind == "GUILD_SETTINGS" and parts[2] == GUILD_SETTINGS_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
-        local senderIsGuildMaster = getRosterRank(sender) == 0
-        local receiverIsGuildMaster = getRosterRank(iRC:GetPlayerName()) == 0
+        local senderIsGuildMaster = rankHasGuildMasterAuthority(senderRank, connection)
+        local receiverIsGuildMaster = iRC:IsGuildMaster()
         local enabled = parts[3] == "1"
         local timestamp = tonumber(parts[4])
         local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
         local checksum = tostring(parts[6] or ""):lower()
         local warningMask = parts[7] and math.max(0, math.min(7, math.floor(tonumber(parts[7]) or 0))) or nil
         local now = GetServerTime and GetServerTime() or time()
-        if senderRank and senderRank <= (connection.rankPermissions.notifications or 1) and timestamp and timestamp > 0 and timestamp <= now + 300
+        if iRC:GuildRankHasPermission(senderRank, "notifications") and timestamp and timestamp > 0 and timestamp <= now + 300
             and warningMask ~= nil and source ~= ""
             and checksum == guildSettingsChecksum(enabled, timestamp, source, warningMask) then
             local connection = iRC:GetConnection()
@@ -1373,8 +1427,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local saved = connection.guildHomepageDescription
         if #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]")
             and not iRC:ContainsProfanity(value)
-            and senderRank and senderRank <= (connection.rankPermissions.homepage
-                or iRC.DefaultRankPermissions.homepage)
+            and iRC:GuildRankHasPermission(senderRank, "homepage")
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(value .. SEP .. timestamp .. SEP .. editedBy) then
             saved.text, saved.timestamp, saved.editedBy = value, math.floor(timestamp), editedBy
@@ -1392,8 +1445,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local editedBy, checksum = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80), tostring(parts[6] or ""):lower()
         local saved = connection.guildHomepageIcon
         if icon and icon == math.floor(icon) and icon >= 1 and icon <= #iRC.GuildHomepageIcons
-            and senderRank and senderRank <= (connection.rankPermissions.homepage
-                or iRC.DefaultRankPermissions.homepage)
+            and iRC:GuildRankHasPermission(senderRank, "homepage")
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(table.concat({ icon, timestamp, editedBy }, SEP)) then
             saved.icon, saved.timestamp, saved.editedBy = icon, math.floor(timestamp), editedBy
@@ -1416,8 +1468,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local fingerprint = table.concat({ mode, parts[4] or "", parts[5] or "", parts[6] or "", editedBy }, SEP)
         if validMode and minLevel and minLevel == math.floor(minLevel) and minLevel >= 1 and minLevel <= 60
             and maxLevel and maxLevel == math.floor(maxLevel) and maxLevel >= minLevel and maxLevel <= 60
-            and senderRank and senderRank <= (connection.rankPermissions.homepage
-                or iRC.DefaultRankPermissions.homepage)
+            and iRC:GuildRankHasPermission(senderRank, "homepage")
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(fingerprint) then
             saved.mode, saved.minLevel, saved.maxLevel = mode, minLevel, maxLevel
@@ -1438,8 +1489,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local saved = connection.guildHomepageTag
         local fingerprint = table.concat({ tag, parts[4] or "", editedBy }, SEP)
         if (tag == "NORMAL" or tag == "PVE" or tag == "PVP" or tag == "RP")
-            and senderRank and senderRank <= (connection.rankPermissions.homepage
-                or iRC.DefaultRankPermissions.homepage)
+            and iRC:GuildRankHasPermission(senderRank, "homepage")
             and timestamp and timestamp > math.floor(tonumber(saved.timestamp) or 0) and timestamp <= time() + 300
             and editedBy ~= "" and checksum == rulesBackupChecksum(fingerprint) then
             saved.tag, saved.timestamp, saved.editedBy = tag, math.floor(timestamp), editedBy
@@ -1460,8 +1510,7 @@ local function handleMessage(prefix, message, distribution, sender)
             count = count + 1
             if count > 5 or not iRC:ResolveGuildMemberFullName(name:gsub("^%s+", ""):gsub("%s+$", "")) then valid = false end
         end
-        if valid and senderRank and senderRank <= (connection.rankPermissions.homepage
-            or iRC.DefaultRankPermissions.homepage)
+        if valid and iRC:GuildRankHasPermission(senderRank, "homepage")
             and timestamp and timestamp > math.floor(tonumber(connection.guildContactsTimestamp) or 0) and timestamp <= time() + 300
             and source ~= "" and checksum == rulesBackupChecksum(contacts .. SEP .. timestamp .. SEP .. source) then
             connection.rules.guildContacts = contacts
@@ -1481,8 +1530,8 @@ local function handleMessage(prefix, message, distribution, sender)
         local updatedAt, note = tonumber(parts[6]), tostring(parts[7] or "")
         local fullName = iRC:ResolveGuildMemberFullName(name)
         local now = GetServerTime and GetServerTime() or time()
-        if senderRank and senderRank <= (connection.rankPermissions.homepage
-            or iRC.DefaultRankPermissions.homepage) and fullName == name and addedAt and addedAt > 0 and addedAt <= now + 300
+        if iRC:GuildRankHasPermission(senderRank, "homepage") and fullName == name
+            and addedAt and addedAt > 0 and addedAt <= now + 300
             and updatedAt and updatedAt >= addedAt and updatedAt <= now + 300 and addedBy ~= ""
             and #note <= 80 and not note:find("[%c]") then
             connection.guildContactDetails = connection.guildContactDetails or {}
@@ -1497,14 +1546,14 @@ local function handleMessage(prefix, message, distribution, sender)
     elseif kind == "GF_TRADE_EXCEPTIONS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
-        local senderIsGuildMaster = getRosterRank(sender) == 0
-        local receiverIsGuildMaster = getRosterRank(iRC:GetPlayerName()) == 0
+        local senderIsGuildMaster = rankHasGuildMasterAuthority(senderRank, connection)
+        local receiverIsGuildMaster = iRC:IsGuildMaster()
         local mask, timestamp = tonumber(parts[3]), tonumber(parts[4])
         local source = tostring(parts[5] or ""):gsub("[%c]", ""):sub(1, 80)
         local checksum = tostring(parts[6] or ""):lower()
         local itemMasks = tostring(parts[7] or "")
         local now = GetServerTime and GetServerTime() or time()
-        if senderRank and senderRank <= (connection.rankPermissions.tradeExceptions or 1)
+        if iRC:GuildRankHasPermission(senderRank, "tradeExceptions")
             and mask and mask >= 0 and mask <= 255 and mask == math.floor(mask)
             and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= ""
             and itemMasks:match("^%d+,%d+,%d+,%d+,%d+$") and #itemMasks <= 45
@@ -1540,7 +1589,8 @@ local function handleMessage(prefix, message, distribution, sender)
         local now = GetServerTime and GetServerTime() or time()
         local permission = settingKind == "WELCOME" and "notifications" or nil
         local allowedRank = permission and iRC:GetGuildRankPermission(permission)
-        if allowedRank and senderRank and senderRank <= allowedRank and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= "" then
+        if allowedRank and iRC:GuildRankHasPermission(senderRank, permission)
+            and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= "" then
             if settingKind == "WELCOME" and (value == "0" or value == "1")
                 and checksum == guildSettingsChecksum(value == "1", timestamp, source) then
                 local settings, incoming = connection.guildNotifications, value == "1"
@@ -1572,13 +1622,17 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:GetConnectionRules().enableGuildLevel60Message and "1" or "0",
             iRC:GetConnectionRules().enableGuildDeathMessage and "1" or "0", timestampHex, tostring(timestampSource or ""),
         }, SEP))
+        local expectedRequireIRCExtension = rulesBackupChecksum(table.concat({
+            iRC:GetConnectionRules().requireIRC and "1" or "0", timestampHex, tostring(timestampSource or ""),
+        }, SEP))
         if tostring(parts[3] or ""):lower() == tostring(timestampHex):lower()
             and tostring(parts[4] or ""):lower() == expected then
             if tostring(parts[5] or ""):lower() == expectedExtension
                 and tostring(parts[6] or ""):lower() == expectedMapExtension
                 and tostring(parts[7] or ""):lower() == expectedRaceLockExtension
                 and tostring(parts[8] or ""):lower() == expectedGuildFoundExtension
-                and tostring(parts[9] or ""):lower() == expectedAnnouncementExtension then
+                and tostring(parts[9] or ""):lower() == expectedAnnouncementExtension
+                and tostring(parts[10] or ""):lower() == expectedRequireIRCExtension then
                 summarizeRulesAck(sender, timestampHex)
             else
                 if iRC.Diagnostics then
@@ -1604,9 +1658,9 @@ local function handleMessage(prefix, message, distribution, sender)
         local savedHex = tostring(connection and connection.rulesTimestampHex or "0"):lower()
         local savedTimestamp = savedHex:match("^[0-9a-f]+$") and (tonumber(savedHex, 16) or 0) or 0
         local senderRank = getRulesRank(sender, connection)
-        -- Only the real roster rank 0 gets final rules authority, while the
-        -- timestamp gate below still protects a newer local ruleset.
-        local senderIsGuildMaster = getRosterRank(sender) == 0
+        -- Native and explicitly delegated iRC Guild Masters have final rules
+        -- authority; the timestamp gate still protects a newer local ruleset.
+        local senderIsGuildMaster = rankHasGuildMasterAuthority(senderRank, connection)
         if senderIsGuildMaster then
             timestampSource = sender
             if not validTimestamp or incomingTimestamp > time() + 300 then
@@ -1616,6 +1670,15 @@ local function handleMessage(prefix, message, distribution, sender)
             end
         end
         local incomingAutomaticRules = parts[28] == "1" and incomingTimestamp == 0
+        local requireIRCExtensionAbsent = parts[29] == nil
+        local requireIRCFlagPresent = parts[29] == "0" or parts[29] == "1"
+        local incomingRequireIRC = requireIRCFlagPresent and parts[29] == "1"
+        if not requireIRCFlagPresent and incomingTimestamp == savedTimestamp
+            and connection and connection.rules and connection.rules.requireIRC == true then
+            -- An older relay omits this extension. Preserve an already-known
+            -- value at the same rules timestamp instead of silently clearing it.
+            incomingRequireIRC = true
+        end
         local timestampSourceValid = incomingTimestamp == 0
             or (timestampSource ~= "" and iRC:IsGuildMasterName(timestampSource))
         if incomingAutomaticRules then
@@ -1639,6 +1702,7 @@ local function handleMessage(prefix, message, distribution, sender)
             guildFoundOnly = parts[24] == "1",
             enableGuildLevel60Message = tostring(parts[26] or ""):sub(1, 1) == "1",
             enableGuildDeathMessage = tostring(parts[26] or ""):sub(2, 2) == "1",
+            requireIRC = incomingRequireIRC,
         }
         if not iRC:IsOfficialHardcoreRealm() then incomingRules.enableGuildDeathMessage = false end
         if not incomingRules.raceLock then
@@ -1680,10 +1744,17 @@ local function handleMessage(prefix, message, distribution, sender)
             incomingRules.enableGuildLevel60Message and "1" or "0",
             incomingRules.enableGuildDeathMessage and "1" or "0", timestampHex, timestampSource,
         }, SEP))
+        -- Appended extensions are optional so released clients remain compatible.
+        -- When present, their checksum must validate before the ruleset is accepted.
+        local requireIRCChecksum = tostring(parts[30] or ""):lower()
+        local requireIRCChecksumValid = requireIRCExtensionAbsent
+            or requireIRCFlagPresent and requireIRCChecksum == rulesBackupChecksum(table.concat({
+                incomingRules.requireIRC and "1" or "0", timestampHex, timestampSource,
+            }, SEP))
         local rulesSchemaSupported = exceptionFlagPresent and mapFlagPresent and raceLockFlagPresent
             and guildFoundFlagPresent and announcementFlagsPresent
             and exceptionChecksumValid and mapChecksumValid and raceLockChecksumValid
-            and guildFoundChecksumValid and announcementChecksumValid
+            and guildFoundChecksumValid and announcementChecksumValid and requireIRCChecksumValid
         -- A local GM edit advances rulesTimestampHex before any received
         -- backup exists for that new timestamp. Never compare a newer stamp
         -- against a backup that still describes the previous ruleset.
@@ -1706,6 +1777,9 @@ local function handleMessage(prefix, message, distribution, sender)
         local sameStampMatches = replaceableRules or incomingTimestamp ~= savedTimestamp or not connection
             or connection.receivedRulesBackupVersion ~= 1 or not connection.receivedRulesBackup
             or sameStampReference == incomingBackup
+        local sameStampRequireIRCMatches = replaceableRules or incomingTimestamp ~= savedTimestamp or not connection
+            or connection.receivedRulesRequireIRC == nil
+            or connection.receivedRulesRequireIRC == incomingRequireIRC
         local authorityName, authorityRank = getRulesAuthority()
         local senderIsAuthority = senderIsGuildMaster or senderRank ~= nil and (authorityRank == nil or senderRank < authorityRank
             or (senderRank == authorityRank and (not authorityName
@@ -1715,7 +1789,8 @@ local function handleMessage(prefix, message, distribution, sender)
             or replaceableRules and incomingTimestamp > 0
             or not replaceableRules and incomingTimestamp >= savedTimestamp)
         local contentAccepted = checksumValid and exceptionChecksumValid and mapChecksumValid
-            and raceLockChecksumValid and guildFoundChecksumValid and announcementChecksumValid and sameStampMatches
+            and raceLockChecksumValid and guildFoundChecksumValid and announcementChecksumValid
+            and requireIRCChecksumValid and sameStampMatches and sameStampRequireIRCMatches
         local acceptRules = rulesSchemaSupported and contentAccepted and progressionIsExclusive and timestampAccepted
             and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid
             and (senderIsGuildMaster or senderIsAuthority)
@@ -1732,6 +1807,7 @@ local function handleMessage(prefix, message, distribution, sender)
             connection.rulesEstablished = true
             connection.receivedRulesBackup = incomingBackup
             connection.receivedRulesBackupVersion = 1
+            connection.receivedRulesRequireIRC = incomingRules.requireIRC == true
             connection.receivedRulesChecksum = rulesBackupChecksum(incomingBackup)
             if iRC.Diagnostics then
                 iRC.Diagnostics:Trace("RULES_ACCEPT", sender, timestampHex, connection.receivedRulesChecksum,
@@ -1763,9 +1839,12 @@ local function handleMessage(prefix, message, distribution, sender)
                 incomingRules.enableGuildLevel60Message and "1" or "0",
                 incomingRules.enableGuildDeathMessage and "1" or "0", timestampHex, timestampSource,
             }, SEP))
+            local receivedRequireIRCChecksum = rulesBackupChecksum(table.concat({
+                incomingRules.requireIRC and "1" or "0", timestampHex, timestampSource,
+            }, SEP))
             send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex,
                 connection.receivedRulesChecksum, receivedExtensionChecksum, receivedMapChecksum, receivedRaceLockChecksum,
-                receivedGuildFoundChecksum, receivedAnnouncementChecksum }, SEP), "WHISPER", sender)
+                receivedGuildFoundChecksum, receivedAnnouncementChecksum, receivedRequireIRCChecksum }, SEP), "WHISPER", sender)
         elseif connection and senderRank ~= nil then
             if iRC.Diagnostics then
                 local rejectReason = not rulesSchemaSupported and "unsupported schema"

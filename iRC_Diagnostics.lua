@@ -69,7 +69,7 @@ captureFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         if prefix == iRC.Prefix or prefix == "iRCGridV1" or prefix == "iRCIconV1"
-            or prefix == "iRCGFRoster" or prefix == "RLAddon" then
+            or prefix == "iRCGFRoster" then
             Append("IRC_RECEIVE", prefix, type(message) == "string" and (message:match("^([A-Z][A-Z0-9_]*)") or "other") or "?",
                 type(message) == "string" and #message or 0, distribution, sender)
         end
@@ -203,7 +203,6 @@ function Diagnostics:BuildHealthReport()
         lines[#lines + 1] = "Relayed by: " .. tostring(connection.rulesRelayedBy)
         lines[#lines + 1] = "Received at: " .. tostring(connection.rulesReceivedAt)
         lines[#lines + 1] = "Profiles: " .. CountEntries(connection.members)
-        lines[#lines + 1] = "Compatibility profiles: " .. CountEntries(connection.compatibilityMembers)
     end
     return table.concat(lines, "\n")
 end

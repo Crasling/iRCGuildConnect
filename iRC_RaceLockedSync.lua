@@ -383,8 +383,8 @@ function Sync:RelayOverrides(targetName)
             entry.overrideSource = iRC:GetPlayerName()
         end
         local sourceRank = type(entry) == "table" and iRC:GetGuildMemberRankIndex(entry.overrideSource)
-        local allowedRank = db.rankPermissions.verification or 1
-        if type(entry) == "table" and entry.name and entry.gmTimestamp and sourceRank and sourceRank <= allowedRank
+        if type(entry) == "table" and entry.name and entry.gmTimestamp
+            and iRC:GuildRankHasPermission(sourceRank, "verification")
             and iRC:IsGuildMemberName(entry.name) then
             rows[#rows + 1] = entry
         end
@@ -496,12 +496,10 @@ function Sync:ReceiveRoster(message, sender)
     elseif marker == "A:" then
         local acknowledgedAt = number(fields[1], time() + 300)
         local senderRank = iRC:GetGuildMemberRankIndex(sender)
-        local db = connection()
-        local allowedRank = db and db.rankPermissions.verification or 1
         local history = localHistory()
         local discrepancyAt = tonumber(history.moneyDiscrepancyAt) or 0
         if acknowledgedAt and acknowledgedAt > 0 and acknowledgedAt == discrepancyAt
-            and senderRank ~= nil and senderRank <= allowedRank
+            and iRC:GuildRankHasPermission(senderRank, "verification")
             and tonumber(history.moneyDiscrepancyNoticeAt) ~= discrepancyAt then
             history.moneyDiscrepancyNoticeAt = discrepancyAt
             iRC:Print(iRC:Text("RL_MONEY_DISCREPANCY"))
@@ -509,11 +507,10 @@ function Sync:ReceiveRoster(message, sender)
     elseif marker == "G:" or marker == "O:" then
         local direct = marker == "G:"
         local senderRank = iRC:GetGuildMemberRankIndex(sender)
-        local allowedRank = connection().rankPermissions.verification or 1
         -- Both new decisions and relays must come from a rank currently
         -- trusted with verification management. Relays retain the original
         -- decision timestamp and cannot silently become a newer decision.
-        if senderRank == nil or senderRank > allowedRank then return end
+        if not iRC:GuildRankHasPermission(senderRank, "verification") then return end
         if #fields % 4 ~= 0 then return end
         for index = 1, #fields, 4 do
             local name, stamp = fields[index], number(fields[index + 3], time() + 300)
@@ -525,12 +522,11 @@ function Sync:ReceiveRoster(message, sender)
         end
     elseif marker == "R:" then
         if #fields % 5 ~= 0 then return end
-        local allowedRank = connection().rankPermissions.verification or 1
         for index = 1, #fields, 5 do
             local name, stamp, source = fields[index], number(fields[index + 3], time() + 300), fields[index + 4]
             local sourceRank = iRC:GetGuildMemberRankIndex(source)
             if validBool(fields[index + 1]) and validBool(fields[index + 2]) and stamp
-                and sourceRank and sourceRank <= allowedRank
+                and iRC:GuildRankHasPermission(sourceRank, "verification")
                 and storeOverride(name, readBool(fields[index + 1]), readBool(fields[index + 2]), stamp, source, false) then
                 pendingRelays[iRC:NormalizeName(name)] = nil
             end

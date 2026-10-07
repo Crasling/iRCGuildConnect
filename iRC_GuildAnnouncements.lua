@@ -90,7 +90,9 @@ function Announcements:GetUnlockedIcons(name)
         if isSelf and iRCCharDB and iRCCharDB.hideChatIcon == true and not unlocked.death then return {} end
         return unlocked
     end
-    if rank == 0 then
+    local guildMasterRank = math.max(0, math.min(9,
+        math.floor(tonumber(connection and connection.guildMasterRank) or 0)))
+    if rank == 0 or guildMasterRank > 0 and rank <= guildMasterRank then
         unlocked.guildMaster = true
     else
         if connection and connection.active == true then
