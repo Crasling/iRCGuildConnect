@@ -62,7 +62,7 @@ local function pruneDepartedMemberData(self, snapshot)
         currentIds[memberKey(member.name, member.guid)] = true
     end
 
-    for _, field in ipairs({ "members", "guildFoundRoster", "professionMembers", "attentionSince" }) do
+    for _, field in ipairs({ "members", "guildFoundRoster", "professionMembers", "attentionSince", "memberPermissions" }) do
         local records = connection[field]
         if type(records) == "table" then
             for key in pairs(records) do
@@ -188,7 +188,7 @@ function iRC:IsPresenceNotificationLeader()
         local _, _, playerRankIndex = GetGuildInfo("player")
         ownRankIndex = playerRankIndex
     end
-    if not self:GuildRankHasPermission(ownRankIndex, "presence") then return false end
+    if not self:HasGuildPermission("presence") then return false end
     local ownName = self:NormalizeName(self:GetPlayerName())
     local candidate = { name = self:GetPlayerName(), rankIndex = ownRankIndex }
     local now, sessionStartedAt = time(), self.ConnectionSessionStartedAt or 0
@@ -200,7 +200,7 @@ function iRC:IsPresenceNotificationLeader()
             -- Only direct, current-session iRC profiles can participate in
             -- notification leadership.
             if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= IRC_PRESENCE_TIMEOUT then
-                if self:GuildRankHasPermission(rankIndex, "presence")
+                if self:GuildMemberHasPermission(name, "presence")
                     and (rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name))) then
                     candidate = { name = name, rankIndex = rankIndex }
                 end
@@ -619,7 +619,7 @@ frame:SetScript("OnEvent", function(_, event)
             if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
             if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
             if iRC.MainUI and iRC.MainUI.frame
-                and (iRC.MainUI.frame.category == "Guild Members" or iRC.MainUI.frame.category == "Guild Snapshot") then
+                and (iRC.MainUI.frame.category == "Guild Members" or iRC.MainUI.frame.category == "Guild Overview") then
                 iRC.MainUI:RefreshIfShown()
             end
         end

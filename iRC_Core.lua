@@ -506,6 +506,7 @@ end
 
 local DEFAULT_SETTINGS = {
     mainWindowScale = 1,
+    mainPanelDefaultTab = "__LAST__",
     shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,
@@ -566,7 +567,12 @@ end
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     tradeExceptions = 1, notifications = 1, homepage = 1, rosterHistory = 1,
-    identity = 1, memberRemoval = 1,
+    identity = 1, memberRemoval = 1, rankManagement = 1,
+}
+iRC.PermissionOrder = {
+    "verification", "presence", "incidents", "tradeExceptions", "notifications",
+    "homepage", "rosterHistory", "identity", "memberRemoval",
+    "rankManagement",
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -717,6 +723,49 @@ end
 
 function iRC:CloseAllWindows()
     self:CloseWindowsExcept(nil)
+end
+
+function iRC:StyleScrollFrame(scrollFrame)
+    if not scrollFrame then return end
+    local scrollBar = scrollFrame.ScrollBar
+    if not scrollBar and scrollFrame.GetName then
+        local name = scrollFrame:GetName()
+        scrollBar = name and _G[name .. "ScrollBar"] or nil
+    end
+    if not scrollBar or scrollBar.iRCStyled then return end
+    scrollBar.iRCStyled = true
+
+    local function hideArrow(button)
+        if button then
+            button:SetAlpha(0)
+            button:EnableMouse(false)
+            button:SetSize(1, 1)
+        end
+    end
+    hideArrow(scrollBar.ScrollUpButton or scrollBar.UpButton)
+    hideArrow(scrollBar.ScrollDownButton or scrollBar.DownButton)
+
+    local thumb = scrollBar.GetThumbTexture and scrollBar:GetThumbTexture()
+        or scrollBar.ThumbTexture or scrollBar.ScrollThumb
+    for _, region in ipairs({ scrollBar:GetRegions() }) do
+        if region ~= thumb and region.SetAlpha then region:SetAlpha(0) end
+    end
+
+    scrollBar:ClearAllPoints()
+    scrollBar:SetPoint("TOPRIGHT", scrollFrame, "TOPRIGHT", 13, -3)
+    scrollBar:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", 13, 3)
+    scrollBar:SetWidth(8)
+    scrollBar.iRCTrack = scrollBar:CreateTexture(nil, "BACKGROUND")
+    scrollBar.iRCTrack:SetAllPoints()
+    scrollBar.iRCTrack:SetColorTexture(0.035, 0.03, 0.025, 0.82)
+
+    if thumb and thumb.SetTexture then
+        thumb:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        thumb:SetVertexColor(1, 0.56, 0.08, 0.92)
+        thumb:SetWidth(6)
+    else
+        scrollBar:SetAlpha(0)
+    end
 end
 
 function iRC:NormalizeName(name)
@@ -1103,12 +1152,28 @@ function iRC:GetConnection()
     classBreakdown.timestamp = math.max(0, math.floor(tonumber(classBreakdown.timestamp) or 0))
     classBreakdown.editedBy = tostring(classBreakdown.editedBy or "")
     connection.rankPermissions = connection.rankPermissions or {}
+    connection.memberPermissions = connection.memberPermissions or {}
     connection.guildMasterRank = math.max(0, math.min(9,
         math.floor(tonumber(connection.guildMasterRank) or 0)))
     connection.guildMasterRankTimestamp = math.max(0,
         math.floor(tonumber(connection.guildMasterRankTimestamp) or 0))
     for permission, rankIndex in pairs(self.DefaultRankPermissions) do
         if connection.rankPermissions[permission] == nil then connection.rankPermissions[permission] = rankIndex end
+    end
+    for key, entry in pairs(connection.memberPermissions) do
+        if type(entry) ~= "table" then
+            connection.memberPermissions[key] = nil
+        else
+            entry.name = tostring(entry.name or key):gsub("[%c]", ""):sub(1, 80)
+            entry.permissions = type(entry.permissions) == "table" and entry.permissions or {}
+            for permission in pairs(entry.permissions) do
+                if self.DefaultRankPermissions[permission] == nil or entry.permissions[permission] ~= true then
+                    entry.permissions[permission] = nil
+                end
+            end
+            entry.timestamp = math.max(0, math.floor(tonumber(entry.timestamp) or 0))
+            entry.source = tostring(entry.source or ""):gsub("[%c]", ""):sub(1, 80)
+        end
     end
     connection.members = connection.members or {}
     -- Compatibility presence was removed; discard legacy cached profiles.
@@ -1181,14 +1246,77 @@ end
 function iRC:HasGuildPermission(permission)
     local connection = self:GetConnection()
     if not connection then return false end
+    -- Delegated authority belongs to the guild's active authoritative
+    -- connection. Stale, disabled, or partially initialized connections must
+    -- never expose management tools from cached/default rank thresholds.
+    if connection.active ~= true then return false end
     -- Bootstrap is a local participation mode, not guild authorization. It
     -- must not grant management authority from default rank permissions.
     if connection.rulesBootstrap == true then return false end
     if self:IsGuildMaster() then return true end
+    local ownEntry = connection.memberPermissions
+        and connection.memberPermissions[self:NormalizeName(self:GetPlayerName())]
+    if ownEntry and ownEntry.permissions and ownEntry.permissions[permission] == true then return true end
     local rankIndex = self:GetPlayerGuildRankIndex()
     local allowed = connection.rankPermissions and tonumber(connection.rankPermissions[permission])
     if allowed == nil then allowed = self.DefaultRankPermissions[permission] end
     return rankIndex ~= nil and allowed ~= nil and rankIndex <= allowed
+end
+
+function iRC:GuildMemberHasPermission(name, permission)
+    if not name or self.DefaultRankPermissions[permission] == nil then return false end
+    if self:IsGuildMasterName(name) then return true end
+    local connection = self:GetConnection()
+    local entry = connection and connection.memberPermissions
+        and connection.memberPermissions[self:NormalizeName(name)]
+    if entry and entry.permissions and entry.permissions[permission] == true then return true end
+    return self:GuildRankHasPermission(self:GetGuildMemberRankIndex(name), permission)
+end
+
+function iRC:GetGuildMemberPermission(name, permission)
+    local connection = self:GetConnection()
+    local entry = connection and connection.memberPermissions
+        and connection.memberPermissions[self:NormalizeName(name)]
+    return entry and entry.permissions and entry.permissions[permission] == true or false
+end
+
+function iRC:GetGuildMemberPermissionEntries()
+    local connection = self:GetConnection()
+    local result = {}
+    for _, entry in pairs(connection and connection.memberPermissions or {}) do
+        local count = 0
+        for _, permission in ipairs(self.PermissionOrder) do
+            if entry.permissions and entry.permissions[permission] == true then count = count + 1 end
+        end
+        if count > 0 then
+            result[#result + 1] = { name = entry.name, permissions = entry.permissions, count = count }
+        end
+    end
+    table.sort(result, function(a, b) return self:NormalizeName(a.name) < self:NormalizeName(b.name) end)
+    return result
+end
+
+function iRC:SetGuildMemberPermission(name, permission, enabled)
+    if not self:IsGuildMaster() or self.DefaultRankPermissions[permission] == nil then return false end
+    local fullName = self:ResolveGuildMemberFullName(name) or name
+    if not self:IsGuildMemberName(fullName) then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    connection.memberPermissions = connection.memberPermissions or {}
+    local key = self:NormalizeName(fullName)
+    local entry = connection.memberPermissions[key] or { permissions = {}, timestamp = 0 }
+    entry.name = self:FormatPlayerName(fullName)
+    entry.permissions = entry.permissions or {}
+    entry.permissions[permission] = enabled == true and true or nil
+    entry.timestamp = math.max(time(), (tonumber(entry.timestamp) or 0) + 1)
+    entry.source = self:GetPlayerName()
+    connection.memberPermissions[key] = entry
+    self:RecordManagementConnectionStatus("permissions", entry.source, entry.timestamp,
+        entry.source, entry.timestamp)
+    if self.SendMemberPermissions then self:SendMemberPermissions(entry.name, nil, true) end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
+    if self.MainUI then self.MainUI:RefreshIfShown() end
+    return true
 end
 
 function iRC:GetGuildRankPermission(permission)
@@ -1220,6 +1348,13 @@ function iRC:CanAutomaticallyEstablishGuildRules()
     local connection = self:GetConnection()
     if not connection then return false end
     if self:IsGuildMaster() then return true end
+    local ownEntry = connection.memberPermissions
+        and connection.memberPermissions[self:NormalizeName(self:GetPlayerName())]
+    if ownEntry and ownEntry.permissions then
+        for permission in pairs(ownEntry.permissions) do
+            if self.DefaultRankPermissions[permission] ~= nil and ownEntry.permissions[permission] == true then return true end
+        end
+    end
     local rankIndex = self:GetPlayerGuildRankIndex()
     if rankIndex == nil then return false end
     for permission, defaultRank in pairs(self.DefaultRankPermissions) do
@@ -1253,7 +1388,7 @@ function iRC:SetGuildRankPermission(permission, rankIndex)
     rankIndex = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
     connection.rankPermissions[permission] = rankIndex
     connection.rankPermissionsTimestamp = math.max(time(), (tonumber(connection.rankPermissionsTimestamp) or 0) + 1)
-    self:RecordManagementConnectionStatus("notifications", self:GetPlayerName(), connection.rankPermissionsTimestamp,
+    self:RecordManagementConnectionStatus("permissions", self:GetPlayerName(), connection.rankPermissionsTimestamp,
         self:GetPlayerName(), connection.rankPermissionsTimestamp)
     if self.SendRankPermissions then self:SendRankPermissions(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
@@ -1278,6 +1413,8 @@ function iRC:SetGuildMasterRank(rankIndex)
     connection.guildMasterRank = math.max(0, math.min(9, math.floor(tonumber(rankIndex) or 0)))
     connection.guildMasterRankTimestamp = math.max(time(),
         (tonumber(connection.guildMasterRankTimestamp) or 0) + 1)
+    self:RecordManagementConnectionStatus("permissions", self:GetPlayerName(), connection.guildMasterRankTimestamp,
+        self:GetPlayerName(), connection.guildMasterRankTimestamp)
     if self.SendRankPermissions then self:SendRankPermissions(nil, true) end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true

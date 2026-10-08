@@ -399,8 +399,9 @@ local function CreateCompactManagementToggle(parent, label, description, yOffset
     return row, yOffset - rowHeight - 7
 end
 
-local function CreateCompactManagementDropdown(frameName, parent, label, yOffset, getValue, setValue, getOptions, getOptionLabel)
-    local rowHeight = 54
+local function CreateCompactManagementDropdown(frameName, parent, label, yOffset, getValue, setValue, getOptions,
+    getOptionLabel, getAccessNames)
+    local rowHeight = getAccessNames and 108 or 54
     local row = CreateCompactManagementRow(parent, yOffset, rowHeight)
     local scopeDivider = row:CreateTexture(nil, "ARTWORK")
     scopeDivider:SetWidth(1)
@@ -424,12 +425,54 @@ local function CreateCompactManagementDropdown(frameName, parent, label, yOffset
     description:SetJustifyH("LEFT")
     description:SetText("Lowest permitted rank and every rank above it.")
 
+    if getAccessNames then
+        row.accessDivider = row:CreateTexture(nil, "ARTWORK")
+        row.accessDivider:SetPoint("TOPLEFT", row, "TOPLEFT", 86, -55)
+        row.accessDivider:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -55)
+        row.accessDivider:SetHeight(1)
+        row.accessDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
+        row.accessLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.accessLabel:SetPoint("TOPLEFT", row, "TOPLEFT", 86, -63)
+        row.accessLabel:SetTextColor(0.62, 0.86, 0.62)
+        row.access = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        row.access:SetPoint("TOPLEFT", row.accessLabel, "BOTTOMLEFT", 0, -3)
+        row.access:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -14, 8)
+        row.access:SetJustifyH("LEFT")
+        row.access:SetJustifyV("TOP")
+        row.access:SetWordWrap(true)
+        if row.access.SetMaxLines then row.access:SetMaxLines(2) end
+        row.access:SetTextColor(0.56, 0.78, 0.56)
+        row:EnableMouse(true)
+        row:SetScript("OnEnter", function(self)
+            if not self.accessTooltip or not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(label)
+            GameTooltip:AddLine(self.accessTooltip, 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    end
+
     local dropdown = CreateFrame("Frame", frameName, row, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("RIGHT", row, "RIGHT", -4, -1)
+    if getAccessNames then dropdown:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, -5)
+    else dropdown:SetPoint("RIGHT", row, "RIGHT", -4, -1) end
     UIDropDownMenu_SetWidth(dropdown, 205)
     UIDropDownMenu_JustifyText(dropdown, "LEFT")
     dropdown.Refresh = function()
         UIDropDownMenu_SetText(dropdown, getOptionLabel(getValue()))
+        if row.access then
+            local names = getAccessNames() or {}
+            local shown = {}
+            for index = 1, math.min(6, #names) do shown[index] = names[index] end
+            local suffix = #names > #shown and ("  |  +" .. tostring(#names - #shown) .. " more") or ""
+            row.accessLabel:SetText("Roster access (" .. tostring(#names) .. ")")
+            row.access:SetText(#names > 0 and (table.concat(shown, "  |  ") .. suffix)
+                or "Nobody currently inherits access.")
+            row.accessTooltip = #names > 0
+                and ("Roster members with effective access:\n" .. table.concat(names, ", ")
+                    .. "\n\n* Individual member grant")
+                or "No current roster members have effective access."
+        end
     end
     UIDropDownMenu_Initialize(dropdown, function(_, level)
         if level ~= 1 then return end
@@ -490,7 +533,12 @@ local function GetManagementConnectionStatus(connection, category)
     if connection and category == "notifications" then
         addCandidate(connection.guildNotifications and connection.guildNotifications.source,
             connection.guildNotifications and connection.guildNotifications.timestamp)
+    elseif connection and category == "permissions" then
         addCandidate("", connection.rankPermissionsTimestamp)
+        addCandidate("", connection.guildMasterRankTimestamp)
+        for _, entry in pairs(connection.memberPermissions or {}) do
+            addCandidate(entry.source, entry.timestamp)
+        end
     elseif connection and category == "homepage" then
         addCandidate(connection.guildHomepageDescription and connection.guildHomepageDescription.editedBy,
             connection.guildHomepageDescription and connection.guildHomepageDescription.timestamp)
@@ -616,12 +664,14 @@ local function CreateTabContent()
     container:Hide()
 
     local scrollFrame = CreateFrame("ScrollFrame", nil, container, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(scrollFrame)
     scrollFrame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     scrollFrame:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -22, 0)
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetWidth(550)
     scrollChild:SetHeight(1)
     scrollFrame:SetScrollChild(scrollChild)
+    container.scrollFrame = scrollFrame
     container:EnableMouseWheel(true)
     container:SetScript("OnMouseWheel", function(_, delta)
         local maximum = math.max(0, scrollChild:GetHeight() - scrollFrame:GetHeight())
@@ -643,9 +693,10 @@ local adminContainer, adminContent = CreateTabContent()
 local guildNotificationsContainer, guildNotificationsContent = CreateTabContent()
 local guildHomepageContainer, guildHomepageContent = CreateTabContent()
 local diagnosticsContainer, diagnosticsContent, diagnosticsScroll = CreateTabContent()
-local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer, diagnosticsContainer }
+local guildPermissionsContainer, guildPermissionsContent = CreateTabContent()
+local tabContents = { generalContainer, connectionContainer, roleplayContainer, aboutContainer, iWRContainer, iNIFContainer, iSTContainer, guildFoundContainer, adminContainer, guildNotificationsContainer, guildHomepageContainer, diagnosticsContainer, guildPermissionsContainer }
 local sidebarButtons = {}
-local selectedTab = 1
+local selectedTab = 2
 
 local function ShowTab(index)
     selectedTab = index
@@ -663,11 +714,9 @@ end
 
 local sidebarItems = {
     { type = "header", label = iRC.DisplayName },
-    { type = "tab", label = "General", index = 1 },
     { type = "tab", label = "Connection & Rules", index = 2 },
 }
 local standardSidebarItems = {
-    { type = "tab", label = "Roleplay", index = 3 },
     { type = "tab", label = "About", index = 4 },
     { type = "tab", label = "Diagnostic Tools", index = 12 },
     { type = "header", label = "Other Addons" },
@@ -917,6 +966,7 @@ do
     outputFrame:SetBackdropColor(0.015, 0.015, 0.02, 0.95)
     outputFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
     local outputScroll = CreateFrame("ScrollFrame", nil, outputFrame, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(outputScroll)
     outputScroll:SetPoint("TOPLEFT", 8, -8)
     outputScroll:SetPoint("BOTTOMRIGHT", -28, 8)
     diagnosticOutput = CreateFrame("EditBox", nil, outputScroll)
@@ -1253,6 +1303,7 @@ local tradeExceptionClose = CreateFrame("Button", nil, tradeExceptionPopup, "UIP
 tradeExceptionClose:SetPoint("TOPRIGHT", -5, -5)
 tradeExceptionClose:SetScript("OnClick", function() tradeExceptionPopup:Hide() end)
 local tradeExceptionScroll = CreateFrame("ScrollFrame", nil, tradeExceptionPopup, "UIPanelScrollFrameTemplate")
+iRC:StyleScrollFrame(tradeExceptionScroll)
 tradeExceptionScroll:SetPoint("TOPLEFT", 20, -78)
 tradeExceptionScroll:SetPoint("BOTTOMRIGHT", -34, 18)
 local tradeExceptionContent = CreateFrame("Frame", nil, tradeExceptionScroll)
@@ -1741,6 +1792,7 @@ contactHeaderAdded:SetPoint("TOPRIGHT", contactsListFrame, "TOPRIGHT", -104, -9)
 local contactHeaderActions = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 contactHeaderActions:SetPoint("TOPRIGHT", contactsListFrame, "TOPRIGHT", -15, -9); contactHeaderActions:SetWidth(75); contactHeaderActions:SetJustifyH("CENTER"); contactHeaderActions:SetText(L.CONTACT_COLUMN_ACTIONS)
 local contactsScroll = CreateFrame("ScrollFrame", nil, contactsListFrame, "UIPanelScrollFrameTemplate")
+iRC:StyleScrollFrame(contactsScroll)
 contactsScroll:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 8, -27)
 contactsScroll:SetPoint("BOTTOMRIGHT", contactsListFrame, "BOTTOMRIGHT", -28, 8)
 guildContactsListContent = CreateFrame("Frame", nil, contactsScroll)
@@ -1967,6 +2019,7 @@ do
     itemListFrame:SetBackdropColor(0.045, 0.038, 0.028, 0.92)
     itemListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.78)
     local itemScroll = CreateFrame("ScrollFrame", nil, itemListFrame, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(itemScroll)
     itemScroll:SetPoint("TOPLEFT", 8, -8)
     itemScroll:SetPoint("BOTTOMRIGHT", -28, 8)
     local itemContent = CreateFrame("Frame", nil, itemScroll)
@@ -2144,6 +2197,8 @@ end
 local newMemberWelcomeCheck, showAttentionRemindersCheck, automaticWarningChecks, welcomeConflictText, welcomeConflictAccept, welcomeConflictKeep
 local notificationCard, permissionCard, notificationBaseHeight, notificationConflictHeight, permissionCardHeight, notificationCardTop
 local rankPermissionDropdowns = {}
+local namedPermissionChecks, selectedPermissionMember = {}, nil
+local refreshMemberPermissionControls
 do
     local y = -12
     _, y = CreateSectionHeader(guildNotificationsContent, L.GUILD_NOTIFICATIONS_TITLE, y)
@@ -2190,17 +2245,22 @@ do
     notificationConflictHeight = math.abs(notificationY) + 18
     notificationCard:SetHeight(notificationBaseHeight)
     y = notificationCardTop - notificationBaseHeight - 12
+    guildNotificationsContent:SetHeight(math.max(math.abs(y) + 8, 300))
 
+    local permissionPageY = -12
+    _, permissionPageY = CreateSectionHeader(guildPermissionsContent, L.DELEGATED_PERMISSIONS_CATEGORY, permissionPageY)
+    managementConnectionCards.permissions, permissionPageY = CreateConnectionStatusCard(guildPermissionsContent, permissionPageY)
     local permissionStartY
-    permissionCard, permissionStartY = CreateManagementSettingsCard(guildNotificationsContent,
-        L.DELEGATED_PERMISSIONS_CATEGORY,
-        "Choose the lowest rank allowed to use each management tool. That rank and every rank above it are included.", y)
+    permissionCard, permissionStartY = CreateManagementSettingsCard(guildPermissionsContent,
+        "Rank access",
+        "Choose the lowest rank allowed to use each tool. That rank and every rank above it receive access.", permissionPageY - 2)
     local permissionLabels = {
         verification = "Verification decisions", presence = "Presence checks and automatic warnings",
         incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
         rosterHistory = "Guild Log and member history", identity = "Assign member mains and alts",
         memberRemoval = "Review and remove inactive members",
+        rankManagement = "Promote and demote guild members",
     }
     local function rankValues()
         local values = {}
@@ -2217,34 +2277,198 @@ do
         if value == 0 then return "Guild Master" end
         return "Rank " .. tostring(value)
     end
+    local function effectiveAccessNames(permission)
+        local records = {}
+        local guildMasterRank = iRC:GetGuildMasterRank()
+        local allowedRank = permission and iRC:GetGuildRankPermission(permission) or nil
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            local rankIndex = tonumber(member.rankIndex)
+            if rankIndex then
+                local guildMasterAccess = rankIndex == 0
+                    or guildMasterRank > 0 and rankIndex <= guildMasterRank
+                local rankAccess = permission and rankIndex <= allowedRank or guildMasterAccess
+                local individual = permission and iRC:GetGuildMemberPermission(member.name, permission) or false
+                if rankAccess or individual then
+                    records[#records + 1] = {
+                        name = member.name,
+                        label = iRC:FormatPlayerName(member.name) .. (individual and "*" or ""),
+                    }
+                end
+            end
+        end
+        table.sort(records, function(a, b) return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name) end)
+        local names = {}
+        for index, record in ipairs(records) do names[index] = record.label end
+        return names
+    end
     local permissionY = permissionStartY
     rankPermissionDropdowns.guildMasterRank, permissionY = CreateCompactManagementDropdown("iRCGuildMasterRankPermission",
         permissionCard, "Guild master rank", permissionY,
         function() return iRC:GetGuildMasterRank() end,
         function(value) iRC:SetGuildMasterRank(value) end,
-        rankValues, rankLabel)
-    for _, permission in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage", "rosterHistory", "identity", "memberRemoval" }) do
+        rankValues, rankLabel,
+        function() return effectiveAccessNames(nil) end)
+    for _, permission in ipairs(iRC.PermissionOrder) do
         local permissionKey = permission
         rankPermissionDropdowns[permission], permissionY = CreateCompactManagementDropdown("iRCRankPermission" .. permission,
             permissionCard, permissionLabels[permission], permissionY,
             function() return iRC:GetGuildRankPermission(permissionKey) end,
             function(value) iRC:SetGuildRankPermission(permissionKey, value) end,
-            rankValues, rankLabel)
+            rankValues, rankLabel,
+            function() return effectiveAccessNames(permissionKey) end)
     end
     permissionCardHeight = math.abs(permissionY) + 12
     permissionCard:SetHeight(permissionCardHeight)
-    y = y - permissionCardHeight - 12
-    guildNotificationsContent:SetHeight(math.max(math.abs(y) + 8, 300))
+    permissionPageY = permissionPageY - permissionCardHeight - 14
+
+    local memberCard, memberY = CreateManagementSettingsCard(guildPermissionsContent,
+        "Specific member access",
+        "Search the current roster and grant selected tools regardless of guild rank. These switches show individual grants only; rank access still applies separately.", permissionPageY)
+    local configuredText
+    configuredText, memberY = CreateInfoText(memberCard, "", memberY - 2, "GameFontDisableSmall")
+    configuredText:SetTextColor(0.78, 0.72, 0.62)
+
+    local searchLabel = memberCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    searchLabel:SetPoint("TOPLEFT", memberCard, "TOPLEFT", 18, memberY)
+    searchLabel:SetText("Roster member")
+    local memberSearch = CreateFrame("EditBox", nil, memberCard, "InputBoxTemplate")
+    memberSearch:SetSize(315, 24)
+    memberSearch:SetPoint("TOPLEFT", searchLabel, "BOTTOMLEFT", 0, -6)
+    memberSearch:SetAutoFocus(false)
+    memberSearch:SetMaxLetters(80)
+    memberSearch:SetTextInsets(6, 6, 0, 0)
+    local selectedText = memberCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    selectedText:SetPoint("LEFT", memberSearch, "RIGHT", 18, 0)
+    selectedText:SetPoint("RIGHT", memberCard, "RIGHT", -18, 0)
+    selectedText:SetJustifyH("LEFT")
+
+    local suggestions = CreateFrame("Frame", nil, memberCard, "BackdropTemplate")
+    suggestions:SetSize(315, 148)
+    suggestions:SetPoint("TOPLEFT", memberSearch, "BOTTOMLEFT", 0, -2)
+    suggestions:SetFrameStrata("FULLSCREEN_DIALOG")
+    suggestions:SetFrameLevel(memberCard:GetFrameLevel() + 30)
+    suggestions:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    suggestions:SetBackdropColor(0.03, 0.025, 0.02, 0.99)
+    suggestions:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.9)
+    suggestions:Hide()
+    local suggestionButtons = {}
+
+    local function selectPermissionMember(name)
+        local fullName = iRC:ResolveGuildMemberFullName(name)
+        if not fullName then return false end
+        selectedPermissionMember = fullName
+        memberSearch:SetText(iRC:FormatPlayerName(fullName))
+        memberSearch:SetCursorPosition(#memberSearch:GetText())
+        memberSearch:ClearFocus()
+        suggestions:Hide()
+        if refreshMemberPermissionControls then refreshMemberPermissionControls() end
+        return true
+    end
+
+    for index = 1, 6 do
+        local button = CreateFrame("Button", nil, suggestions)
+        button:SetSize(297, 23)
+        button:SetPoint("TOPLEFT", suggestions, "TOPLEFT", 7, -6 - (index - 1) * 23)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", 7, 0)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.16)
+        button:SetScript("OnMouseDown", function(self, mouseButton)
+            if mouseButton == "LeftButton" and self.memberName then selectPermissionMember(self.memberName) end
+        end)
+        suggestionButtons[index] = button
+    end
+
+    local function updatePermissionSuggestions()
+        local searchValue = memberSearch:GetText():match("^%s*(.-)%s*$")
+        if selectedPermissionMember
+            and searchValue:lower() ~= iRC:FormatPlayerName(selectedPermissionMember):lower() then
+            selectedPermissionMember = nil
+            if refreshMemberPermissionControls then refreshMemberPermissionControls() end
+        end
+        local query = searchValue:lower()
+        local matches = {}
+        if query ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
+            for index = 1, GetNumGuildMembers(true) do
+                local name = GetGuildRosterInfo(index)
+                local display = name and iRC:FormatPlayerName(name)
+                if display and display:lower():find(query, 1, true) then
+                    matches[#matches + 1] = { name = name, display = display,
+                        starts = display:lower():find(query, 1, true) == 1 }
+                end
+            end
+            table.sort(matches, function(a, b)
+                if a.starts ~= b.starts then return a.starts end
+                return a.display:lower() < b.display:lower()
+            end)
+        end
+        for index, button in ipairs(suggestionButtons) do
+            local match = matches[index]
+            button.memberName = match and match.name or nil
+            button:SetShown(match ~= nil)
+            if match then button.text:SetText(match.display) end
+        end
+        suggestions:SetShown(memberSearch:HasFocus() and matches[1] ~= nil)
+    end
+    memberSearch:SetScript("OnTextChanged", updatePermissionSuggestions)
+    memberSearch:SetScript("OnEditFocusGained", updatePermissionSuggestions)
+    memberSearch:SetScript("OnEditFocusLost", function()
+        C_Timer.After(0, function()
+            if not memberSearch:HasFocus() and not iRC:IsMouseOverFrame(suggestions) then suggestions:Hide() end
+        end)
+    end)
+    memberSearch:SetScript("OnEnterPressed", function(self)
+        local first = suggestionButtons[1]
+        if first and first:IsShown() and first.memberName then selectPermissionMember(first.memberName)
+        else selectPermissionMember(self:GetText()) end
+    end)
+    memberSearch:SetScript("OnEscapePressed", function(self) suggestions:Hide(); self:ClearFocus() end)
+    memberY = memberY - 62
+
+    for _, permission in ipairs(iRC.PermissionOrder) do
+        local permissionKey = permission
+        namedPermissionChecks[permission], memberY = CreateCompactManagementToggle(memberCard,
+            permissionLabels[permission], "Additional access for only the selected roster member.", memberY,
+            function()
+                return selectedPermissionMember
+                    and iRC:GetGuildMemberPermission(selectedPermissionMember, permissionKey)
+            end,
+            function(value)
+                if selectedPermissionMember then
+                    iRC:SetGuildMemberPermission(selectedPermissionMember, permissionKey, value)
+                end
+            end, true)
+    end
+
+    refreshMemberPermissionControls = function()
+        local canEdit = iRC:IsGuildMaster() and selectedPermissionMember ~= nil
+        selectedText:SetText(selectedPermissionMember
+            and (iRC.Colors.Green .. "Editing " .. iRC:FormatPlayerName(selectedPermissionMember) .. iRC.Colors.Reset)
+            or (iRC.Colors.Gray .. "Choose a roster member" .. iRC.Colors.Reset))
+        local configuredCount = #iRC:GetGuildMemberPermissionEntries()
+        configuredText:SetText(configuredCount > 0
+            and ("Individual grants configured for " .. configuredCount .. (configuredCount == 1 and " member." or " members."))
+            or "No individual member grants are configured.")
+        for _, control in pairs(namedPermissionChecks) do
+            control:Refresh()
+            control:SetEnabled(canEdit)
+            control:SetAlpha(canEdit and 1 or 0.42)
+        end
+    end
+    refreshMemberPermissionControls()
+    local memberCardHeight = math.abs(memberY) + 10
+    memberCard:SetHeight(memberCardHeight)
+    permissionPageY = permissionPageY - memberCardHeight - 12
+    guildPermissionsContent:SetHeight(math.max(math.abs(permissionPageY) + 8, 300))
 end
 
 local function LayoutGuildNotificationCards(showConflict)
     local notificationHeight = showConflict and notificationConflictHeight or notificationBaseHeight
     notificationCard:SetHeight(notificationHeight)
-    local permissionTop = notificationCardTop - notificationHeight - 12
-    permissionCard:ClearAllPoints()
-    permissionCard:SetPoint("TOPLEFT", guildNotificationsContent, "TOPLEFT", 12, permissionTop)
-    permissionCard:SetPoint("TOPRIGHT", guildNotificationsContent, "TOPRIGHT", -12, permissionTop)
-    local contentBottom = permissionTop - permissionCardHeight - 12
+    local contentBottom = notificationCardTop - notificationHeight - 12
     guildNotificationsContent:SetHeight(math.max(math.abs(contentBottom) + 8, 300))
 end
 
@@ -2311,6 +2535,7 @@ if iRC:IsTestAdmin() then
     CreateOnlineColumn(onlineHeader, "Version", 185, 85)
     CreateOnlineColumn(onlineHeader, "Guild", 275, 205)
     local onlineScroll = CreateFrame("ScrollFrame", nil, onlineList, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(onlineScroll)
     onlineScroll:SetPoint("TOPLEFT", onlineList, "TOPLEFT", 5, -25)
     onlineScroll:SetPoint("BOTTOMRIGHT", onlineList, "BOTTOMRIGHT", -24, 5)
     local onlineChild = CreateFrame("Frame", nil, onlineScroll)
@@ -2522,6 +2747,7 @@ local function RefreshGeneralNotificationAndAdminOptions()
         if canEdit then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
         if dropdown.managementRow then dropdown.managementRow:SetAlpha(canEdit and 1 or 0.48) end
     end
+    if refreshMemberPermissionControls then refreshMemberPermissionControls() end
     local welcomeConflict = iRC:GetPendingManagementConflict("WELCOME")
     welcomeConflictText:SetText(welcomeConflict and iRC:Text("MANAGEMENT_CONFLICT_INLINE", iRC:FormatPlayerName(welcomeConflict.source)) or "")
     welcomeConflictAccept:SetShown(welcomeConflict ~= nil)
@@ -2536,7 +2762,7 @@ local function Refresh()
     local canSwitchRulesView = managementAvailable or iRC:IsTestAdminGuildMaster()
     RefreshRulesView(canSwitchRulesView)
     LayoutSidebar(managementAvailable)
-    if (selectedTab == 8 or selectedTab == 10 or selectedTab == 11) and not managementAvailable then ShowTab(1) end
+    if (selectedTab == 8 or selectedTab == 10 or selectedTab == 11) and not managementAvailable then ShowTab(2) end
     if guildFoundAuditText then
         local records = iRC.GetGuildFoundAuditRecords and iRC:GetGuildFoundAuditRecords() or {}
         local lines = {}
@@ -2828,14 +3054,53 @@ end
 
 local managementPanels
 
+local function GetPanelScrollFrame(panel)
+    if not panel then return nil end
+    if panel.scrollFrame then return panel.scrollFrame end
+    local child = panel:GetChildren()
+    return child and child.GetVerticalScroll and child or nil
+end
+
+local function RestorePanelScroll(panel, position)
+    local scrollFrame = GetPanelScrollFrame(panel)
+    if not scrollFrame then return end
+    local scrollChild = scrollFrame:GetScrollChild()
+    local maximum = math.max(0,
+        (scrollChild and scrollChild:GetHeight() or 0) - (scrollFrame:GetHeight() or 0))
+    scrollFrame:SetVerticalScroll(math.max(0, math.min(maximum, tonumber(position) or 0)))
+end
+
+local function RestorePanelScrollAfterLayout(panel, position)
+    RestorePanelScroll(panel, position)
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, function()
+            if panel and panel:IsShown() then RestorePanelScroll(panel, position) end
+        end)
+    end
+end
+
 iRC.RefreshOptionsIfShown = function()
-    if settingsFrame:IsShown() then Refresh(); return end
+    if settingsFrame:IsShown() then
+        local panel = tabContents[selectedTab]
+        local scrollFrame = GetPanelScrollFrame(panel)
+        local position = scrollFrame and scrollFrame:GetVerticalScroll() or 0
+        Refresh()
+        RestorePanelScrollAfterLayout(panel, position)
+        return
+    end
     for _, panel in pairs(managementPanels or {}) do
-        if panel:IsShown() then Refresh(); return end
+        if panel:IsShown() then
+            local scrollFrame = GetPanelScrollFrame(panel)
+            local position = scrollFrame and scrollFrame:GetVerticalScroll() or 0
+            Refresh()
+            RestorePanelScrollAfterLayout(panel, position)
+            return
+        end
     end
 end
 
 managementPanels = {
+    permissions = guildPermissionsContainer,
     notifications = guildNotificationsContainer,
     homepage = guildHomepageContainer,
     guildFound = guildFoundContainer,
@@ -2852,6 +3117,9 @@ function iRC:ShowManagementPanel(panelKey, parent)
         self:HideManagementPanels()
         return false
     end
+    local preservePosition = panel:IsShown() and panel:GetParent() == parent
+    local priorScrollFrame = GetPanelScrollFrame(panel)
+    local priorPosition = preservePosition and priorScrollFrame and priorScrollFrame:GetVerticalScroll() or 0
     self:HideManagementPanels()
     Refresh()
     panel:SetParent(parent)
@@ -2859,7 +3127,7 @@ function iRC:ShowManagementPanel(panelKey, parent)
     panel:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, -8)
     panel:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -8, 8)
     panel:SetFrameLevel(parent:GetFrameLevel() + 2)
-    local scrollFrame = panel:GetChildren()
+    local scrollFrame = GetPanelScrollFrame(panel)
     local scrollChild = scrollFrame and scrollFrame.GetScrollChild and scrollFrame:GetScrollChild()
     if scrollChild then
         local function FitManagementContent(_, width)
@@ -2869,11 +3137,12 @@ function iRC:ShowManagementPanel(panelKey, parent)
         FitManagementContent(panel, panel:GetWidth())
     end
     panel:Show()
+    RestorePanelScrollAfterLayout(panel, priorPosition)
     return true
 end
 
 settingsFrame:SetScript("OnShow", Refresh)
-ShowTab(1)
+ShowTab(2)
 iRC.SettingsFrame = settingsFrame
 
 local stubPanel = CreateFrame("Frame", "iRCOptionsPanel", UIParent)

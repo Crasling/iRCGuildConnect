@@ -310,6 +310,7 @@ function Dashboard:Create()
         frame.headers[column] = button
     end
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(scroll)
     scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 14, -168)
     scroll:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -31, 14)
     frame.scroll = scroll

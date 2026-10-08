@@ -2,6 +2,26 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.16 - Guild Management Tools
+--------------------------------------------------------------------------------
+[ADDED] Permissions is now a dedicated Guild Master tab, with access configurable by guild rank and additional grants for specific roster members
+[ADDED] Rank Management supports single-member and selectable mass promotion or demotion through secure one-click actions, with its own delegated permission and test-admin preview
+[ADDED] Rank Access cards show everyone who currently receives each permission, identify individual grants, and keep long name lists readable
+[ADDED] Personal Settings is now available to every user and can choose a preferred startup page or retain the last viewed page
+[CHANGED] Personal character, minimap, chat-icon, map-pin, panel appearance, and character-speech options have moved into Personal Settings
+[CHANGED] Guild Snapshot is now Guild Overview, with clearer membership, activity, roster-composition, iRC-adoption, and attention summaries
+[CHANGED] Main navigation is more compact, wider, and scrollable; unavailable management tools remain hidden until their guild and permission requirements are met
+[CHANGED] Guild Members more clearly advertises its full-roster search for characters, linked alts, professions, and recipes
+[CHANGED] Scroll areas use slim iRC-styled controls in reserved gutters so they no longer overlap panel content or borders
+[FIX] Inactive-member removal uses the roster hierarchy and a protected one-click /gremove queue while leaving final authority to WoW's native guild permissions
+[FIX] Rank actions use the player's real guild rank, prevent changes to equal-or-higher members, and confirm changes from both refreshed roster data and WoW system messages
+[FIX] Native permission-denied messages immediately stop the complete removal, promotion, or demotion queue
+[FIX] Delayed guild-report package replays are ignored after a completed report has already been received
+[FIX] Guild Identity Management appears only for test admins or users with delegated identity access
+[FIX] Guild Rules and management-setting changes preserve the current scroll position
+[FIX] Opening iRC refreshes shared Guild Leaderboard data regardless of the selected startup page
+[FIX] Minimap right-click continues to open advanced connection, test-admin, diagnostic, and companion-addon settings
+
 v0.5.15 - Guild Snapshot & Guild Authority
 --------------------------------------------------------------------------------
 [ADDED] Guild Snapshot gives every member a compact one-page view of roster size, current activity, level spread, class balance, activity recency, review signals, iRC coverage, and roster momentum
@@ -13,7 +33,7 @@ v0.5.15 - Guild Snapshot & Guild Authority
 [CHANGED] Only a current iRC response satisfies addon verification; legacy compatible-addon presence, UI states, traffic, and cached profiles have been removed
 [CHANGED] Guild cards, member rows, Guild Rules, Guild Log, Inactive Members, and Verification use denser layouts so more useful information fits without oversized cards
 [FIX] Guild Homepage controls always pass strict boolean values to enabled-state APIs, preventing an options-window Lua error when guild management is unavailable
-[FIX] Manual Alt assignment uses an iRC-styled roster dropdown instead of relying on an incompatible static-popup edit box
+[FIX] Manual Alt assignment uses an iRC-styled roster search with name autofill instead of relying on an incompatible static-popup edit box
 
 v0.5.14 - Guild Homepage & Management
 --------------------------------------------------------------------------------

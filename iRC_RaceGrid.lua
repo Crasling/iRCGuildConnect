@@ -21,6 +21,7 @@ local CACHE_CHUNK_SIZE = 100
 local MAX_CHANNEL_PAYLOAD = 1024
 local MAX_CACHE_PARTS = 16
 local MAX_CACHE_PACKAGES = 32
+local CHANNEL_PACKAGE_DEDUP_WINDOW = 60
 local cacheUpdatingUntil = 0
 local lastCacheOpenRequestAt
 local channelJoinReady = false
@@ -226,6 +227,7 @@ local function hexToBytes(value)
 end
 
 local incomingChunks = {}
+local completedChannelPackages = {}
 local MAX_PENDING_PACKAGES = 32
 
 local function cleanIncomingChunks(now)
@@ -239,12 +241,26 @@ local function cleanIncomingChunks(now)
         end
     end
     if count >= MAX_PENDING_PACKAGES and oldestKey then incomingChunks[oldestKey] = nil end
+    for key, completedAt in pairs(completedChannelPackages) do
+        if type(completedAt) ~= "number" or now - completedAt > CHANNEL_PACKAGE_DEDUP_WINDOW then
+            completedChannelPackages[key] = nil
+        end
+    end
 end
 
 local function decodeChannelWire(message, sender)
     local direct = message:match("^" .. PREFIX .. ":([0-9a-fA-F]+)$")
     if direct then
         local decoded = hexToBytes(direct)
+        if not decoded then return nil end
+        local now = GetTime()
+        cleanIncomingChunks(now)
+        local payloadKey = fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
+        if completedChannelPackages[payloadKey] then
+            iRC:DebugMsg("Ignored replayed guild report package from " .. tostring(sender) .. ".", 3)
+            return nil
+        end
+        completedChannelPackages[payloadKey] = now
         if decoded and decoded:match("^GUILD_REPORT") then iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_RECEIVING", 1, 1, sender), 3) end
         return decoded
     end
@@ -253,6 +269,7 @@ local function decodeChannelWire(message, sender)
     if not messageId or not part or not total or total < 2 or total > 8 or part < 1 or part > total then return nil end
     cleanIncomingChunks(GetTime())
     local key = fullNameKey(sender) .. ":" .. messageId
+    if completedChannelPackages[key] then return nil end
     local entry = incomingChunks[key]
     if not entry or entry.total ~= total or GetTime() - entry.startedAt > 15 then
         entry = { total = total, startedAt = GetTime(), parts = {} }
@@ -262,7 +279,17 @@ local function decodeChannelWire(message, sender)
     iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_RECEIVING", part, total, sender), 3)
     for index = 1, total do if not entry.parts[index] then return nil end end
     incomingChunks[key] = nil
-    return hexToBytes(table.concat(entry.parts))
+    local decoded = hexToBytes(table.concat(entry.parts))
+    if not decoded then return nil end
+    local now = GetTime()
+    local payloadKey = fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
+    completedChannelPackages[key] = now
+    if completedChannelPackages[payloadKey] then
+        iRC:DebugMsg("Ignored replayed guild report package from " .. tostring(sender) .. ".", 3)
+        return nil
+    end
+    completedChannelPackages[payloadKey] = now
+    return decoded
 end
 
 local function getChannelId(channelName)
@@ -1062,6 +1089,7 @@ function RaceGrid:ClearCachedReportsForTesting()
     wipe(cacheChunkWorkQueue)
     cacheChunkWorkHead, cacheChunkWorkTail = 1, 0
     wipe(incomingChunks)
+    wipe(completedChannelPackages)
     wipe(incomingCacheTransfers)
     wipe(cacheRequests)
     wipe(cacheRequestBySender)

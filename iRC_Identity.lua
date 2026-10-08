@@ -588,7 +588,7 @@ function Identity:ReceiveSync(parts, sender)
         local timestamp = tonumber(parts[3])
         local memberName, mainName, role = cleanWireText(parts[4], 80), cleanWireText(parts[5], 80), parts[6]
         local now = time()
-        local senderAuthorized = iRC:GuildRankHasPermission(senderRank, "identity")
+        local senderAuthorized = iRC:GuildMemberHasPermission(sender, "identity")
         if not senderAuthorized or not timestamp
             or timestamp > now + 300 or timestamp < now - 180 * 86400
             or (role ~= "ALT" and role ~= "BANK" and role ~= "REMOVE")
@@ -686,7 +686,7 @@ function Identity:ReceiveSync(parts, sender)
         end
         return true
     end
-    if not iRC:GuildRankHasPermission(senderRank, "rosterHistory") then return false end
+    if not iRC:GuildMemberHasPermission(sender, "rosterHistory") then return false end
     if parts[1] ~= "IDENT_EVENT" then return false end
     local id, occurredAt = cleanWireText(parts[3], 12), tonumber(parts[4])
     local eventType, name = cleanWireText(parts[5], 18), cleanWireText(parts[6], 80)
