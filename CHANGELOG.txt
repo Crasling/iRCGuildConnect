@@ -2,6 +2,16 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.17 - Rank Management
+--------------------------------------------------------------------------------
+[NEW] Rank Management can promote or demote one member or a whole selected rank
+[IMPROVED] The rank picker now shows every guild rank and how many members it contains
+[IMPROVED] Your own character appears in the list but is clearly marked and cannot be selected
+[IMPROVED] Promotions, demotions, and removals are grouped into the largest batches WoW allows per click
+[FIXED] Rank changes now appear in the iRC panel as soon as WoW confirms them
+[FIXED] Rank menus no longer overlap buttons, allow click-through, or move away while scrolling
+[FIXED] Changing the panel scale is now smooth and only resizes the window after releasing the slider
+
 v0.5.16 - Guild Management Tools
 --------------------------------------------------------------------------------
 [ADDED] Permissions is now a dedicated Guild Master tab, with access configurable by guild rank and additional grants for specific roster members

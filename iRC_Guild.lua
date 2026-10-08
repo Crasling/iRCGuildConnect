@@ -11,6 +11,7 @@ local presenceConnection, reviewTicket, reviewAt, selectedOfficer
 local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 45, 60
 local sessionStartedAt = time()
 local guildRosterSnapshot, guildRosterSnapshotValid = {}, false
+local confirmedRankChanges = {}
 local memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries
 local memberRowsDirty = {}
 local rosterUpdateTicket
@@ -52,6 +53,33 @@ function iRC:InvalidateGuildRosterSnapshot()
     self:InvalidateGuildMemberRows()
 end
 
+local function getRankName(rankIndex)
+    if GetNumGuildMembers and GetGuildRosterInfo then
+        for index = 1, GetNumGuildMembers(true) do
+            local _, rankName, memberRankIndex = GetGuildRosterInfo(index)
+            if memberRankIndex == rankIndex and rankName and rankName ~= "" then return rankName end
+        end
+    end
+    if GuildControlGetRankName then
+        local ok, rankName = pcall(GuildControlGetRankName, rankIndex + 1)
+        if ok and rankName and rankName ~= "" then return rankName end
+    end
+    return "Rank " .. tostring(rankIndex)
+end
+
+function iRC:RecordConfirmedGuildRankChange(name, rankIndex)
+    rankIndex = tonumber(rankIndex)
+    if not name or not rankIndex then return false end
+    rankIndex = math.max(0, math.floor(rankIndex))
+    confirmedRankChanges[self:NormalizeName(name)] = {
+        guildKey = self:GetGuildKey(),
+        rankIndex = rankIndex,
+        rankName = getRankName(rankIndex),
+    }
+    self:InvalidateGuildRosterSnapshot()
+    return true
+end
+
 local function pruneDepartedMemberData(self, snapshot)
     local connection = self:GetConnection()
     if not connection or #snapshot < 1 then return end
@@ -87,6 +115,20 @@ function iRC:GetGuildRosterSnapshot()
     for index = 1, count do
         local name, rankName, rankIndex, level, className, _, publicNote, officerNote, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
         if name then
+            local nameKey = self:NormalizeName(name)
+            local confirmedRank = confirmedRankChanges[nameKey]
+            if confirmedRank then
+                if confirmedRank.guildKey ~= self:GetGuildKey()
+                    or rankIndex == confirmedRank.rankIndex then
+                    confirmedRankChanges[nameKey] = nil
+                else
+                    -- WoW has already confirmed this exact command. Forever
+                    -- can keep returning the old roster rank for an extended
+                    -- period, so retain the confirmed value until the native
+                    -- roster catches up instead of reverting on a timer.
+                    rankIndex, rankName = confirmedRank.rankIndex, confirmedRank.rankName
+                end
+            end
             local lastOnlineDays
             if not online and GetGuildRosterLastOnline then
                 local years, months, days, hours = GetGuildRosterLastOnline(index)
@@ -619,7 +661,9 @@ frame:SetScript("OnEvent", function(_, event)
             if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
             if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
             if iRC.MainUI and iRC.MainUI.frame
-                and (iRC.MainUI.frame.category == "Guild Members" or iRC.MainUI.frame.category == "Guild Overview") then
+                and (iRC.MainUI.frame.category == "Guild Members"
+                    or iRC.MainUI.frame.category == "Guild Overview"
+                    or iRC.MainUI.frame.category == "Rank Management") then
                 iRC.MainUI:RefreshIfShown()
             end
         end

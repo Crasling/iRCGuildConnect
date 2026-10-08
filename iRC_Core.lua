@@ -1367,10 +1367,27 @@ end
 
 function iRC:GetGuildRankOptions()
     local found, options = {}, {}
+    local rankCount = 0
+    if GuildControlGetNumRanks then
+        local ok, value = pcall(GuildControlGetNumRanks)
+        if ok then rankCount = tonumber(value) or 0 end
+    end
+    if rankCount > 0 then
+        for rankPosition = 1, math.floor(rankCount) do
+            local rankName
+            if GuildControlGetRankName then
+                local ok, value = pcall(GuildControlGetRankName, rankPosition)
+                if ok then rankName = value end
+            end
+            local rankIndex = rankPosition - 1
+            found[rankIndex] = rankName and rankName ~= "" and rankName or ("Rank " .. rankIndex)
+        end
+    end
     if GetNumGuildMembers and GetGuildRosterInfo then
         for index = 1, GetNumGuildMembers(true) do
             local _, rankName, rankIndex = GetGuildRosterInfo(index)
-            if type(rankIndex) == "number" and not found[rankIndex] then
+            if type(rankIndex) == "number" and (not found[rankIndex]
+                or found[rankIndex] == "Rank " .. rankIndex) then
                 found[rankIndex] = rankName or ("Rank " .. rankIndex)
             end
         end

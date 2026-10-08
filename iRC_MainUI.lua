@@ -966,7 +966,7 @@ function UI:Create()
         if iRC.Diagnostics then iRC.Diagnostics:Trace("INACTIVE_REMOVE", tostring(message)) end
     end
 
-    local function prepareRemovalMacro(memberName)
+    local function prepareRemovalMacro(memberNames)
         if InCombatLockdown and InCombatLockdown() then
             removalDebug("macro preparation blocked by combat", 2)
             return false
@@ -976,7 +976,15 @@ function UI:Create()
             return false
         end
 
-        local command = "/gremove " .. tostring(memberName):gsub("[\r\n]", "")
+        local commands = {}
+        for _, memberName in ipairs(memberNames or {}) do
+            commands[#commands + 1] = "/gremove " .. tostring(memberName):gsub("[\r\n]", "")
+        end
+        local command = table.concat(commands, "\n")
+        if command == "" or #command > 255 then
+            removalDebug("invalid batch macro length=" .. tostring(#command), 1)
+            return false
+        end
         local index = GetMacroIndexByName(removalMacroName)
         removalDebug("preparing " .. removalMacroName .. " as '" .. command .. "'; existing index="
             .. tostring(index))
@@ -998,6 +1006,10 @@ function UI:Create()
         local actualBody = GetMacroBody and GetMacroBody(index) or nil
         removalDebug("macro ready at index=" .. tostring(index) .. ", body='" .. tostring(actualBody) .. "'"
             .. ", exact=" .. tostring(actualBody == command))
+        if actualBody and actualBody ~= command then
+            removalDebug("macro body was truncated or changed by WoW", 1)
+            return false
+        end
         removalQueue.remove:SetAttribute("type1", "macro")
         removalQueue.remove:SetAttribute("macro1", index)
         removalQueue.remove:SetAttribute("macrotext1", nil)
@@ -1021,7 +1033,7 @@ function UI:Create()
         local skipped = removalQueue.skipped or 0
         local failed = removalQueue.failed or 0
         removalQueue.active = nil
-        removalQueue.waitingName = nil
+        removalQueue.waitingNames = nil
         removalQueue.timerTicket = nil
         removalQueue:Hide()
         if removalQueue.testPreview then
@@ -1035,12 +1047,12 @@ function UI:Create()
     end
 
     local function abortRemovalQueueForNativePermission()
-        if not removalQueue.active or not removalQueue.waitingName then return false end
+        if not removalQueue.active or not removalQueue.waitingNames then return false end
         local remaining = math.max(1, (removalQueue.total or 1) - (removalQueue.index or 1) + 1)
         removalQueue.failed = (removalQueue.failed or 0) + remaining
         removalDebug("WoW denied native guild permission; cancelling " .. tostring(remaining)
             .. " queued action(s)", 1)
-        removalQueue.active, removalQueue.currentName, removalQueue.waitingName = nil, nil, nil
+        removalQueue.active, removalQueue.currentNames, removalQueue.waitingNames = nil, nil, nil
         removalQueue.timerTicket, removalQueue.macroReady, removalQueue.testPreview = nil, nil, nil
         removalQueue:Hide()
         iRC:Print(iRC.Colors.Red .. "Removal queue stopped: WoW says this character does not have native "
@@ -1052,37 +1064,41 @@ function UI:Create()
     end
 
     local function resolvePendingRemoval(finalCheck)
-        local name = removalQueue.waitingName
-        if not removalQueue.active or not name then return end
+        local names = removalQueue.waitingNames
+        if not removalQueue.active or not names then return end
         if iRC.InvalidateGuildRosterSnapshot then iRC:InvalidateGuildRosterSnapshot() end
-        local stillPresent = false
+        local present = {}
         for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
-            if iRC:NormalizeName(member.name) == iRC:NormalizeName(name) then
-                stillPresent = true
-                break
+            present[iRC:NormalizeName(member.name)] = true
+        end
+        local remaining = 0
+        for _, name in ipairs(names) do
+            if present[iRC:NormalizeName(name)] then remaining = remaining + 1 end
+        end
+        removalDebug("batch roster check: remaining=" .. tostring(remaining) .. "/" .. tostring(#names)
+            .. ", final=" .. tostring(finalCheck == true))
+        if remaining > 0 and not finalCheck then return end
+
+        removalQueue.waitingNames = nil
+        removalQueue.timerTicket = nil
+        for _, name in ipairs(names) do
+            if present[iRC:NormalizeName(name)] then
+                removalQueue.failed = (removalQueue.failed or 0) + 1
+                iRC:Print(iRC.Colors.Red .. iRC:Text("INACTIVE_MEMBERS_QUEUE_FAILED", iRC:FormatPlayerName(name))
+                    .. iRC.Colors.Reset)
+            else
+                removalQueue.removed = (removalQueue.removed or 0) + 1
+                iRC:Print(iRC:Text("INACTIVE_MEMBERS_QUEUE_CONFIRMED", iRC:FormatPlayerName(name)))
             end
         end
-        removalDebug("roster check for " .. tostring(name) .. ": present=" .. tostring(stillPresent)
-            .. ", final=" .. tostring(finalCheck == true))
-        if stillPresent and not finalCheck then return end
-
-        removalQueue.waitingName = nil
-        removalQueue.timerTicket = nil
-        if stillPresent then
-            removalQueue.failed = (removalQueue.failed or 0) + 1
-            iRC:Print(iRC.Colors.Red .. iRC:Text("INACTIVE_MEMBERS_QUEUE_FAILED", iRC:FormatPlayerName(name))
-                .. iRC.Colors.Reset)
-        else
-            removalQueue.removed = (removalQueue.removed or 0) + 1
-            iRC:Print(iRC:Text("INACTIVE_MEMBERS_QUEUE_CONFIRMED", iRC:FormatPlayerName(name)))
-        end
-        removalQueue.index = (removalQueue.index or 1) + 1
+        removalQueue.index = removalQueue.batchNextIndex or ((removalQueue.index or 1) + #names)
+        removalQueue.currentNames, removalQueue.batchNextIndex = nil, nil
         advanceRemovalQueue()
         UI:RefreshIfShown()
     end
 
     advanceRemovalQueue = function()
-        if not removalQueue.active or removalQueue.waitingName then return end
+        if not removalQueue.active or removalQueue.waitingNames then return end
         if not iRC:HasGuildPermission("memberRemoval") then
             iRC:Print(iRC.Colors.Red .. "The removal queue stopped because your delegated permission is no longer active."
                 .. iRC.Colors.Reset)
@@ -1092,19 +1108,46 @@ function UI:Create()
         end
 
         while removalQueue.index <= removalQueue.total do
-            local requestedName = removalQueue.items[removalQueue.index]
-            local candidate = findQueueCandidate(requestedName, removalQueue.threshold, removalQueue.testPreview)
-            if candidate then
-                removalQueue.currentName = candidate.name
-                removalQueue.progress:SetText(tostring(removalQueue.index) .. " / " .. tostring(removalQueue.total))
+            local batchNames, commands = {}, {}
+            local cursor = removalQueue.index
+            while cursor <= removalQueue.total do
+                local requestedName = removalQueue.items[cursor]
+                local candidate = findQueueCandidate(requestedName, removalQueue.threshold, removalQueue.testPreview)
+                if candidate then
+                    local line = "/gremove " .. tostring(candidate.name):gsub("[\r\n]", "")
+                    local body = table.concat(commands, "\n")
+                    local nextLength = #body + (#commands > 0 and 1 or 0) + #line
+                    if nextLength > 255 then break end
+                    commands[#commands + 1] = line
+                    batchNames[#batchNames + 1] = candidate.name
+                else
+                    removalQueue.skipped = (removalQueue.skipped or 0) + 1
+                    iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_QUEUE_SKIPPED",
+                        iRC:FormatPlayerName(requestedName)) .. iRC.Colors.Reset)
+                end
+                cursor = cursor + 1
+            end
+            if #batchNames == 0 then
+                if cursor <= removalQueue.total then
+                    removalQueue.failed = (removalQueue.failed or 0) + 1
+                    iRC:Print(iRC.Colors.Red .. "A removal command exceeds WoW's 255-byte macro limit."
+                        .. iRC.Colors.Reset)
+                    cursor = cursor + 1
+                end
+                removalQueue.index = cursor
+            else
+                removalQueue.currentNames = batchNames
+                removalQueue.batchNextIndex = cursor
+                local batchEnd = cursor - 1
+                removalQueue.progress:SetText(tostring(removalQueue.index) .. "-" .. tostring(batchEnd)
+                    .. " / " .. tostring(removalQueue.total))
                 if removalQueue.testPreview then
                     removalQueue.macroReady = nil
-                    removalQueue.testRemove.text:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_TEST_REMOVE",
-                        iRC:FormatPlayerName(candidate.name)))
+                    removalQueue.testRemove.text:SetText("Simulate removal batch (" .. #batchNames .. ")")
                     removalQueue.testRemove:Show()
                     removalQueue.combatBlocker:Hide()
-                    removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_TEST_BODY",
-                        iRC:FormatPlayerName(candidate.name), removalQueue.index, removalQueue.total))
+                    removalQueue.body:SetText("Test-admin preview: one click simulates removing " .. #batchNames
+                        .. " selected members. No guild roster changes will be made.")
                 elseif InCombatLockdown and InCombatLockdown() then
                     removalQueue.macroReady = nil
                     removalQueue.testRemove:Hide()
@@ -1112,21 +1155,17 @@ function UI:Create()
                     removalQueue.combatBlocker:Show()
                 else
                     removalQueue.testRemove:Hide()
-                    removalQueue.remove.text:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_REMOVE",
-                        iRC:FormatPlayerName(candidate.name)))
-                    removalQueue.macroReady = prepareRemovalMacro(candidate.name)
-                    removalDebug("popup candidate=" .. tostring(candidate.name) .. ", macroReady="
+                    removalQueue.remove.text:SetText("Remove batch (" .. #batchNames .. ")")
+                    removalQueue.macroReady = prepareRemovalMacro(batchNames)
+                    removalDebug("popup batch=" .. tostring(#batchNames) .. ", macroReady="
                         .. tostring(removalQueue.macroReady == true))
                     removalQueue.remove:SetEnabled(removalQueue.macroReady == true)
                     removalQueue.remove:SetAlpha(removalQueue.macroReady and 1 or 0.42)
                     removalQueue.combatBlocker:Hide()
-                    if removalQueue.macroReady then
-                        removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_BODY",
-                            iRC:FormatPlayerName(candidate.name), removalQueue.index, removalQueue.total))
-                    else
-                        removalQueue.body:SetText("iRC could not create or update its iRC_KickQueue macro. "
-                            .. "Free a general macro slot, leave combat, and reopen this removal queue.")
-                    end
+                    removalQueue.body:SetText(removalQueue.macroReady
+                        and ("Click once to remove this batch of " .. #batchNames
+                            .. " members. iRC will verify every removal before continuing.")
+                        or "iRC could not create or update its iRC_KickQueue macro. Free a general macro slot, leave combat, and reopen this removal queue.")
                 end
                 removalQueue.skip:SetEnabled(true)
                 removalQueue.skip:SetAlpha(1)
@@ -1134,11 +1173,6 @@ function UI:Create()
                 removalQueue:Raise()
                 return
             end
-
-            removalQueue.skipped = (removalQueue.skipped or 0) + 1
-            iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_QUEUE_SKIPPED",
-                iRC:FormatPlayerName(requestedName)) .. iRC.Colors.Reset)
-            removalQueue.index = removalQueue.index + 1
         end
         finishRemovalQueue()
     end
@@ -1152,8 +1186,9 @@ function UI:Create()
         removalQueue.removed = 0
         removalQueue.skipped = 0
         removalQueue.failed = 0
-        removalQueue.currentName = nil
-        removalQueue.waitingName = nil
+        removalQueue.currentNames = nil
+        removalQueue.waitingNames = nil
+        removalQueue.batchNextIndex = nil
         removalQueue.timerTicket = nil
         removalQueue.macroReady = nil
         removalQueue.testPreview = testPreview == true
@@ -1164,8 +1199,9 @@ function UI:Create()
 
     function removalQueue:Cancel()
         self.active = nil
-        self.currentName = nil
-        self.waitingName = nil
+        self.currentNames = nil
+        self.waitingNames = nil
+        self.batchNextIndex = nil
         self.timerTicket = nil
         self.testPreview = nil
         self:Hide()
@@ -1173,18 +1209,22 @@ function UI:Create()
 
     removalQueue.cancel:SetScript("OnClick", function() removalQueue:Cancel() end)
     removalQueue.skip:SetScript("OnClick", function()
-        if not removalQueue.active or removalQueue.waitingName then return end
-        removalQueue.skipped = (removalQueue.skipped or 0) + 1
-        removalQueue.index = (removalQueue.index or 1) + 1
+        if not removalQueue.active or removalQueue.waitingNames then return end
+        local count = #(removalQueue.currentNames or {})
+        removalQueue.skipped = (removalQueue.skipped or 0) + count
+        removalQueue.index = removalQueue.batchNextIndex or ((removalQueue.index or 1) + math.max(1, count))
+        removalQueue.currentNames, removalQueue.batchNextIndex = nil, nil
         advanceRemovalQueue()
     end)
     removalQueue.testRemove:SetScript("OnClick", function()
-        if not removalQueue.active or not removalQueue.testPreview or removalQueue.waitingName
-            or not removalQueue.currentName then return end
-        iRC:Print(iRC:Text("INACTIVE_MEMBERS_TEST_REMOVE",
-            iRC:FormatPlayerName(removalQueue.currentName)))
-        removalQueue.removed = (removalQueue.removed or 0) + 1
-        removalQueue.index = (removalQueue.index or 1) + 1
+        if not removalQueue.active or not removalQueue.testPreview or removalQueue.waitingNames
+            or not removalQueue.currentNames then return end
+        for _, name in ipairs(removalQueue.currentNames) do
+            iRC:Print(iRC:Text("INACTIVE_MEMBERS_TEST_REMOVE", iRC:FormatPlayerName(name)))
+            removalQueue.removed = (removalQueue.removed or 0) + 1
+        end
+        removalQueue.index = removalQueue.batchNextIndex or removalQueue.index
+        removalQueue.currentNames, removalQueue.batchNextIndex = nil, nil
         advanceRemovalQueue()
     end)
     removalQueue.remove:SetScript("PostClick", function(_, mouseButton)
@@ -1193,17 +1233,17 @@ function UI:Create()
             .. tostring(removalQueue.macroReady == true) .. ", command='"
             .. tostring(removalQueue.removeCommand) .. "'")
         if mouseButton ~= "LeftButton" then return end
-        if not removalQueue.active or removalQueue.waitingName or not removalQueue.currentName then return end
+        if not removalQueue.active or removalQueue.waitingNames or not removalQueue.currentNames then return end
         if InCombatLockdown and InCombatLockdown() then
             removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_COMBAT"))
             removalQueue.combatBlocker:Show()
             return
         end
         if not removalQueue.macroReady then return end
-        removalQueue.waitingName = removalQueue.currentName
-        removalDebug("waiting for roster confirmation of " .. tostring(removalQueue.waitingName))
-        removalQueue.body:SetText(iRC:Text("INACTIVE_MEMBERS_QUEUE_WAITING",
-            iRC:FormatPlayerName(removalQueue.waitingName)))
+        removalQueue.waitingNames = removalQueue.currentNames
+        removalDebug("waiting for roster confirmation of batch size " .. tostring(#removalQueue.waitingNames))
+        removalQueue.body:SetText("Waiting for the guild roster to confirm " .. #removalQueue.waitingNames
+            .. " removals...")
         removalQueue.remove:SetEnabled(false)
         removalQueue.remove:SetAlpha(0.42)
         removalQueue.skip:SetEnabled(false)
@@ -1214,7 +1254,7 @@ function UI:Create()
             removalQueue.timerTicket = ticket
             C_Timer.After(8, function()
                 if removalQueue.timerTicket == ticket then
-                    removalDebug("confirmation timeout reached for " .. tostring(removalQueue.waitingName), 2)
+                    removalDebug("confirmation timeout reached for removal batch", 2)
                     resolvePendingRemoval(true)
                 end
             end)
@@ -1228,19 +1268,19 @@ function UI:Create()
     removalQueue:RegisterEvent("PLAYER_REGEN_ENABLED")
     removalQueue:SetScript("OnEvent", function(_, event, message)
         if not removalQueue.active then return end
-        removalDebug("event=" .. tostring(event) .. ", waiting=" .. tostring(removalQueue.waitingName))
-        if event == "CHAT_MSG_SYSTEM" and removalQueue.waitingName
+        removalDebug("event=" .. tostring(event) .. ", waiting=" .. tostring(removalQueue.waitingNames ~= nil))
+        if event == "CHAT_MSG_SYSTEM" and removalQueue.waitingNames
             and isNativePermissionDeniedMessage(message) then
             abortRemovalQueueForNativePermission()
-        elseif event == "GUILD_ROSTER_UPDATE" and removalQueue.waitingName then
+        elseif event == "GUILD_ROSTER_UPDATE" and removalQueue.waitingNames then
             if C_Timer and C_Timer.After then
                 C_Timer.After(0, function() resolvePendingRemoval(false) end)
             else
                 resolvePendingRemoval(false)
             end
-        elseif event == "PLAYER_REGEN_DISABLED" and not removalQueue.waitingName then
+        elseif event == "PLAYER_REGEN_DISABLED" and not removalQueue.waitingNames then
             advanceRemovalQueue()
-        elseif event == "PLAYER_REGEN_ENABLED" and not removalQueue.waitingName then
+        elseif event == "PLAYER_REGEN_ENABLED" and not removalQueue.waitingNames then
             advanceRemovalQueue()
         end
     end)
@@ -1305,11 +1345,16 @@ function UI:Create()
         if iRC.Diagnostics then iRC.Diagnostics:Trace("RANK_MANAGEMENT", tostring(message)) end
     end
 
-    local function prepareRankMacro(name, action)
+    local function prepareRankMacro(names, action)
         if InCombatLockdown and InCombatLockdown() then return false end
         if not GetMacroIndexByName or not CreateMacro or not EditMacro then return false end
-        local command = (action == "PROMOTE" and "/gpromote " or "/gdemote ")
-            .. tostring(name):gsub("[\r\n]", "")
+        local prefix = action == "PROMOTE" and "/gpromote " or "/gdemote "
+        local commands = {}
+        for _, name in ipairs(names or {}) do
+            commands[#commands + 1] = prefix .. tostring(name):gsub("[\r\n]", "")
+        end
+        local command = table.concat(commands, "\n")
+        if command == "" or #command > 255 then return false end
         local index = GetMacroIndexByName(rankMacroName)
         local ok
         if index and index > 0 then
@@ -1320,6 +1365,11 @@ function UI:Create()
         if not ok then return false end
         index = GetMacroIndexByName(rankMacroName)
         if not index or index <= 0 then return false end
+        local actualBody = GetMacroBody and GetMacroBody(index) or nil
+        if actualBody and actualBody ~= command then
+            rankQueueDebug("macro body was truncated or changed by WoW", 1)
+            return false
+        end
         rankQueue.apply:SetAttribute("type1", "macro")
         rankQueue.apply:SetAttribute("macro1", index)
         rankQueue.apply:SetAttribute("macrotext1", nil)
@@ -1342,7 +1392,7 @@ function UI:Create()
         if not rankQueue.active then return end
         local changed, skipped, failed = rankQueue.changed or 0, rankQueue.skipped or 0, rankQueue.failed or 0
         local simulated = rankQueue.testPreview == true
-        rankQueue.active, rankQueue.waitingName, rankQueue.timerTicket = nil, nil, nil
+        rankQueue.active, rankQueue.waitingNames, rankQueue.waitingByKey, rankQueue.timerTicket = nil, nil, nil, nil
         rankQueue:Hide()
         if simulated then
             iRC:Print("Rank-management simulation complete: " .. changed .. " change(s), " .. skipped .. " skipped.")
@@ -1356,12 +1406,12 @@ function UI:Create()
     end
 
     local function abortRankQueueForNativePermission()
-        if not rankQueue.active or not rankQueue.waitingName then return false end
+        if not rankQueue.active or not rankQueue.waitingNames then return false end
         local remaining = math.max(1, (rankQueue.total or 1) - (rankQueue.index or 1) + 1)
         rankQueue.failed = (rankQueue.failed or 0) + remaining
         rankQueueDebug("WoW denied native guild permission; cancelling " .. tostring(remaining)
             .. " queued action(s)", 1)
-        rankQueue.active, rankQueue.currentName, rankQueue.waitingName = nil, nil, nil
+        rankQueue.active, rankQueue.currentNames, rankQueue.waitingNames, rankQueue.waitingByKey = nil, nil, nil, nil
         rankQueue.timerTicket, rankQueue.macroReady, rankQueue.testPreview = nil, nil, nil
         rankQueue:Hide()
         iRC:Print(iRC.Colors.Red .. "Rank-management queue stopped: WoW says this character does not have native "
@@ -1372,53 +1422,76 @@ function UI:Create()
         return true
     end
 
-    local function confirmPendingRankChange(source)
-        local name = rankQueue.waitingName
-        if not rankQueue.active or not name then return false end
-        rankQueueDebug((source or "WoW") .. " confirmed " .. tostring(rankQueue.action)
-            .. " for " .. tostring(name))
-        rankQueue.waitingName, rankQueue.timerTicket = nil, nil
-        rankQueue.changed = (rankQueue.changed or 0) + 1
-        iRC:Print((rankQueue.action == "PROMOTE" and "Promoted " or "Demoted ")
-            .. iRC:FormatPlayerName(name) .. ".")
-        rankQueue.index = rankQueue.index + 1
+    local function completeRankBatch()
+        if not rankQueue.active or not rankQueue.waitingNames then return false end
+        for _ in pairs(rankQueue.waitingByKey or {}) do return false end
+        rankQueue.waitingNames, rankQueue.waitingByKey, rankQueue.timerTicket = nil, nil, nil
+        rankQueue.index = rankQueue.batchNextIndex or rankQueue.index
+        rankQueue.currentNames, rankQueue.batchNextIndex = nil, nil
+        iRC:RefreshGuildRoster()
         advanceRankQueue()
-        UI:RefreshIfShown()
+        if frame:IsShown() and frame.category == "Rank Management" then UI:Refresh()
+        else UI:RefreshIfShown() end
         return true
     end
 
-    local function systemMessageConfirmsRankChange(message)
-        if not rankQueue.active or not rankQueue.waitingName then return false end
+    local function confirmPendingRankMember(name, source)
+        if not rankQueue.active or not rankQueue.waitingByKey then return false end
+        local key = iRC:NormalizeName(name)
+        local confirmedName = rankQueue.waitingByKey[key]
+        if not confirmedName then return false end
+        local confirmedRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
+            or rankQueue.expectedRank + 1
+        rankQueueDebug((source or "WoW") .. " confirmed " .. tostring(rankQueue.action)
+            .. " for " .. tostring(confirmedName))
+        if iRC.RecordConfirmedGuildRankChange then
+            iRC:RecordConfirmedGuildRankChange(confirmedName, confirmedRank)
+        end
+        rankQueue.waitingByKey[key] = nil
+        rankQueue.changed = (rankQueue.changed or 0) + 1
+        iRC:Print((rankQueue.action == "PROMOTE" and "Promoted " or "Demoted ")
+            .. iRC:FormatPlayerName(confirmedName) .. ".")
+        completeRankBatch()
+        return true
+    end
+
+    local function rankNameFromConfirmationMessage(message)
+        if not rankQueue.active or not rankQueue.waitingByKey then return nil end
         local plain = cleanSystemMessage(message)
         local action = rankQueue.action == "PROMOTE" and "promoted" or "demoted"
         local reportedName = plain:lower():match(" has " .. action .. " (.-) to ")
             or plain:lower():match(" have " .. action .. " (.-) to ")
-        if not reportedName then return false end
+        if not reportedName then return nil end
         reportedName = reportedName:gsub("^%[", ""):gsub("%]$", "")
-        return iRC:NormalizeName(reportedName) == iRC:NormalizeName(rankQueue.waitingName)
+        return rankQueue.waitingByKey[iRC:NormalizeName(reportedName)]
     end
 
     local function resolvePendingRankChange(finalCheck)
-        local name = rankQueue.waitingName
-        if not rankQueue.active or not name then return end
-        local currentRank = getCurrentRank(name)
+        if not rankQueue.active or not rankQueue.waitingNames then return end
         local wantedRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
             or rankQueue.expectedRank + 1
-        rankQueueDebug("roster check for " .. tostring(name) .. ": expected=" .. tostring(wantedRank)
-            .. ", current=" .. tostring(currentRank) .. ", final=" .. tostring(finalCheck == true))
-        if currentRank ~= wantedRank and not finalCheck then return end
-        if currentRank == wantedRank then
-            confirmPendingRankChange("guild roster")
-            return
-        else
-            rankQueue.waitingName, rankQueue.timerTicket = nil, nil
-            rankQueue.failed = (rankQueue.failed or 0) + 1
-            iRC:Print(iRC.Colors.Red .. "WoW did not confirm the rank change for "
-                .. iRC:FormatPlayerName(name) .. "." .. iRC.Colors.Reset)
+        local pending = {}
+        for _, name in ipairs(rankQueue.waitingNames) do
+            if rankQueue.waitingByKey[iRC:NormalizeName(name)] then pending[#pending + 1] = name end
         end
-        rankQueue.index = rankQueue.index + 1
-        advanceRankQueue()
-        UI:RefreshIfShown()
+        for _, name in ipairs(pending) do
+            local currentRank = getCurrentRank(name)
+            rankQueueDebug("batch roster check for " .. tostring(name) .. ": expected=" .. tostring(wantedRank)
+                .. ", current=" .. tostring(currentRank) .. ", final=" .. tostring(finalCheck == true))
+            if currentRank == wantedRank then confirmPendingRankMember(name, "guild roster") end
+            if not rankQueue.waitingNames then return end
+        end
+        if not finalCheck then return end
+        for _, name in ipairs(rankQueue.waitingNames) do
+            local key = iRC:NormalizeName(name)
+            if rankQueue.waitingByKey[key] then
+                rankQueue.waitingByKey[key] = nil
+                rankQueue.failed = (rankQueue.failed or 0) + 1
+                iRC:Print(iRC.Colors.Red .. "WoW did not confirm the rank change for "
+                    .. iRC:FormatPlayerName(name) .. "." .. iRC.Colors.Reset)
+            end
+        end
+        completeRankBatch()
     end
 
     scheduleRankConfirmationPoll = function(ticket, attempt)
@@ -1427,9 +1500,9 @@ function UI:Create()
             return
         end
         C_Timer.After(1.5, function()
-            if rankQueue.timerTicket ~= ticket or not rankQueue.waitingName then return end
+            if rankQueue.timerTicket ~= ticket or not rankQueue.waitingNames then return end
             resolvePendingRankChange(attempt >= 8)
-            if rankQueue.timerTicket ~= ticket or not rankQueue.waitingName then return end
+            if rankQueue.timerTicket ~= ticket or not rankQueue.waitingNames then return end
             rankQueueDebug("requesting a fresh roster for confirmation attempt " .. tostring(attempt + 1))
             iRC:RefreshGuildRoster()
             scheduleRankConfirmationPoll(ticket, attempt + 1)
@@ -1437,7 +1510,7 @@ function UI:Create()
     end
 
     advanceRankQueue = function()
-        if not rankQueue.active or rankQueue.waitingName then return end
+        if not rankQueue.active or rankQueue.waitingNames then return end
         if not iRC:HasGuildPermission("rankManagement") and not rankQueue.testPreview then
             iRC:Print(iRC.Colors.Red .. "The rank queue stopped because your delegated permission is no longer active."
                 .. iRC.Colors.Reset)
@@ -1446,22 +1519,49 @@ function UI:Create()
             return
         end
         while rankQueue.index <= rankQueue.total do
-            local name = rankQueue.items[rankQueue.index]
-            local currentRank, member = getCurrentRank(name)
-            local valid = currentRank == rankQueue.expectedRank
-                and (rankQueue.testPreview or isRankActionEligible(member, rankQueue.action, false))
-            if valid then
-                rankQueue.currentName = member.name
-                rankQueue.progress:SetText(rankQueue.index .. " / " .. rankQueue.total)
+            local batchNames, commands = {}, {}
+            local cursor = rankQueue.index
+            local prefix = rankQueue.action == "PROMOTE" and "/gpromote " or "/gdemote "
+            while cursor <= rankQueue.total do
+                local name = rankQueue.items[cursor]
+                local currentRank, member = getCurrentRank(name)
+                local valid = currentRank == rankQueue.expectedRank
+                    and (rankQueue.testPreview or isRankActionEligible(member, rankQueue.action, false))
+                if valid then
+                    local line = prefix .. tostring(member.name):gsub("[\r\n]", "")
+                    local body = table.concat(commands, "\n")
+                    local nextLength = #body + (#commands > 0 and 1 or 0) + #line
+                    if nextLength > 255 then break end
+                    commands[#commands + 1] = line
+                    batchNames[#batchNames + 1] = member.name
+                else
+                    rankQueue.skipped = rankQueue.skipped + 1
+                    iRC:Print(iRC.Colors.Yellow .. "Skipped " .. iRC:FormatPlayerName(name)
+                        .. " because their current rank or eligibility changed." .. iRC.Colors.Reset)
+                end
+                cursor = cursor + 1
+            end
+            if #batchNames == 0 then
+                if cursor <= rankQueue.total then
+                    rankQueue.failed = rankQueue.failed + 1
+                    iRC:Print(iRC.Colors.Red .. "A rank command exceeds WoW's 255-byte macro limit."
+                        .. iRC.Colors.Reset)
+                    cursor = cursor + 1
+                end
+                rankQueue.index = cursor
+            else
+                rankQueue.currentNames = batchNames
+                rankQueue.batchNextIndex = cursor
+                rankQueue.progress:SetText(rankQueue.index .. "-" .. (cursor - 1) .. " / " .. rankQueue.total)
                 local verb = rankQueue.action == "PROMOTE" and "Promote" or "Demote"
                 rankQueue.title:SetText(verb .. " guild members")
                 if rankQueue.testPreview then
                     rankQueue.macroReady = nil
-                    rankQueue.simulate.text:SetText("Simulate: " .. verb .. " " .. iRC:FormatPlayerName(member.name))
+                    rankQueue.simulate.text:SetText("Simulate " .. verb:lower() .. " batch (" .. #batchNames .. ")")
                     rankQueue.simulate:Show()
                     rankQueue.combatBlocker:Hide()
-                    rankQueue.body:SetText("Test-admin preview " .. rankQueue.index .. " of " .. rankQueue.total
-                        .. ". No guild rank will be changed.")
+                    rankQueue.body:SetText("Test-admin preview: one click simulates " .. verb:lower() .. "ing "
+                        .. #batchNames .. " members. No guild rank will be changed.")
                 elseif InCombatLockdown and InCombatLockdown() then
                     rankQueue.macroReady = nil
                     rankQueue.simulate:Hide()
@@ -1469,14 +1569,14 @@ function UI:Create()
                     rankQueue.combatBlocker:Show()
                 else
                     rankQueue.simulate:Hide()
-                    rankQueue.apply.text:SetText(verb .. " " .. iRC:FormatPlayerName(member.name))
-                    rankQueue.macroReady = prepareRankMacro(member.name, rankQueue.action)
+                    rankQueue.apply.text:SetText(verb .. " batch (" .. #batchNames .. ")")
+                    rankQueue.macroReady = prepareRankMacro(batchNames, rankQueue.action)
                     rankQueue.apply:SetEnabled(rankQueue.macroReady == true)
                     rankQueue.apply:SetAlpha(rankQueue.macroReady and 1 or 0.42)
                     rankQueue.combatBlocker:Hide()
                     rankQueue.body:SetText(rankQueue.macroReady
-                        and ("Click once to " .. verb:lower() .. " " .. iRC:FormatPlayerName(member.name)
-                            .. ". iRC will wait for WoW to confirm before continuing.")
+                        and ("Click once to " .. verb:lower() .. " this batch of " .. #batchNames
+                            .. " members. iRC will verify every rank change before continuing.")
                         or "iRC could not create or update its iRC_RankQueue macro. Free a general macro slot and reopen the queue.")
                 end
                 rankQueue.skip:SetEnabled(true)
@@ -1485,10 +1585,6 @@ function UI:Create()
                 rankQueue:Raise()
                 return
             end
-            rankQueue.skipped = rankQueue.skipped + 1
-            iRC:Print(iRC.Colors.Yellow .. "Skipped " .. iRC:FormatPlayerName(name)
-                .. " because their current rank or eligibility changed." .. iRC.Colors.Reset)
-            rankQueue.index = rankQueue.index + 1
         end
         finishRankQueue()
     end
@@ -1498,7 +1594,8 @@ function UI:Create()
         rankQueue.items, rankQueue.total, rankQueue.index = names, #names, 1
         rankQueue.action, rankQueue.expectedRank = action, expectedRank
         rankQueue.changed, rankQueue.skipped, rankQueue.failed = 0, 0, 0
-        rankQueue.currentName, rankQueue.waitingName, rankQueue.timerTicket = nil, nil, nil
+        rankQueue.currentNames, rankQueue.waitingNames, rankQueue.waitingByKey = nil, nil, nil
+        rankQueue.batchNextIndex, rankQueue.timerTicket = nil, nil
         rankQueue.macroReady = nil
         rankQueue.testPreview = testPreview == true
         rankQueue.active = true
@@ -1507,32 +1604,40 @@ function UI:Create()
     end
 
     function rankQueue:Cancel()
-        self.active, self.currentName, self.waitingName, self.timerTicket = nil, nil, nil, nil
+        self.active, self.currentNames, self.waitingNames, self.waitingByKey = nil, nil, nil, nil
+        self.batchNextIndex, self.timerTicket = nil, nil
         self.testPreview = nil
         self:Hide()
     end
     rankQueue.cancel:SetScript("OnClick", function() rankQueue:Cancel() end)
     rankQueue.skip:SetScript("OnClick", function()
-        if not rankQueue.active or rankQueue.waitingName then return end
-        rankQueue.skipped = rankQueue.skipped + 1
-        rankQueue.index = rankQueue.index + 1
+        if not rankQueue.active or rankQueue.waitingNames then return end
+        local count = #(rankQueue.currentNames or {})
+        rankQueue.skipped = rankQueue.skipped + count
+        rankQueue.index = rankQueue.batchNextIndex or (rankQueue.index + math.max(1, count))
+        rankQueue.currentNames, rankQueue.batchNextIndex = nil, nil
         advanceRankQueue()
     end)
     rankQueue.simulate:SetScript("OnClick", function()
-        if not rankQueue.active or not rankQueue.testPreview or not rankQueue.currentName then return end
-        iRC:Print("Test: would " .. rankQueue.action:lower() .. " "
-            .. iRC:FormatPlayerName(rankQueue.currentName) .. ".")
-        rankQueue.changed = rankQueue.changed + 1
-        rankQueue.index = rankQueue.index + 1
+        if not rankQueue.active or not rankQueue.testPreview or not rankQueue.currentNames then return end
+        for _, name in ipairs(rankQueue.currentNames) do
+            iRC:Print("Test: would " .. rankQueue.action:lower() .. " " .. iRC:FormatPlayerName(name) .. ".")
+            rankQueue.changed = rankQueue.changed + 1
+        end
+        rankQueue.index = rankQueue.batchNextIndex or rankQueue.index
+        rankQueue.currentNames, rankQueue.batchNextIndex = nil, nil
         advanceRankQueue()
     end)
     rankQueue.apply:SetScript("PostClick", function(_, mouseButton)
-        if mouseButton ~= "LeftButton" or not rankQueue.active or rankQueue.waitingName
-            or not rankQueue.currentName or not rankQueue.macroReady then return end
+        if mouseButton ~= "LeftButton" or not rankQueue.active or rankQueue.waitingNames
+            or not rankQueue.currentNames or not rankQueue.macroReady then return end
         if InCombatLockdown and InCombatLockdown() then return end
-        rankQueue.waitingName = rankQueue.currentName
-        rankQueue.body:SetText("Waiting for WoW to confirm the rank change for "
-            .. iRC:FormatPlayerName(rankQueue.waitingName) .. "...")
+        rankQueue.waitingNames = rankQueue.currentNames
+        rankQueue.waitingByKey = {}
+        for _, name in ipairs(rankQueue.waitingNames) do
+            rankQueue.waitingByKey[iRC:NormalizeName(name)] = name
+        end
+        rankQueue.body:SetText("Waiting for WoW to confirm " .. #rankQueue.waitingNames .. " rank changes...")
         rankQueue.apply:SetEnabled(false)
         rankQueue.apply:SetAlpha(0.42)
         rankQueue.skip:SetEnabled(false)
@@ -1552,15 +1657,16 @@ function UI:Create()
     rankQueue:RegisterEvent("PLAYER_REGEN_ENABLED")
     rankQueue:SetScript("OnEvent", function(_, event, message)
         if not rankQueue.active then return end
-        if event == "CHAT_MSG_SYSTEM" and rankQueue.waitingName
+        if event == "CHAT_MSG_SYSTEM" and rankQueue.waitingNames
             and isNativePermissionDeniedMessage(message) then
             abortRankQueueForNativePermission()
-        elseif event == "CHAT_MSG_SYSTEM" and systemMessageConfirmsRankChange(message) then
-            confirmPendingRankChange("system message")
-        elseif event == "GUILD_ROSTER_UPDATE" and rankQueue.waitingName then
+        elseif event == "CHAT_MSG_SYSTEM" then
+            local confirmedName = rankNameFromConfirmationMessage(message)
+            if confirmedName then confirmPendingRankMember(confirmedName, "system message") end
+        elseif event == "GUILD_ROSTER_UPDATE" and rankQueue.waitingNames then
             if C_Timer and C_Timer.After then C_Timer.After(0, function() resolvePendingRankChange(false) end)
             else resolvePendingRankChange(false) end
-        elseif event == "PLAYER_REGEN_ENABLED" and not rankQueue.waitingName then
+        elseif event == "PLAYER_REGEN_ENABLED" and not rankQueue.waitingNames then
             advanceRankQueue()
         end
     end)
@@ -2142,29 +2248,86 @@ function UI:Create()
     frame.rankManagementControls.label = frame.rankManagementControls:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     frame.rankManagementControls.label:SetPoint("LEFT", 0, 0)
     frame.rankManagementControls.label:SetText("Current rank")
-    frame.rankManagementControls.dropdown = CreateFrame("Frame", "iRCRankManagementSourceRank",
-        frame.rankManagementControls, "UIDropDownMenuTemplate")
-    frame.rankManagementControls.dropdown:SetPoint("LEFT", frame.rankManagementControls.label, "RIGHT", -8, -1)
-    UIDropDownMenu_SetWidth(frame.rankManagementControls.dropdown, 185)
-    UIDropDownMenu_JustifyText(frame.rankManagementControls.dropdown, "LEFT")
-    UIDropDownMenu_Initialize(frame.rankManagementControls.dropdown, function(_, level)
-        if level ~= 1 then return end
-        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
+    frame.rankManagementControls.dropdown = CreateFrame("Button", nil,
+        frame.rankManagementControls, "BackdropTemplate")
+    local rankDropdown = frame.rankManagementControls.dropdown
+    rankDropdown:SetHeight(27)
+    rankDropdown:SetPoint("LEFT", frame.rankManagementControls.label, "RIGHT", 10, 0)
+    createBackdrop(rankDropdown, { 0.055, 0.045, 0.032, 0.98 }, { 0.46, 0.35, 0.18, 1 })
+    rankDropdown.text = rankDropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    rankDropdown.text:SetPoint("LEFT", 10, 0)
+    rankDropdown.text:SetPoint("RIGHT", -30, 0)
+    rankDropdown.text:SetJustifyH("LEFT")
+    rankDropdown.arrow = rankDropdown:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    rankDropdown.arrow:SetPoint("RIGHT", -10, 0)
+    rankDropdown.arrow:SetText("v")
+    rankDropdown:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    rankDropdown.menu = CreateFrame("Frame", nil, rankDropdown, "BackdropTemplate")
+    rankDropdown.menu:SetPoint("TOPLEFT", rankDropdown, "BOTTOMLEFT", 0, -2)
+    rankDropdown.menu:SetPoint("TOPRIGHT", rankDropdown, "BOTTOMRIGHT", 0, -2)
+    rankDropdown.menu:SetHeight(12)
+    rankDropdown.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    rankDropdown.menu:SetFrameLevel(frame:GetFrameLevel() + 45)
+    rankDropdown.menu:SetClampedToScreen(true)
+    rankDropdown.menu:SetToplevel(true)
+    rankDropdown.menu:EnableMouse(true)
+    rankDropdown.menu:EnableMouseWheel(true)
+    rankDropdown.menu:SetScript("OnMouseDown", function() end)
+    rankDropdown.menu:SetScript("OnMouseWheel", function() end)
+    createBackdrop(rankDropdown.menu, { 0.025, 0.022, 0.018, 0.995 }, { 0.72, 0.45, 0.16, 1 })
+    rankDropdown.menu.buttons = {}
+    rankDropdown.menu:Hide()
+
+    function rankDropdown:SetDisplay(text)
+        self.text:SetText(text or "Choose a current rank")
+    end
+
+    function rankDropdown:Refresh(rankOptions, rankCounts)
+        rankOptions, rankCounts = rankOptions or {}, rankCounts or {}
+        self.menu:SetHeight(math.max(12, #rankOptions * 28 + 8))
+        for index, rank in ipairs(rankOptions) do
+            local button = self.menu.buttons[index]
+            if not button then
+                button = CreateFrame("Button", nil, self.menu, "BackdropTemplate")
+                button:SetHeight(25)
+                button:SetPoint("TOPLEFT", self.menu, "TOPLEFT", 5, -5 - (index - 1) * 28)
+                button:SetPoint("TOPRIGHT", self.menu, "TOPRIGHT", -5, -5 - (index - 1) * 28)
+                createBackdrop(button, { 0.06, 0.05, 0.038, 0.98 }, { 0.28, 0.23, 0.16, 0.9 })
+                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                button.text:SetPoint("LEFT", 9, 0)
+                button.text:SetPoint("RIGHT", -9, 0)
+                button.text:SetJustifyH("LEFT")
+                button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                self.menu.buttons[index] = button
+            end
             local rankIndex, rankName = rank.index, rank.name
-            local rankLabel = rankName .. " (Rank " .. rankIndex .. ")"
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = rankLabel
-            info.value = rankIndex
-            info.checked = frame.rankManagementRank == rankIndex
-            info.func = function()
-                frame.rankManagementRank = rankIndex
-                UIDropDownMenu_SetSelectedValue(frame.rankManagementControls.dropdown, rankIndex)
-                UIDropDownMenu_SetText(frame.rankManagementControls.dropdown, rankLabel)
+            local count = tonumber(rankCounts[rankIndex]) or 0
+            local rankLabel = rankName .. " (Rank " .. rankIndex .. ") - " .. count
+                .. (count == 1 and " member" or " members")
+            button.rankIndex = rankIndex
+            button.rankLabel = rankLabel
+            button.text:SetText(rankLabel)
+            local selected = frame.rankManagementRank == rankIndex
+            button:SetBackdropColor(selected and 0.19 or 0.06, selected and 0.11 or 0.05,
+                selected and 0.035 or 0.038, 0.98)
+            button:SetBackdropBorderColor(selected and COLORS.gold[1] or 0.28,
+                selected and COLORS.gold[2] or 0.23, selected and COLORS.gold[3] or 0.16, 1)
+            button:SetScript("OnClick", function(self)
+                frame.rankManagementRank = self.rankIndex
+                rankDropdown:SetDisplay(self.rankLabel)
+                rankDropdown.menu:Hide()
                 if frame.scroll then frame.scroll:SetVerticalScroll(0) end
                 UI:Refresh()
-            end
-            UIDropDownMenu_AddButton(info, level)
+            end)
+            button:Show()
         end
+        for index = #rankOptions + 1, #self.menu.buttons do self.menu.buttons[index]:Hide() end
+    end
+
+    rankDropdown:SetDisplay()
+    rankDropdown:SetScript("OnClick", function(self)
+        self.menu:SetShown(not self.menu:IsShown())
+        if self.menu:IsShown() then self.menu:Raise() end
     end)
     frame.rankManagementControls.demote = makeIRCActionButton(frame.rankManagementControls, 145, 27,
         "Demote selected...", true)
@@ -2172,6 +2335,7 @@ function UI:Create()
     frame.rankManagementControls.promote = makeIRCActionButton(frame.rankManagementControls, 145, 27,
         "Promote selected...", false)
     frame.rankManagementControls.promote:SetPoint("RIGHT", frame.rankManagementControls.demote, "LEFT", -8, 0)
+    rankDropdown:SetPoint("RIGHT", frame.rankManagementControls.promote, "LEFT", -12, 0)
 
     local function openRankManagementConfirm(action, onlyName)
         local rankIndex = frame.rankManagementRank
@@ -2268,7 +2432,7 @@ function UI:Create()
         self.demote:SetEnabled(canDemote == true)
         self.demote:SetAlpha(canDemote and 1 or 0.42)
         self:ClearAllPoints()
-        self:SetPoint("TOPRIGHT", owner, "BOTTOMRIGHT", 0, -3)
+        self:SetPoint("TOP", frame.main, "TOP", 0, -72)
         self:Show()
         self:Raise()
     end
@@ -2277,6 +2441,9 @@ function UI:Create()
 
     local scroll = CreateFrame("ScrollFrame", nil, main, "UIPanelScrollFrameTemplate")
     iRC:StyleScrollFrame(scroll)
+    scroll:HookScript("OnVerticalScroll", function()
+        if rankMemberMenu:IsShown() then rankMemberMenu:Hide() end
+    end)
     scroll:SetPoint("TOPLEFT", main, "TOPLEFT", 15, -78)
     scroll:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -31, 14)
     frame.scroll = scroll
@@ -2832,6 +2999,8 @@ function UI:Create()
         end
         if memberMenu:IsShown() and not iRC:IsMouseOverFrame(memberMenu) and not iRC:IsMouseOverFrame(memberMenu.altMenu) then memberMenu:Hide() end
         if rankMemberMenu:IsShown() and not iRC:IsMouseOverFrame(rankMemberMenu) then rankMemberMenu:Hide() end
+        if rankDropdown.menu:IsShown() and not iRC:IsMouseOverFrame(rankDropdown)
+            and not iRC:IsMouseOverFrame(rankDropdown.menu) then rankDropdown.menu:Hide() end
         if professionReport:IsShown() and not iRC:IsMouseOverFrame(professionReport) then professionReport:Hide() end
     end)
     frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}
@@ -3006,13 +3175,30 @@ local function ensurePersonalSettings(frame)
     _G[scaleSlider:GetName() .. "Low"]:SetText("60%")
     _G[scaleSlider:GetName() .. "High"]:SetText("200%")
     _G[scaleSlider:GetName() .. "Text"]:SetText("")
+    local function applyScaleSliderValue()
+        if page.refreshing then return end
+        local value = scaleSlider.pendingValue
+        if not value then return end
+        scaleSlider.pendingValue = nil
+        iRC:GetSettings().mainWindowScale = value
+        frame:SetScale(value)
+    end
     scaleSlider:SetScript("OnValueChanged", function(_, value)
         value = math.floor(value * 20 + 0.5) / 20
         scaleValue:SetText(math.floor(value * 100 + 0.5) .. "%")
         if page.refreshing then return end
-        iRC:GetSettings().mainWindowScale = value
-        frame:SetScale(value)
+        scaleSlider.pendingValue = value
+        if not scaleSlider.dragging then applyScaleSliderValue() end
     end)
+    scaleSlider:HookScript("OnMouseDown", function()
+        scaleSlider.dragging = true
+    end)
+    local function finishScaleSliderDrag()
+        scaleSlider.dragging = nil
+        if C_Timer and C_Timer.After then C_Timer.After(0, applyScaleSliderValue)
+        else applyScaleSliderValue() end
+    end
+    scaleSlider:HookScript("OnMouseUp", finishScaleSliderDrag)
     page.scaleSlider, page.scaleValue = scaleSlider, scaleValue
 
     local reset = makeIRCActionButton(layoutCard, 180, 27, iRC:Text("IRC_MAIN_WINDOW_RESET"), false)
@@ -3486,6 +3672,13 @@ local function updateRankManagement(frame)
     for _, section in pairs(frame.factionSections) do section:Hide() end
     frame.racePodium:Hide()
     local options = iRC:GetGuildRankOptions()
+    local roster = iRC:GetGuildRosterSnapshot()
+    local rankCounts = {}
+    for _, member in ipairs(roster) do
+        if type(member.rankIndex) == "number" then
+            rankCounts[member.rankIndex] = (rankCounts[member.rankIndex] or 0) + 1
+        end
+    end
     local selectedRankExists = false
     for _, rank in ipairs(options) do
         if rank.index == frame.rankManagementRank then selectedRankExists = true break end
@@ -3496,30 +3689,30 @@ local function updateRankManagement(frame)
         if rank.index == frame.rankManagementRank then rankName = rank.name break end
     end
     if rankName then
-        UIDropDownMenu_SetSelectedValue(frame.rankManagementControls.dropdown, frame.rankManagementRank)
-        UIDropDownMenu_SetText(frame.rankManagementControls.dropdown,
-            rankName .. " (Rank " .. frame.rankManagementRank .. ")")
+        local count = rankCounts[frame.rankManagementRank] or 0
+        frame.rankManagementControls.dropdown:SetDisplay(rankName .. " (Rank " .. frame.rankManagementRank
+            .. ") - " .. count .. (count == 1 and " member" or " members"))
     else
-        UIDropDownMenu_SetSelectedValue(frame.rankManagementControls.dropdown, nil)
-        UIDropDownMenu_SetText(frame.rankManagementControls.dropdown, "Choose a current rank")
+        frame.rankManagementControls.dropdown:SetDisplay()
     end
+    frame.rankManagementControls.dropdown:Refresh(options, rankCounts)
 
     local members, promoteCount, demoteCount = {}, 0, 0
     if type(frame.rankManagementRank) == "number" then
-        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
-            if member.rankIndex == frame.rankManagementRank
-                and iRC:NormalizeName(member.name) ~= iRC:NormalizeName(iRC:GetPlayerName()) then
+        for _, member in ipairs(roster) do
+            if member.rankIndex == frame.rankManagementRank then
                 members[#members + 1] = member
             end
         end
         table.sort(members, function(a, b) return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name) end)
     end
     for index, member in ipairs(members) do
-        local nativePromote = isRankActionEligible(member, "PROMOTE", false)
-        local nativeDemote = isRankActionEligible(member, "DEMOTE", false)
-        local previewPromote = not nativePromote and iRC:IsTestAdmin()
+        local isSelf = iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName())
+        local nativePromote = not isSelf and isRankActionEligible(member, "PROMOTE", false)
+        local nativeDemote = not isSelf and isRankActionEligible(member, "DEMOTE", false)
+        local previewPromote = not isSelf and not nativePromote and iRC:IsTestAdmin()
             and isRankActionEligible(member, "PROMOTE", true)
-        local previewDemote = not nativeDemote and iRC:IsTestAdmin()
+        local previewDemote = not isSelf and not nativeDemote and iRC:IsTestAdmin()
             and isRankActionEligible(member, "DEMOTE", true)
         local canPromote, canDemote = nativePromote or previewPromote, nativeDemote or previewDemote
         if canPromote then promoteCount = promoteCount + 1 end
@@ -3534,21 +3727,24 @@ local function updateRankManagement(frame)
         row.name:SetText(iRC:FormatPlayerName(member.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
         local classColor = member.classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile]
-        if classColor then row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
+        if isSelf then row.name:SetTextColor(unpack(COLORS.gray))
+        elseif classColor then row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
         else row.name:SetTextColor(unpack(COLORS.gold)) end
         row.onlineTag:Hide()
         row.tag:ClearAllPoints()
         row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
         local previewOnly = not nativePromote and not nativeDemote and (previewPromote or previewDemote)
-        row.tag:SetText((nativePromote or nativeDemote) and "[Click to manage]"
-            or (previewOnly and "[Click to preview]" or "[Native restriction]"))
+        local tagText = isSelf and "[Your character]"
+            or ((nativePromote or nativeDemote) and "[Click to manage]"
+                or (previewOnly and "[Click to preview]" or "[Native restriction]"))
+        row.tag:SetText(tagText)
         row.tag:SetTextColor(unpack((canPromote or canDemote) and COLORS.green or COLORS.gray))
         row.tag:Show()
         row.detail:SetText(tostring(member.rankName or "Unknown rank") .. " · Level "
             .. tostring(member.level or "?") .. " " .. tostring(member.className or "")
             .. " · Promote: " .. (canPromote and "yes" or "no")
             .. " · Demote: " .. (canDemote and "yes" or "no"))
-        row:SetAlpha((canPromote or canDemote) and 1 or 0.58)
+        row:SetAlpha(isSelf and 0.42 or ((canPromote or canDemote) and 1 or 0.58))
         local selectedMember = member
         row:SetScript("OnClick", (canPromote or canDemote) and function(self, button)
             if button ~= "LeftButton" or not frame.rankMemberMenu then return end
