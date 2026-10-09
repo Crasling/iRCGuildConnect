@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.18 - Management & Stability
+--------------------------------------------------------------------------------
+[NEW] Inactive Members can exclude one selected guild rank from the list and removal queue
+[IMPROVED] Permission dropdowns start at the configured Guild master rank and only show ranks below it in authority
+[FIXED] Permission hover lists show every member in a clear two-column layout
+[FIXED] Boss fights no longer cause Lua errors when Forever hides combat-sensitive chat, channel, or group data
+[FIXED] Assign Alt accepts an exact roster search match and correctly honors GM, delegated, and test-admin access
+
 v0.5.17 - Rank Management
 --------------------------------------------------------------------------------
 [NEW] Rank Management can promote or demote one member or a whole selected rank

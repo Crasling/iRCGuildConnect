@@ -444,10 +444,20 @@ local function CreateCompactManagementDropdown(frameName, parent, label, yOffset
         row.access:SetTextColor(0.56, 0.78, 0.56)
         row:EnableMouse(true)
         row:SetScript("OnEnter", function(self)
-            if not self.accessTooltip or not GameTooltip then return end
+            if not self.accessTooltipNames or not GameTooltip then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetText(label)
-            GameTooltip:AddLine(self.accessTooltip, 1, 1, 1, true)
+            if #self.accessTooltipNames == 0 then
+                GameTooltip:AddLine("No current roster members have effective access.", 0.72, 0.72, 0.72, true)
+            else
+                GameTooltip:AddLine("Roster members with effective access:", 1, 1, 1, true)
+                for index = 1, #self.accessTooltipNames, 2 do
+                    GameTooltip:AddDoubleLine(self.accessTooltipNames[index],
+                        self.accessTooltipNames[index + 1] or "", 0.62, 0.86, 0.62, 0.62, 0.86, 0.62)
+                end
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("* Individual member grant", 0.72, 0.72, 0.72)
+            end
             GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -468,10 +478,7 @@ local function CreateCompactManagementDropdown(frameName, parent, label, yOffset
             row.accessLabel:SetText("Roster access (" .. tostring(#names) .. ")")
             row.access:SetText(#names > 0 and (table.concat(shown, "  |  ") .. suffix)
                 or "Nobody currently inherits access.")
-            row.accessTooltip = #names > 0
-                and ("Roster members with effective access:\n" .. table.concat(names, ", ")
-                    .. "\n\n* Individual member grant")
-                or "No current roster members have effective access."
+            row.accessTooltipNames = names
         end
     end
     UIDropDownMenu_Initialize(dropdown, function(_, level)
@@ -2262,10 +2269,13 @@ do
         memberRemoval = "Review and remove inactive members",
         rankManagement = "Promote and demote guild members",
     }
-    local function rankValues()
+    local function rankValues(minimumRankIndex)
         local values = {}
-        for _, rank in ipairs(iRC:GetGuildRankOptions()) do values[#values + 1] = rank.index end
-        if #values == 0 then values = { 0, 1 } end
+        minimumRankIndex = math.max(0, math.floor(tonumber(minimumRankIndex) or 0))
+        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
+            if rank.index >= minimumRankIndex then values[#values + 1] = rank.index end
+        end
+        if #values == 0 then values = minimumRankIndex > 0 and { minimumRankIndex } or { 0, 1 } end
         return values
     end
     local function rankLabel(value)
@@ -2306,15 +2316,17 @@ do
         permissionCard, "Guild master rank", permissionY,
         function() return iRC:GetGuildMasterRank() end,
         function(value) iRC:SetGuildMasterRank(value) end,
-        rankValues, rankLabel,
+        function() return rankValues(0) end, rankLabel,
         function() return effectiveAccessNames(nil) end)
     for _, permission in ipairs(iRC.PermissionOrder) do
         local permissionKey = permission
         rankPermissionDropdowns[permission], permissionY = CreateCompactManagementDropdown("iRCRankPermission" .. permission,
             permissionCard, permissionLabels[permission], permissionY,
-            function() return iRC:GetGuildRankPermission(permissionKey) end,
+            function()
+                return math.max(iRC:GetGuildRankPermission(permissionKey), iRC:GetGuildMasterRank())
+            end,
             function(value) iRC:SetGuildRankPermission(permissionKey, value) end,
-            rankValues, rankLabel,
+            function() return rankValues(iRC:GetGuildMasterRank()) end, rankLabel,
             function() return effectiveAccessNames(permissionKey) end)
     end
     permissionCardHeight = math.abs(permissionY) + 12

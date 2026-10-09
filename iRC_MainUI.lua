@@ -174,10 +174,12 @@ end
 local function resetInactiveMemberView(frame)
     if not frame then return end
     frame.inactiveMemberDays = 30
+    frame.inactiveExcludedRank = nil
     if frame.inactiveThreshold and frame.inactiveThreshold.input then
         frame.inactiveThreshold.input:SetText("30")
         frame.inactiveThreshold.input:ClearFocus()
     end
+    if frame.RefreshInactiveRankExclude then frame:RefreshInactiveRankExclude() end
     for _, row in ipairs(frame.memberRows or {}) do row:SetAlpha(1) end
 end
 
@@ -525,8 +527,9 @@ local function getRankActionMembers(rankIndex, action, testAdminPreview)
     return members
 end
 
-local function getEligibleInactiveMembers(threshold, testAdminPreview)
+local function getEligibleInactiveMembers(threshold, testAdminPreview, excludedRank)
     threshold = math.max(0, math.min(9999, math.floor(tonumber(threshold) or 30)))
+    excludedRank = type(excludedRank) == "number" and excludedRank or nil
     local members = {}
     local selfKey = iRC:NormalizeName(iRC:GetPlayerName())
     local ownRank = getNativeGuildRank()
@@ -535,6 +538,7 @@ local function getEligibleInactiveMembers(threshold, testAdminPreview)
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
             and iRC:NormalizeName(member.name) ~= selfKey
+            and member.rankIndex ~= excludedRank
             and (preview or type(member.rankIndex) == "number" and member.rankIndex > ownRank) then
             members[#members + 1] = member
         end
@@ -1019,9 +1023,9 @@ function UI:Create()
         return true
     end
 
-    local function findQueueCandidate(name, threshold, testPreview)
+    local function findQueueCandidate(name, threshold, testPreview, excludedRank)
         if iRC.InvalidateGuildRosterSnapshot then iRC:InvalidateGuildRosterSnapshot() end
-        for _, member in ipairs(getEligibleInactiveMembers(threshold, testPreview)) do
+        for _, member in ipairs(getEligibleInactiveMembers(threshold, testPreview, excludedRank)) do
             if iRC:NormalizeName(member.name) == iRC:NormalizeName(name) then return member end
         end
         return nil
@@ -1112,7 +1116,8 @@ function UI:Create()
             local cursor = removalQueue.index
             while cursor <= removalQueue.total do
                 local requestedName = removalQueue.items[cursor]
-                local candidate = findQueueCandidate(requestedName, removalQueue.threshold, removalQueue.testPreview)
+                local candidate = findQueueCandidate(requestedName, removalQueue.threshold,
+                    removalQueue.testPreview, removalQueue.excludedRank)
                 if candidate then
                     local line = "/gremove " .. tostring(candidate.name):gsub("[\r\n]", "")
                     local body = table.concat(commands, "\n")
@@ -1177,12 +1182,13 @@ function UI:Create()
         finishRemovalQueue()
     end
 
-    local function startRemovalQueue(names, threshold, testPreview)
+    local function startRemovalQueue(names, threshold, testPreview, excludedRank)
         if type(names) ~= "table" or #names == 0 then return false end
         removalQueue.items = names
         removalQueue.total = #names
         removalQueue.index = 1
         removalQueue.threshold = threshold
+        removalQueue.excludedRank = type(excludedRank) == "number" and excludedRank or nil
         removalQueue.removed = 0
         removalQueue.skipped = 0
         removalQueue.failed = 0
@@ -1204,6 +1210,7 @@ function UI:Create()
         self.batchNextIndex = nil
         self.timerTicket = nil
         self.testPreview = nil
+        self.excludedRank = nil
         self:Hide()
     end
 
@@ -1678,6 +1685,7 @@ function UI:Create()
         local sourceRank = removeMemberConfirm.sourceRank
         local removeAll = removeMemberConfirm.removeAll == true
         local testPreview = removeMemberConfirm.testPreview == true
+        local excludedRank = removeMemberConfirm.excludedRank
         local selectedNames, selectedOrder = {}, {}
         if removeAll then
             for _, candidate in ipairs(removeMemberConfirm.bulkCandidates or {}) do
@@ -1696,6 +1704,7 @@ function UI:Create()
         removeMemberConfirm.targetName = nil
         removeMemberConfirm.rankAction = nil
         removeMemberConfirm.sourceRank = nil
+        removeMemberConfirm.excludedRank = nil
         if rankAction then
             if not iRC:HasGuildPermission("rankManagement") and not testPreview then return end
             startRankQueue(selectedOrder, rankAction, sourceRank, testPreview)
@@ -1704,10 +1713,10 @@ function UI:Create()
         if removeAll then
             if not iRC:HasGuildPermission("memberRemoval") then return end
             if testPreview then
-                startRemovalQueue(selectedOrder, threshold, true)
+                startRemovalQueue(selectedOrder, threshold, true, excludedRank)
                 return
             end
-            local eligible = getEligibleInactiveMembers(threshold)
+            local eligible = getEligibleInactiveMembers(threshold, false, excludedRank)
             if #eligible == 0 then
                 if testPreview then return end
                 iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
@@ -1721,7 +1730,7 @@ function UI:Create()
                 iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
                 return
             end
-            startRemovalQueue(removals, threshold)
+            startRemovalQueue(removals, threshold, false, excludedRank)
             return
         end
         if not targetName or not iRC:HasGuildPermission("memberRemoval") then return end
@@ -2171,7 +2180,7 @@ function UI:Create()
     frame.guildLogSearch.suggestions:Hide()
 
     frame.inactiveThreshold = CreateFrame("Frame", nil, main)
-    frame.inactiveThreshold:SetSize(360, 26)
+    frame.inactiveThreshold:SetSize(440, 58)
     frame.inactiveThreshold:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -49)
     frame.inactiveThreshold.label = frame.inactiveThreshold:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     frame.inactiveThreshold.label:SetPoint("LEFT", frame.inactiveThreshold, "LEFT", 0, 0)
@@ -2205,6 +2214,47 @@ function UI:Create()
         self:SetText(tostring(frame.inactiveMemberDays or 30))
         self:ClearFocus()
     end)
+    frame.inactiveThreshold.excludeLabel = frame.inactiveThreshold:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.inactiveThreshold.excludeLabel:SetPoint("TOPLEFT", frame.inactiveThreshold, "TOPLEFT", 0, -34)
+    frame.inactiveThreshold.excludeLabel:SetText("Exclude rank")
+    frame.inactiveThreshold.excludeRank = CreateFrame("Frame", "iRCInactiveExcludeRankDropdown",
+        frame.inactiveThreshold, "UIDropDownMenuTemplate")
+    frame.inactiveThreshold.excludeRank:SetPoint("LEFT", frame.inactiveThreshold.excludeLabel, "RIGHT", -8, -1)
+    UIDropDownMenu_SetWidth(frame.inactiveThreshold.excludeRank, 205)
+    UIDropDownMenu_JustifyText(frame.inactiveThreshold.excludeRank, "LEFT")
+    function frame:RefreshInactiveRankExclude()
+        local selected = self.inactiveExcludedRank
+        local text = "Do not exclude a rank"
+        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
+            if rank.index == selected then
+                text = tostring(rank.name or ("Rank " .. selected)) .. " (Rank " .. selected .. ")"
+                break
+            end
+        end
+        UIDropDownMenu_SetSelectedValue(self.inactiveThreshold.excludeRank,
+            type(selected) == "number" and selected or -1)
+        UIDropDownMenu_SetText(self.inactiveThreshold.excludeRank, text)
+    end
+    UIDropDownMenu_Initialize(frame.inactiveThreshold.excludeRank, function(_, level)
+        if level ~= 1 then return end
+        local function addChoice(value, label)
+            local info = UIDropDownMenu_CreateInfo()
+            info.text, info.value = label, value
+            info.checked = (type(frame.inactiveExcludedRank) == "number" and frame.inactiveExcludedRank or -1) == value
+            info.func = function()
+                frame.inactiveExcludedRank = value >= 0 and value or nil
+                frame:RefreshInactiveRankExclude()
+                if frame.scroll then frame.scroll:SetVerticalScroll(0) end
+                UI:Refresh()
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+        addChoice(-1, "Do not exclude a rank")
+        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
+            addChoice(rank.index, tostring(rank.name or ("Rank " .. rank.index)) .. " (Rank " .. rank.index .. ")")
+        end
+    end)
+    frame:RefreshInactiveRankExclude()
     frame.inactiveThreshold:Hide()
     frame.inactiveRemoveAll = makeIRCActionButton(main, 190, 25,
         iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", 0), true)
@@ -2212,10 +2262,11 @@ function UI:Create()
     frame.inactiveRemoveAll:SetScript("OnClick", function()
         local threshold = math.max(0, math.min(9999,
             math.floor(tonumber(frame.inactiveMemberDays) or 30)))
-        local eligible = getEligibleInactiveMembers(threshold)
+        local excludedRank = frame.inactiveExcludedRank
+        local eligible = getEligibleInactiveMembers(threshold, false, excludedRank)
         local testPreview = false
         if #eligible == 0 and iRC:IsTestAdmin() then
-            eligible = getEligibleInactiveMembers(threshold, true)
+            eligible = getEligibleInactiveMembers(threshold, true, excludedRank)
             testPreview = true
         end
         if #eligible == 0 and not testPreview then
@@ -2228,6 +2279,7 @@ function UI:Create()
         confirm.sourceRank = nil
         confirm.targetName = nil
         confirm.threshold = threshold
+        confirm.excludedRank = excludedRank
         confirm.testPreview = testPreview
         confirm:SetSize(570, 490)
         confirm.bulkList:Show()
@@ -2714,8 +2766,17 @@ function UI:Create()
         assignAltPopup.searchHint:SetShown(self:GetText() == "")
         if self.settingSelection then return end
         assignAltPopup.selectedMain = nil
-        assignAltPopup.accept:SetEnabled(false)
-        assignAltPopup.accept:SetAlpha(0.42)
+        local queryKey = iRC:NormalizeName(self:GetText())
+        if queryKey ~= "" then
+            for _, member in ipairs(assignAltPopup.candidates or {}) do
+                if iRC:NormalizeName(member.name) == queryKey then
+                    assignAltPopup.selectedMain = member.name
+                    break
+                end
+            end
+        end
+        assignAltPopup.accept:SetEnabled(assignAltPopup.selectedMain ~= nil)
+        assignAltPopup.accept:SetAlpha(assignAltPopup.selectedMain and 1 or 0.42)
         updateAssignSuggestions()
     end)
     assignAltPopup.search:SetScript("OnEditFocusGained", updateAssignSuggestions)
@@ -3380,7 +3441,7 @@ function UI:RenderMemberRows()
             frame.styleMemberMenuButton(menu.altMenu.main, "detail", not isMain)
             frame.styleMemberMenuButton(menu.altMenu.bank, "bank", not isMain)
             frame.styleMemberMenuButton(menu.altMenu.remove, "danger", registered and not isMain)
-            local canManageIdentity = iRC:IsTestAdmin() == true
+            local canManageIdentity = iRC:IsTestAdmin() == true or iRC:IsGuildMaster() == true
                 or (iRC:IsGuildConnectionActive() == true and iRC:HasGuildPermission("identity") == true)
             menu.identityLabel:SetShown(canManageIdentity)
             menu.assignAlt:SetShown(canManageIdentity)
@@ -3576,11 +3637,13 @@ local function updateInactiveMembers(frame)
     if frame.inactiveThreshold and not frame.inactiveThreshold.input:HasFocus() then
         frame.inactiveThreshold.input:SetText(tostring(threshold))
     end
+    if frame.RefreshInactiveRankExclude then frame:RefreshInactiveRankExclude() end
     local members = {}
     local selfKey = iRC:NormalizeName(iRC:GetPlayerName())
+    local excludedRank = frame.inactiveExcludedRank
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
-            and iRC:NormalizeName(member.name) ~= selfKey then
+            and iRC:NormalizeName(member.name) ~= selfKey and member.rankIndex ~= excludedRank then
             members[#members + 1] = member
         end
     end
@@ -3652,7 +3715,7 @@ local function updateInactiveMembers(frame)
         frame.memberRows[index]:Hide()
     end
     if eligibleCount == 0 and iRC:IsTestAdmin() then
-        eligibleCount = #getEligibleInactiveMembers(threshold, true)
+        eligibleCount = #getEligibleInactiveMembers(threshold, true, excludedRank)
     end
     frame.scrollContent:SetHeight(math.max(1, #members * 48))
     frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
@@ -4850,8 +4913,12 @@ function UI:Refresh()
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     frame.guildStatsSearch:SetShown(not embeddedManagement and frame.category == "Race Overview")
     frame.guildLogSearch:SetShown(not embeddedManagement and frame.category == "Guild Log")
-    frame.inactiveThreshold:SetShown(not embeddedManagement and frame.category == "Inactive Member Management")
-    frame.inactiveRemoveAll:SetShown(not embeddedManagement and frame.category == "Inactive Member Management")
+    local showInactiveControls = not embeddedManagement and frame.category == "Inactive Member Management"
+    frame.inactiveThreshold:SetShown(showInactiveControls)
+    frame.inactiveRemoveAll:SetShown(showInactiveControls)
+    frame.scroll:ClearAllPoints()
+    frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, showInactiveControls and -112 or -78)
+    frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.rankManagementControls:SetShown(not embeddedManagement and frame.category == "Rank Management")
     if frame.category ~= "Rank Management" and frame.rankMemberMenu then frame.rankMemberMenu:Hide() end
     if frame.category ~= "Guild Log" then frame.guildLogSearch.suggestions:Hide() end

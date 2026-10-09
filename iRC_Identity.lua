@@ -308,7 +308,8 @@ local function applyManagedAssignment(store, memberName, mainName, role, updated
 end
 
 function Identity:AssignGuildCharacter(memberName, mainName, role)
-    if not iRC:IsGuildConnectionActive() or not iRC:HasGuildPermission("identity") then return false end
+    if not iRC:IsGuildConnectionActive()
+        or not (iRC:IsTestAdmin() or iRC:IsGuildMaster() or iRC:HasGuildPermission("identity")) then return false end
     role = role == "BANK" and "BANK" or (role == "REMOVE" and "REMOVE" or "ALT")
     memberName = iRC:FormatPlayerName(memberName)
     mainName = role == "REMOVE" and "" or iRC:FormatPlayerName(mainName)

@@ -45,6 +45,7 @@ local function CountEntries(value)
 end
 
 local function SafeText(value)
+    if iRC:IsSecretValue(value) then return "<secret>" end
     local text = tostring(value)
     if #text > MAX_ARGUMENT_LENGTH then text = text:sub(1, MAX_ARGUMENT_LENGTH) .. "..." end
     return text:gsub("|", "||"):gsub("[\r\n]", " ")

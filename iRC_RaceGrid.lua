@@ -63,7 +63,8 @@ end
 local function send(prefix, message, distribution, target)
     if distribution == "CHANNEL" then
         local id = GetChannelName and GetChannelName(target)
-        if type(id) ~= "number" or id <= 0 or #message > MAX_CHANNEL_PAYLOAD then return false end
+        if iRC:IsSecretValue(id) or type(id) ~= "number" or id <= 0
+            or #message > MAX_CHANNEL_PAYLOAD then return false end
         if not SendChatMessage then return false end
         local hex = bytesToHex(message)
         local single = prefix .. ":" .. hex
@@ -294,6 +295,7 @@ end
 
 local function getChannelId(channelName)
     local channelId = GetChannelName and GetChannelName(channelName or CHANNEL_NAME)
+    if iRC:IsSecretValue(channelId) then return nil end
     return type(channelId) == "number" and channelId > 0 and channelId or nil
 end
 
@@ -328,7 +330,8 @@ local function findAdminChannelDisplayIndex()
     if not GetChannelDisplayInfo then return nil end
     for index = 1, 50 do
         local ok, displayName = pcall(GetChannelDisplayInfo, index)
-        if ok and type(displayName) == "string" and displayName:lower() == CHANNEL_NAME:lower() then
+        if ok and not iRC:IsSecretValue(displayName) and type(displayName) == "string"
+            and displayName:lower() == CHANNEL_NAME:lower() then
             adminPresence.displayIndex = index
             return index
         end
@@ -337,6 +340,7 @@ end
 
 local function refreshAdminChannelRoster(displayIndex, rosterCount)
     if not iRC:IsTestAdmin() then return false end
+    if iRC:IsSecretValue(displayIndex) or iRC:IsSecretValue(rosterCount) then return false end
     local getRosterInfo = getAdminRosterAPI()
     if not getRosterInfo then return false end
     displayIndex = tonumber(displayIndex) or findAdminChannelDisplayIndex()
@@ -345,6 +349,7 @@ local function refreshAdminChannelRoster(displayIndex, rosterCount)
     if GetChannelDisplayInfo then
         local ok, value = pcall(GetChannelDisplayInfo, displayIndex)
         if ok then displayName = value end
+        if iRC:IsSecretValue(displayName) then return false end
         if type(displayName) == "string" and displayName ~= ""
             and displayName:lower() ~= CHANNEL_NAME:lower() then return false end
     end
@@ -353,7 +358,7 @@ local function refreshAdminChannelRoster(displayIndex, rosterCount)
     if count == 0 then count = 500 end
     for index = 1, count do
         local rosterOK, name = pcall(getRosterInfo, displayIndex, index)
-        if rosterOK and type(name) == "string" and name ~= "" then
+        if rosterOK and not iRC:IsSecretValue(name) and type(name) == "string" and name ~= "" then
             adminPresence.users[fullNameKey(name)] = name
         elseif rosterCount == nil then
             break
@@ -367,6 +372,7 @@ end
 local function captureAdminChannelList(message, sender)
     if not iRC:IsTestAdmin() or adminPresence.requestedAt <= 0
         or time() - adminPresence.requestedAt > 10 then return end
+    if iRC:IsSecretValue(message) or iRC:IsSecretValue(sender) then return end
     local captured = false
     message = tostring(message or "")
     local function addName(name, allowSpaces)
@@ -474,8 +480,10 @@ local function hasRestoredServerChannel()
     if not GetChannelList then return false end
     local channels = { GetChannelList() }
     for index = 1, #channels, 3 do
-        local channelId = tonumber(channels[index])
-        local channelName = tostring(channels[index + 1] or "")
+        local rawChannelId = channels[index]
+        local rawChannelName = channels[index + 1]
+        local channelId = not iRC:IsSecretValue(rawChannelId) and tonumber(rawChannelId) or nil
+        local channelName = not iRC:IsSecretValue(rawChannelName) and tostring(rawChannelName or "") or ""
         if channelId and channelId > 0 and channelName ~= ""
             and channelName:lower() ~= CHANNEL_NAME:lower() then return true end
     end
@@ -1576,6 +1584,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "CHAT_MSG_CHANNEL" then
         local message, sender = ...
         local channelName = select(9, ...)
+        -- Forever can mark channel-event values as secret during encounters.
+        -- Secret values cannot be compared or passed through Lua string APIs.
+        if iRC:IsSecretValue(message) or iRC:IsSecretValue(sender)
+            or iRC:IsSecretValue(channelName) then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
             local decoded = decodeChannelWire(message, sender)

@@ -415,7 +415,9 @@ function iRC:SetTrafficMonitorEnabled(enabled)
             elseif event == "CHAT_MSG_CHANNEL" then
                 local message, sender = ...
                 local channelName = select(9, ...)
-                if type(message) == "string" and channelName == "iRCCommsV1"
+                if not iRC:IsSecretValue(message) and not iRC:IsSecretValue(sender)
+                    and not iRC:IsSecretValue(channelName)
+                    and type(message) == "string" and channelName == "iRCCommsV1"
                     and message:sub(1, #"iRCGridV1:") == "iRCGridV1:"
                     and iRC:NormalizeName(sender) ~= iRC:NormalizeName(iRC:GetPlayerName()) then
                     iRC:RecordTrafficBytes("in", #message, "iRCGridV1", "CHANNEL")
@@ -768,7 +770,13 @@ function iRC:StyleScrollFrame(scrollFrame)
     end
 end
 
+function iRC:IsSecretValue(value)
+    local checker = _G and _G.issecretvalue
+    return type(checker) == "function" and checker(value) == true
+end
+
 function iRC:NormalizeName(name)
+    if self:IsSecretValue(name) then return "" end
     if type(name) ~= "string" or name == "" then return "" end
     name = name:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
     if self:IsForeverClient() then

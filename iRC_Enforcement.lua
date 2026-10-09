@@ -570,6 +570,10 @@ end
 
 function Enforcement:CheckGroup()
     if groupLeaving then return end
+    -- Forever protects group unit fields during encounters. The roster is
+    -- checked again on PLAYER_REGEN_ENABLED, so never inspect it while secret.
+    if iRC:IsForeverClient() and ((InCombatLockdown and InCombatLockdown())
+        or (UnitAffectingCombat and UnitAffectingCombat("player"))) then return end
     local _, playerRace = UnitRace("player")
     if not playerRace then return end
     local inRaid = IsInRaid and IsInRaid()

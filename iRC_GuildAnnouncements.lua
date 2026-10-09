@@ -331,6 +331,7 @@ function Announcements:SendTest(kind)
 end
 
 local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
+    if iRC:IsSecretValue(message) or iRC:IsSecretValue(author) then return false end
     if type(message) ~= "string" or not author or author == "" then return false end
     local icon, iconKind
     if iRC:IsOfficialHardcoreRealm()

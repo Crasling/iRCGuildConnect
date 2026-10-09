@@ -384,6 +384,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "GROUP_ROSTER_UPDATE" then
         -- Remove newly grouped members immediately, even if the full map
         -- refresh is deferred by combat low-traffic mode.
+        if iRC:IsForeverClient() and ((InCombatLockdown and InCombatLockdown())
+            or (UnitAffectingCombat and UnitAffectingCombat("player"))) then
+            GuildMap:UpdatePins()
+            return
+        end
         for name in pairs(groupedMembers()) do clearPin(name) end
         GuildMap:UpdatePins()
     elseif event == "CHAT_MSG_ADDON" then
