@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.19 - Multi-Level Rank Management
+--------------------------------------------------------------------------------
+[NEW] Promotions and demotions can target a rank several levels away for one member or a selected batch
+[IMPROVED] Rank changes advance one confirmed level per click and only successful members continue to the next level
+[IMPROVED] Removal and rank-management queues list every member included in the current batch
+[CHANGED] Inactive Members can exclude a selected rank and every higher-authority rank from its list and removal queue
+[IMPROVED] The inactive-rank selector now uses a compact iRC-styled menu with clearer spacing
+
 v0.5.18 - Management & Stability
 --------------------------------------------------------------------------------
 [NEW] Inactive Members can exclude one selected guild rank from the list and removal queue

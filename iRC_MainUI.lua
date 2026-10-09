@@ -538,7 +538,7 @@ local function getEligibleInactiveMembers(threshold, testAdminPreview, excludedR
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
             and iRC:NormalizeName(member.name) ~= selfKey
-            and member.rankIndex ~= excludedRank
+            and not (excludedRank and type(member.rankIndex) == "number" and member.rankIndex <= excludedRank)
             and (preview or type(member.rankIndex) == "number" and member.rankIndex > ownRank) then
             members[#members + 1] = member
         end
@@ -806,6 +806,7 @@ function UI:Create()
     removeMemberConfirm.cancel:SetScript("OnClick", function()
         removeMemberConfirm.rankAction = nil
         removeMemberConfirm.sourceRank = nil
+        removeMemberConfirm.targetRank = nil
         removeMemberConfirm.removeAll = nil
         removeMemberConfirm.testPreview = nil
         removeMemberConfirm:Hide()
@@ -814,6 +815,102 @@ function UI:Create()
     removeMemberConfirm.accept:SetPoint("RIGHT", removeMemberConfirm.cancel, "LEFT", -10, 0)
     removeMemberConfirm.accept:SetBackdropColor(0.20, 0.035, 0.025, 1)
     removeMemberConfirm.accept:SetBackdropBorderColor(0.85, 0.20, 0.12, 1)
+
+    removeMemberConfirm.rankTargetLabel = removeMemberConfirm:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    removeMemberConfirm.rankTargetLabel:SetPoint("TOPLEFT", removeMemberConfirm, "TOPLEFT", 22, -142)
+    removeMemberConfirm.rankTargetLabel:SetText("Change to")
+    removeMemberConfirm.rankTargetDropdown = CreateFrame("Button", nil, removeMemberConfirm, "BackdropTemplate")
+    local rankTargetDropdown = removeMemberConfirm.rankTargetDropdown
+    rankTargetDropdown:SetSize(300, 26)
+    rankTargetDropdown:SetPoint("LEFT", removeMemberConfirm.rankTargetLabel, "RIGHT", 14, 0)
+    createBackdrop(rankTargetDropdown, { 0.055, 0.045, 0.032, 0.99 }, { 0.46, 0.35, 0.18, 1 })
+    rankTargetDropdown.text = rankTargetDropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    rankTargetDropdown.text:SetPoint("LEFT", 10, 0)
+    rankTargetDropdown.text:SetPoint("RIGHT", -30, 0)
+    rankTargetDropdown.text:SetJustifyH("LEFT")
+    rankTargetDropdown.arrow = rankTargetDropdown:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    rankTargetDropdown.arrow:SetPoint("RIGHT", -10, 0)
+    rankTargetDropdown.arrow:SetText("v")
+    rankTargetDropdown:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    rankTargetDropdown.menu = CreateFrame("Frame", nil, rankTargetDropdown, "BackdropTemplate")
+    rankTargetDropdown.menu:SetPoint("TOPLEFT", rankTargetDropdown, "BOTTOMLEFT", 0, -2)
+    rankTargetDropdown.menu:SetPoint("TOPRIGHT", rankTargetDropdown, "BOTTOMRIGHT", 0, -2)
+    rankTargetDropdown.menu:SetHeight(12)
+    rankTargetDropdown.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    rankTargetDropdown.menu:SetFrameLevel(removeMemberConfirm:GetFrameLevel() + 30)
+    rankTargetDropdown.menu:SetClampedToScreen(true)
+    rankTargetDropdown.menu:SetToplevel(true)
+    rankTargetDropdown.menu:EnableMouse(true)
+    rankTargetDropdown.menu:SetScript("OnMouseDown", function() end)
+    createBackdrop(rankTargetDropdown.menu, { 0.025, 0.022, 0.018, 0.995 }, { 0.72, 0.45, 0.16, 1 })
+    rankTargetDropdown.menu.buttons = {}
+    rankTargetDropdown.menu:Hide()
+
+    function rankTargetDropdown:Refresh(options)
+        options = options or {}
+        self.menu:SetHeight(math.max(12, #options * 28 + 8))
+        for index, option in ipairs(options) do
+            local button = self.menu.buttons[index]
+            if not button then
+                button = CreateFrame("Button", nil, self.menu, "BackdropTemplate")
+                button:SetHeight(25)
+                button:SetPoint("TOPLEFT", self.menu, "TOPLEFT", 5, -5 - (index - 1) * 28)
+                button:SetPoint("TOPRIGHT", self.menu, "TOPRIGHT", -5, -5 - (index - 1) * 28)
+                createBackdrop(button, { 0.06, 0.05, 0.038, 0.98 }, { 0.28, 0.23, 0.16, 0.9 })
+                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                button.text:SetPoint("LEFT", 9, 0)
+                button.text:SetPoint("RIGHT", -9, 0)
+                button.text:SetJustifyH("LEFT")
+                button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                self.menu.buttons[index] = button
+            end
+            button.rankIndex, button.rankLabel = option.index, option.label
+            button.text:SetText(option.label)
+            local selected = removeMemberConfirm.targetRank == option.index
+            button:SetBackdropColor(selected and 0.19 or 0.06, selected and 0.11 or 0.05,
+                selected and 0.035 or 0.038, 0.98)
+            button:SetBackdropBorderColor(selected and COLORS.gold[1] or 0.28,
+                selected and COLORS.gold[2] or 0.23, selected and COLORS.gold[3] or 0.16, 1)
+            button:SetScript("OnClick", function(self)
+                removeMemberConfirm.targetRank = self.rankIndex
+                rankTargetDropdown.text:SetText(self.rankLabel)
+                rankTargetDropdown.menu:Hide()
+                rankTargetDropdown:Refresh(removeMemberConfirm.rankTargetOptions)
+            end)
+            button:Show()
+            if selected then self.text:SetText(option.label) end
+        end
+        for index = #options + 1, #self.menu.buttons do self.menu.buttons[index]:Hide() end
+    end
+    rankTargetDropdown:SetScript("OnClick", function(self)
+        self.menu:SetShown(not self.menu:IsShown())
+        if self.menu:IsShown() then self.menu:Raise() end
+    end)
+    function removeMemberConfirm:SetRankTargets(sourceRank, action, testPreview)
+        local minimumRank, maximumRank = 0, getGuildRankCount() - 1
+        if action == "PROMOTE" and not testPreview then
+            local ownRank = getNativeGuildRank()
+            minimumRank = type(ownRank) == "number" and ownRank + 1 or sourceRank - 1
+        end
+        local options = {}
+        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
+            local validTarget = type(rank.index) == "number" and (action == "PROMOTE"
+                and rank.index < sourceRank and rank.index >= minimumRank
+                or action == "DEMOTE" and rank.index > sourceRank and rank.index <= maximumRank)
+            if validTarget then
+                options[#options + 1] = {
+                    index = rank.index,
+                    label = tostring(rank.name or ("Rank " .. rank.index)) .. " (Rank " .. rank.index .. ")",
+                }
+            end
+        end
+        self.rankTargetOptions = options
+        self.targetRank = action == "PROMOTE" and sourceRank - 1 or sourceRank + 1
+        self.rankTargetLabel:SetText(action == "PROMOTE" and "Promote to" or "Demote to")
+        rankTargetDropdown:Refresh(options)
+    end
+    removeMemberConfirm.rankTargetLabel:Hide()
+    rankTargetDropdown:Hide()
 
     removeMemberConfirm.bulkList = CreateFrame("Frame", nil, removeMemberConfirm, "BackdropTemplate")
     removeMemberConfirm.bulkList:SetPoint("TOPLEFT", removeMemberConfirm, "TOPLEFT", 22, -157)
@@ -906,10 +1003,63 @@ function UI:Create()
         refreshBulkSelection()
     end
     removeMemberConfirm.setBulkCandidates = setBulkCandidates
+    function removeMemberConfirm:SetBulkLayout(showPromotionTarget)
+        self:SetSize(570, showPromotionTarget and 530 or 490)
+        self.bulkList:ClearAllPoints()
+        self.bulkList:SetPoint("TOPLEFT", self, "TOPLEFT", 22, showPromotionTarget and -185 or -157)
+        self.bulkList:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -22, 58)
+        self.rankTargetLabel:SetShown(showPromotionTarget == true)
+        self.rankTargetDropdown:SetShown(showPromotionTarget == true)
+        if not showPromotionTarget then
+            self.rankTargetDropdown.menu:Hide()
+            self.targetRank, self.rankTargetOptions = nil, nil
+        end
+    end
     removeMemberConfirm.bulkList:Hide()
 
+    local function addQueueMemberList(queue)
+        queue:SetSize(590, 420)
+        queue.batchList = CreateFrame("Frame", nil, queue, "BackdropTemplate")
+        queue.batchList:SetPoint("TOPLEFT", queue, "TOPLEFT", 22, -122)
+        queue.batchList:SetPoint("BOTTOMRIGHT", queue, "BOTTOMRIGHT", -22, 62)
+        queue.batchList:EnableMouse(true)
+        createBackdrop(queue.batchList, { 0.04, 0.032, 0.025, 0.99 }, { 0.42, 0.31, 0.15, 0.95 })
+        queue.batchList.title = queue.batchList:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        queue.batchList.title:SetPoint("TOPLEFT", queue.batchList, "TOPLEFT", 11, -9)
+        queue.batchList.title:SetTextColor(unpack(COLORS.gold))
+
+        local scroll = CreateFrame("ScrollFrame", nil, queue.batchList, "UIPanelScrollFrameTemplate")
+        iRC:StyleScrollFrame(scroll)
+        scroll:SetPoint("TOPLEFT", queue.batchList, "TOPLEFT", 8, -29)
+        scroll:SetPoint("BOTTOMRIGHT", queue.batchList, "BOTTOMRIGHT", -28, 7)
+        local child = CreateFrame("Frame", nil, scroll)
+        child:SetSize(500, 1)
+        scroll:SetScrollChild(child)
+        queue.batchList.rows = {}
+
+        function queue:SetBatchMembers(names)
+            names = names or {}
+            self.batchList.title:SetText("Members in this batch (" .. #names .. ")")
+            for index, name in ipairs(names) do
+                local row = self.batchList.rows[index]
+                if not row then
+                    row = child:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                    row:SetPoint("TOPLEFT", child, "TOPLEFT", 7, -((index - 1) * 22))
+                    row:SetPoint("RIGHT", child, "RIGHT", -7, 0)
+                    row:SetJustifyH("LEFT")
+                    self.batchList.rows[index] = row
+                end
+                row:SetText(tostring(index) .. ".  " .. iRC:FormatPlayerName(name))
+                row:Show()
+            end
+            for index = #names + 1, #self.batchList.rows do self.batchList.rows[index]:Hide() end
+            child:SetHeight(math.max(1, #names * 22))
+            scroll:SetVerticalScroll(0)
+        end
+    end
+
     local removalQueue = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-    removalQueue:SetSize(590, 245)
+    removalQueue:SetSize(590, 420)
     removalQueue:SetPoint("CENTER", frame, "CENTER", 0, 20)
     removalQueue:SetFrameStrata("FULLSCREEN_DIALOG")
     removalQueue:SetToplevel(true)
@@ -962,6 +1112,7 @@ function UI:Create()
     removalQueue.testRemove:SetBackdropColor(0.12, 0.075, 0.025, 1)
     removalQueue.testRemove:SetBackdropBorderColor(0.85, 0.58, 0.16, 1)
     removalQueue.testRemove:Hide()
+    addQueueMemberList(removalQueue)
 
     local advanceRemovalQueue
     local removalMacroName = "iRC_KickQueue"
@@ -1143,6 +1294,7 @@ function UI:Create()
             else
                 removalQueue.currentNames = batchNames
                 removalQueue.batchNextIndex = cursor
+                removalQueue:SetBatchMembers(batchNames)
                 local batchEnd = cursor - 1
                 removalQueue.progress:SetText(tostring(removalQueue.index) .. "-" .. tostring(batchEnd)
                     .. " / " .. tostring(removalQueue.total))
@@ -1295,7 +1447,7 @@ function UI:Create()
     frame.removalQueue = removalQueue
 
     local rankQueue = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-    rankQueue:SetSize(590, 245)
+    rankQueue:SetSize(590, 420)
     rankQueue:SetPoint("CENTER", frame, "CENTER", 0, 20)
     rankQueue:SetFrameStrata("FULLSCREEN_DIALOG")
     rankQueue:SetToplevel(true)
@@ -1343,6 +1495,7 @@ function UI:Create()
     rankQueue.combatBlocker:SetPoint("CENTER", rankQueue.apply, "CENTER", 0, 0)
     rankQueue.combatBlocker:SetFrameLevel(rankQueue.apply:GetFrameLevel() + 10)
     rankQueue.combatBlocker:Hide()
+    addQueueMemberList(rankQueue)
 
     local advanceRankQueue
     local scheduleRankConfirmationPoll
@@ -1404,11 +1557,12 @@ function UI:Create()
         if simulated then
             iRC:Print("Rank-management simulation complete: " .. changed .. " change(s), " .. skipped .. " skipped.")
         else
-            iRC:Print("Rank-management queue complete: " .. changed .. " changed, " .. skipped
+            iRC:Print("Rank-management queue complete: " .. changed .. " rank change(s), " .. skipped
                 .. " skipped, " .. failed .. " failed.")
             iRC:RefreshGuildRoster()
         end
-        rankQueue.testPreview = nil
+        rankQueue.testPreview, rankQueue.targetRank, rankQueue.stageChangedNames = nil, nil, nil
+        rankQueue.simulatedRanks = nil
         UI:RefreshIfShown()
     end
 
@@ -1420,6 +1574,7 @@ function UI:Create()
             .. " queued action(s)", 1)
         rankQueue.active, rankQueue.currentNames, rankQueue.waitingNames, rankQueue.waitingByKey = nil, nil, nil, nil
         rankQueue.timerTicket, rankQueue.macroReady, rankQueue.testPreview = nil, nil, nil
+        rankQueue.targetRank, rankQueue.stageChangedNames, rankQueue.simulatedRanks = nil, nil, nil
         rankQueue:Hide()
         iRC:Print(iRC.Colors.Red .. "Rank-management queue stopped: WoW says this character does not have native "
             .. "guild permission. " .. tostring(remaining) .. " queued action(s) were cancelled."
@@ -1456,6 +1611,7 @@ function UI:Create()
         end
         rankQueue.waitingByKey[key] = nil
         rankQueue.changed = (rankQueue.changed or 0) + 1
+        rankQueue.stageChangedNames[#rankQueue.stageChangedNames + 1] = confirmedName
         iRC:Print((rankQueue.action == "PROMOTE" and "Promoted " or "Demoted ")
             .. iRC:FormatPlayerName(confirmedName) .. ".")
         completeRankBatch()
@@ -1532,6 +1688,9 @@ function UI:Create()
             while cursor <= rankQueue.total do
                 local name = rankQueue.items[cursor]
                 local currentRank, member = getCurrentRank(name)
+                if rankQueue.testPreview then
+                    currentRank = rankQueue.simulatedRanks[iRC:NormalizeName(name)] or currentRank
+                end
                 local valid = currentRank == rankQueue.expectedRank
                     and (rankQueue.testPreview or isRankActionEligible(member, rankQueue.action, false))
                 if valid then
@@ -1559,8 +1718,13 @@ function UI:Create()
             else
                 rankQueue.currentNames = batchNames
                 rankQueue.batchNextIndex = cursor
+                rankQueue:SetBatchMembers(batchNames)
                 rankQueue.progress:SetText(rankQueue.index .. "-" .. (cursor - 1) .. " / " .. rankQueue.total)
                 local verb = rankQueue.action == "PROMOTE" and "Promote" or "Demote"
+                local nextRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
+                    or rankQueue.expectedRank + 1
+                local stageDetail = " Rank " .. rankQueue.expectedRank .. " to Rank " .. nextRank
+                    .. " (target Rank " .. rankQueue.targetRank .. ")."
                 rankQueue.title:SetText(verb .. " guild members")
                 if rankQueue.testPreview then
                     rankQueue.macroReady = nil
@@ -1568,7 +1732,7 @@ function UI:Create()
                     rankQueue.simulate:Show()
                     rankQueue.combatBlocker:Hide()
                     rankQueue.body:SetText("Test-admin preview: one click simulates " .. verb:lower() .. "ing "
-                        .. #batchNames .. " members. No guild rank will be changed.")
+                        .. #batchNames .. " members." .. stageDetail .. " No guild rank will be changed.")
                 elseif InCombatLockdown and InCombatLockdown() then
                     rankQueue.macroReady = nil
                     rankQueue.simulate:Hide()
@@ -1583,7 +1747,7 @@ function UI:Create()
                     rankQueue.combatBlocker:Hide()
                     rankQueue.body:SetText(rankQueue.macroReady
                         and ("Click once to " .. verb:lower() .. " this batch of " .. #batchNames
-                            .. " members. iRC will verify every rank change before continuing.")
+                            .. " members." .. stageDetail .. " iRC will verify every rank change before continuing.")
                         or "iRC could not create or update its iRC_RankQueue macro. Free a general macro slot and reopen the queue.")
                 end
                 rankQueue.skip:SetEnabled(true)
@@ -1593,14 +1757,48 @@ function UI:Create()
                 return
             end
         end
+        local hasAnotherLevel = false
+        if type(rankQueue.targetRank) == "number" then
+            hasAnotherLevel = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1 > rankQueue.targetRank
+                or rankQueue.action == "DEMOTE" and rankQueue.expectedRank + 1 < rankQueue.targetRank
+        end
+        if hasAnotherLevel and rankQueue.stageChangedNames[1] then
+            rankQueue.items = rankQueue.stageChangedNames
+            rankQueue.total, rankQueue.index = #rankQueue.items, 1
+            rankQueue.expectedRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
+                or rankQueue.expectedRank + 1
+            rankQueue.stageChangedNames = {}
+            rankQueueDebug("continuing multi-level rank change at rank " .. tostring(rankQueue.expectedRank)
+                .. " toward target rank " .. tostring(rankQueue.targetRank))
+            iRC:RefreshGuildRoster()
+            advanceRankQueue()
+            return
+        end
         finishRankQueue()
     end
 
-    local function startRankQueue(names, action, expectedRank, testPreview)
+    local function startRankQueue(names, action, expectedRank, testPreview, targetRank)
         if type(names) ~= "table" or #names == 0 or (action ~= "PROMOTE" and action ~= "DEMOTE") then return false end
+        targetRank = math.floor(tonumber(targetRank)
+            or (action == "PROMOTE" and expectedRank - 1 or expectedRank + 1))
+        if action == "PROMOTE" then
+            if targetRank < 0 or targetRank >= expectedRank then return false end
+            if not testPreview then
+                local ownRank = getNativeGuildRank()
+                if type(ownRank) ~= "number" or targetRank <= ownRank then return false end
+            end
+        elseif targetRank <= expectedRank or targetRank >= getGuildRankCount() then
+            return false
+        end
         rankQueue.items, rankQueue.total, rankQueue.index = names, #names, 1
         rankQueue.action, rankQueue.expectedRank = action, expectedRank
+        rankQueue.targetRank = targetRank
         rankQueue.changed, rankQueue.skipped, rankQueue.failed = 0, 0, 0
+        rankQueue.stageChangedNames = {}
+        rankQueue.simulatedRanks = {}
+        for _, name in ipairs(names) do
+            rankQueue.simulatedRanks[iRC:NormalizeName(name)] = expectedRank
+        end
         rankQueue.currentNames, rankQueue.waitingNames, rankQueue.waitingByKey = nil, nil, nil
         rankQueue.batchNextIndex, rankQueue.timerTicket = nil, nil
         rankQueue.macroReady = nil
@@ -1613,7 +1811,7 @@ function UI:Create()
     function rankQueue:Cancel()
         self.active, self.currentNames, self.waitingNames, self.waitingByKey = nil, nil, nil, nil
         self.batchNextIndex, self.timerTicket = nil, nil
-        self.testPreview = nil
+        self.testPreview, self.targetRank, self.stageChangedNames, self.simulatedRanks = nil, nil, nil, nil
         self:Hide()
     end
     rankQueue.cancel:SetScript("OnClick", function() rankQueue:Cancel() end)
@@ -1630,6 +1828,9 @@ function UI:Create()
         for _, name in ipairs(rankQueue.currentNames) do
             iRC:Print("Test: would " .. rankQueue.action:lower() .. " " .. iRC:FormatPlayerName(name) .. ".")
             rankQueue.changed = rankQueue.changed + 1
+            rankQueue.stageChangedNames[#rankQueue.stageChangedNames + 1] = name
+            rankQueue.simulatedRanks[iRC:NormalizeName(name)] = rankQueue.action == "PROMOTE"
+                and rankQueue.expectedRank - 1 or rankQueue.expectedRank + 1
         end
         rankQueue.index = rankQueue.batchNextIndex or rankQueue.index
         rankQueue.currentNames, rankQueue.batchNextIndex = nil, nil
@@ -1683,6 +1884,7 @@ function UI:Create()
     removeMemberConfirm.accept:SetScript("OnClick", function()
         local rankAction = removeMemberConfirm.rankAction
         local sourceRank = removeMemberConfirm.sourceRank
+        local targetRank = removeMemberConfirm.targetRank
         local removeAll = removeMemberConfirm.removeAll == true
         local testPreview = removeMemberConfirm.testPreview == true
         local excludedRank = removeMemberConfirm.excludedRank
@@ -1704,10 +1906,11 @@ function UI:Create()
         removeMemberConfirm.targetName = nil
         removeMemberConfirm.rankAction = nil
         removeMemberConfirm.sourceRank = nil
+        removeMemberConfirm.targetRank = nil
         removeMemberConfirm.excludedRank = nil
         if rankAction then
             if not iRC:HasGuildPermission("rankManagement") and not testPreview then return end
-            startRankQueue(selectedOrder, rankAction, sourceRank, testPreview)
+            startRankQueue(selectedOrder, rankAction, sourceRank, testPreview, targetRank)
             return
         end
         if removeAll then
@@ -2180,10 +2383,10 @@ function UI:Create()
     frame.guildLogSearch.suggestions:Hide()
 
     frame.inactiveThreshold = CreateFrame("Frame", nil, main)
-    frame.inactiveThreshold:SetSize(440, 58)
+    frame.inactiveThreshold:SetSize(620, 62)
     frame.inactiveThreshold:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -49)
     frame.inactiveThreshold.label = frame.inactiveThreshold:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    frame.inactiveThreshold.label:SetPoint("LEFT", frame.inactiveThreshold, "LEFT", 0, 0)
+    frame.inactiveThreshold.label:SetPoint("TOPLEFT", frame.inactiveThreshold, "TOPLEFT", 0, -3)
     frame.inactiveThreshold.label:SetText(iRC:Text("INACTIVE_MEMBERS_THRESHOLD"))
     frame.inactiveThreshold.input = CreateFrame("EditBox", nil, frame.inactiveThreshold, "InputBoxTemplate")
     frame.inactiveThreshold.input:SetSize(58, 22)
@@ -2215,44 +2418,89 @@ function UI:Create()
         self:ClearFocus()
     end)
     frame.inactiveThreshold.excludeLabel = frame.inactiveThreshold:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    frame.inactiveThreshold.excludeLabel:SetPoint("TOPLEFT", frame.inactiveThreshold, "TOPLEFT", 0, -34)
-    frame.inactiveThreshold.excludeLabel:SetText("Exclude rank")
-    frame.inactiveThreshold.excludeRank = CreateFrame("Frame", "iRCInactiveExcludeRankDropdown",
-        frame.inactiveThreshold, "UIDropDownMenuTemplate")
-    frame.inactiveThreshold.excludeRank:SetPoint("LEFT", frame.inactiveThreshold.excludeLabel, "RIGHT", -8, -1)
-    UIDropDownMenu_SetWidth(frame.inactiveThreshold.excludeRank, 205)
-    UIDropDownMenu_JustifyText(frame.inactiveThreshold.excludeRank, "LEFT")
-    function frame:RefreshInactiveRankExclude()
-        local selected = self.inactiveExcludedRank
-        local text = "Do not exclude a rank"
+    frame.inactiveThreshold.excludeLabel:SetPoint("TOPLEFT", frame.inactiveThreshold, "TOPLEFT", 0, -38)
+    frame.inactiveThreshold.excludeLabel:SetText("Exclude ranks above this")
+    frame.inactiveThreshold.excludeRank = CreateFrame("Button", nil,
+        frame.inactiveThreshold, "BackdropTemplate")
+    local excludeRankDropdown = frame.inactiveThreshold.excludeRank
+    excludeRankDropdown:SetSize(300, 25)
+    excludeRankDropdown:SetPoint("LEFT", frame.inactiveThreshold.excludeLabel, "RIGHT", 14, -1)
+    createBackdrop(excludeRankDropdown, { 0.055, 0.045, 0.032, 0.98 }, { 0.46, 0.35, 0.18, 1 })
+    excludeRankDropdown.text = excludeRankDropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    excludeRankDropdown.text:SetPoint("LEFT", 10, 0)
+    excludeRankDropdown.text:SetPoint("RIGHT", -30, 0)
+    excludeRankDropdown.text:SetJustifyH("LEFT")
+    excludeRankDropdown.arrow = excludeRankDropdown:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    excludeRankDropdown.arrow:SetPoint("RIGHT", -10, 0)
+    excludeRankDropdown.arrow:SetText("v")
+    excludeRankDropdown:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    excludeRankDropdown.menu = CreateFrame("Frame", nil, excludeRankDropdown, "BackdropTemplate")
+    excludeRankDropdown.menu:SetPoint("TOPLEFT", excludeRankDropdown, "BOTTOMLEFT", 0, -2)
+    excludeRankDropdown.menu:SetPoint("TOPRIGHT", excludeRankDropdown, "BOTTOMRIGHT", 0, -2)
+    excludeRankDropdown.menu:SetHeight(12)
+    excludeRankDropdown.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    excludeRankDropdown.menu:SetFrameLevel(frame:GetFrameLevel() + 45)
+    excludeRankDropdown.menu:SetClampedToScreen(true)
+    excludeRankDropdown.menu:SetToplevel(true)
+    excludeRankDropdown.menu:EnableMouse(true)
+    excludeRankDropdown.menu:EnableMouseWheel(true)
+    excludeRankDropdown.menu:SetScript("OnMouseDown", function() end)
+    excludeRankDropdown.menu:SetScript("OnMouseWheel", function() end)
+    createBackdrop(excludeRankDropdown.menu, { 0.025, 0.022, 0.018, 0.995 }, { 0.72, 0.45, 0.16, 1 })
+    excludeRankDropdown.menu.buttons = {}
+    excludeRankDropdown.menu:Hide()
+
+    function excludeRankDropdown:Refresh()
+        local options = { { value = -1, label = "Do not exclude ranks" } }
         for _, rank in ipairs(iRC:GetGuildRankOptions()) do
-            if rank.index == selected then
-                text = tostring(rank.name or ("Rank " .. selected)) .. " (Rank " .. selected .. ")"
-                break
-            end
+            options[#options + 1] = {
+                value = rank.index,
+                label = tostring(rank.name or ("Rank " .. rank.index)) .. " (Rank " .. rank.index .. ") and above",
+            }
         end
-        UIDropDownMenu_SetSelectedValue(self.inactiveThreshold.excludeRank,
-            type(selected) == "number" and selected or -1)
-        UIDropDownMenu_SetText(self.inactiveThreshold.excludeRank, text)
-    end
-    UIDropDownMenu_Initialize(frame.inactiveThreshold.excludeRank, function(_, level)
-        if level ~= 1 then return end
-        local function addChoice(value, label)
-            local info = UIDropDownMenu_CreateInfo()
-            info.text, info.value = label, value
-            info.checked = (type(frame.inactiveExcludedRank) == "number" and frame.inactiveExcludedRank or -1) == value
-            info.func = function()
-                frame.inactiveExcludedRank = value >= 0 and value or nil
+        local selected = type(frame.inactiveExcludedRank) == "number" and frame.inactiveExcludedRank or -1
+        self.menu:SetHeight(math.max(12, #options * 28 + 8))
+        for index, option in ipairs(options) do
+            local button = self.menu.buttons[index]
+            if not button then
+                button = CreateFrame("Button", nil, self.menu, "BackdropTemplate")
+                button:SetHeight(25)
+                button:SetPoint("TOPLEFT", self.menu, "TOPLEFT", 5, -5 - (index - 1) * 28)
+                button:SetPoint("TOPRIGHT", self.menu, "TOPRIGHT", -5, -5 - (index - 1) * 28)
+                createBackdrop(button, { 0.06, 0.05, 0.038, 0.98 }, { 0.28, 0.23, 0.16, 0.9 })
+                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                button.text:SetPoint("LEFT", 9, 0)
+                button.text:SetPoint("RIGHT", -9, 0)
+                button.text:SetJustifyH("LEFT")
+                button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                self.menu.buttons[index] = button
+            end
+            button.value = option.value
+            button.label = option.label
+            button.text:SetText(option.label)
+            local isSelected = selected == option.value
+            button:SetBackdropColor(isSelected and 0.19 or 0.06, isSelected and 0.11 or 0.05,
+                isSelected and 0.035 or 0.038, 0.98)
+            button:SetBackdropBorderColor(isSelected and COLORS.gold[1] or 0.28,
+                isSelected and COLORS.gold[2] or 0.23, isSelected and COLORS.gold[3] or 0.16, 1)
+            button:SetScript("OnClick", function(self)
+                frame.inactiveExcludedRank = self.value >= 0 and self.value or nil
+                excludeRankDropdown.menu:Hide()
                 frame:RefreshInactiveRankExclude()
                 if frame.scroll then frame.scroll:SetVerticalScroll(0) end
                 UI:Refresh()
-            end
-            UIDropDownMenu_AddButton(info, level)
+            end)
+            button:Show()
+            if isSelected then excludeRankDropdown.text:SetText(option.label) end
         end
-        addChoice(-1, "Do not exclude a rank")
-        for _, rank in ipairs(iRC:GetGuildRankOptions()) do
-            addChoice(rank.index, tostring(rank.name or ("Rank " .. rank.index)) .. " (Rank " .. rank.index .. ")")
-        end
+        for index = #options + 1, #self.menu.buttons do self.menu.buttons[index]:Hide() end
+    end
+    function frame:RefreshInactiveRankExclude()
+        excludeRankDropdown:Refresh()
+    end
+    excludeRankDropdown:SetScript("OnClick", function(self)
+        self.menu:SetShown(not self.menu:IsShown())
+        if self.menu:IsShown() then self.menu:Raise() end
     end)
     frame:RefreshInactiveRankExclude()
     frame.inactiveThreshold:Hide()
@@ -2281,7 +2529,7 @@ function UI:Create()
         confirm.threshold = threshold
         confirm.excludedRank = excludedRank
         confirm.testPreview = testPreview
-        confirm:SetSize(570, 490)
+        confirm:SetBulkLayout(false)
         confirm.bulkList:Show()
         confirm.title:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_TITLE"))
         local body = iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_BODY", #eligible, threshold)
@@ -2431,12 +2679,17 @@ function UI:Create()
         confirm.sourceRank = rankIndex
         confirm.targetName = nil
         confirm.testPreview = testPreview
-        confirm:SetSize(570, 490)
+        confirm:SetBulkLayout(true)
+        confirm:SetRankTargets(rankIndex, action, testPreview)
         confirm.bulkList:Show()
         confirm.title:SetText(onlyName and (verb .. " " .. iRC:FormatPlayerName(candidates[1].name) .. "?")
             or (verb .. " selected guild members?"))
-        local body = onlyName and "Review this one-member rank change. The secure click changes exactly one guild rank."
-            or "Review the list below. Each confirmed click changes one member by exactly one guild rank."
+        local body
+        local actionWord = action == "PROMOTE" and "promotes" or "demotes"
+        body = onlyName and ("Choose a target rank. Each secure click " .. actionWord
+                .. " this member by one rank until the target is reached.")
+            or ("Choose a target rank. Each secure click " .. actionWord
+                .. " the confirmed members by one rank until the target is reached.")
         if testPreview then body = body .. "\n\nTest-admin preview: no guild ranks will be changed." end
         confirm.body:SetText(body)
         confirm.setBulkCandidates(decorated)
@@ -3062,6 +3315,10 @@ function UI:Create()
         if rankMemberMenu:IsShown() and not iRC:IsMouseOverFrame(rankMemberMenu) then rankMemberMenu:Hide() end
         if rankDropdown.menu:IsShown() and not iRC:IsMouseOverFrame(rankDropdown)
             and not iRC:IsMouseOverFrame(rankDropdown.menu) then rankDropdown.menu:Hide() end
+        if excludeRankDropdown.menu:IsShown() and not iRC:IsMouseOverFrame(excludeRankDropdown)
+            and not iRC:IsMouseOverFrame(excludeRankDropdown.menu) then excludeRankDropdown.menu:Hide() end
+        if rankTargetDropdown.menu:IsShown() and not iRC:IsMouseOverFrame(rankTargetDropdown)
+            and not iRC:IsMouseOverFrame(rankTargetDropdown.menu) then rankTargetDropdown.menu:Hide() end
         if professionReport:IsShown() and not iRC:IsMouseOverFrame(professionReport) then professionReport:Hide() end
     end)
     frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}
@@ -3643,7 +3900,8 @@ local function updateInactiveMembers(frame)
     local excludedRank = frame.inactiveExcludedRank
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
-            and iRC:NormalizeName(member.name) ~= selfKey and member.rankIndex ~= excludedRank then
+            and iRC:NormalizeName(member.name) ~= selfKey
+            and not (excludedRank and type(member.rankIndex) == "number" and member.rankIndex <= excludedRank) then
             members[#members + 1] = member
         end
     end
@@ -3695,6 +3953,9 @@ local function updateInactiveMembers(frame)
             confirm.targetName = selectedMember.name
             confirm.threshold = threshold
             confirm:SetSize(510, 205)
+            confirm.rankTargetLabel:Hide()
+            confirm.rankTargetDropdown:Hide()
+            confirm.rankTargetDropdown.menu:Hide()
             confirm.bulkList:Hide()
             confirm.title:SetText("Remove inactive guild member?")
             confirm.accept.text:SetText("Remove member")
