@@ -242,6 +242,7 @@ function iRC:GetPerformanceQueueStatus()
 end
 
 function iRC:QueuePerformanceIncoming(message, callback)
+    if self:IsSecretValue(message) then return true end
     if not self:IsPerformanceMode() or not C_Timer or not C_Timer.After then return false end
     local kind = type(message) == "string" and message:match("^([A-Z][A-Z0-9_]*)") or ""
     if isUrgentTrafficKind(kind) then return false end
@@ -296,6 +297,8 @@ local function drainOutgoingPerformanceQueue()
 end
 
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
+    if self:IsSecretValue(prefix) or self:IsSecretValue(message)
+        or self:IsSecretValue(distribution) or self:IsSecretValue(target) then return false end
     message = tostring(message or "")
     if #message > 255 then
         self:DebugMsg("Blocked oversized addon message (" .. tostring(#message) .. " bytes) for " .. tostring(prefix or "?"), 1)
@@ -409,7 +412,9 @@ function iRC:SetTrafficMonitorEnabled(enabled)
         trafficFrame:SetScript("OnEvent", function(_, event, ...)
             if event == "CHAT_MSG_ADDON" then
                 local prefix, message, _, sender = ...
-                if monitoredPrefixes[prefix] and iRC:NormalizeName(sender) ~= iRC:NormalizeName(iRC:GetPlayerName()) then
+                if not iRC:HasSecretValues(prefix, message, sender) and monitoredPrefixes[prefix]
+                    and type(prefix) == "string" and type(message) == "string"
+                    and iRC:NormalizeName(sender) ~= iRC:NormalizeName(iRC:GetPlayerName()) then
                     iRC:RecordTrafficBytes("in", #prefix + #(message or ""), prefix, message)
                 end
             elseif event == "CHAT_MSG_CHANNEL" then
@@ -569,12 +574,12 @@ end
 iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     tradeExceptions = 1, notifications = 1, homepage = 1, rosterHistory = 1,
-    identity = 1, memberRemoval = 1, rankManagement = 1,
+    identity = 1, memberRemoval = 1, rankManagement = 1, recruitment = 1,
 }
 iRC.PermissionOrder = {
     "verification", "presence", "incidents", "tradeExceptions", "notifications",
     "homepage", "rosterHistory", "identity", "memberRemoval",
-    "rankManagement",
+    "rankManagement", "recruitment",
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -770,9 +775,102 @@ function iRC:StyleScrollFrame(scrollFrame)
     end
 end
 
+-- Give every type-to-filter field the same compact search treatment used by
+-- iWR: a quiet dark field, a spyglass, and a clear button that only appears
+-- while a query is present.
+function iRC:StyleSearchBox(editBox, placeholder)
+    if not editBox or editBox.iRCSearchStyled then return editBox end
+    editBox.iRCSearchStyled = true
+
+    for _, region in ipairs({ editBox:GetRegions() }) do
+        if region.IsObjectType and region:IsObjectType("Texture") then region:SetAlpha(0) end
+    end
+
+    local backdrop = editBox
+    if not editBox.SetBackdrop then
+        local parent = editBox:GetParent()
+        local parentLevel = parent and parent:GetFrameLevel() or 0
+        if editBox:GetFrameLevel() <= parentLevel then editBox:SetFrameLevel(parentLevel + 1) end
+        backdrop = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+        backdrop:SetAllPoints(editBox)
+        backdrop:SetFrameStrata(editBox:GetFrameStrata())
+        backdrop:SetFrameLevel(math.max(0, editBox:GetFrameLevel() - 1))
+        backdrop:EnableMouse(false)
+        editBox:HookScript("OnShow", function() backdrop:Show() end)
+        editBox:HookScript("OnHide", function() backdrop:Hide() end)
+        -- IsShown() ignores hidden ancestors. During panel construction that
+        -- left the sibling backdrop visible even after the edit box itself was
+        -- hidden, so it later appeared behind unrelated page controls.
+        backdrop:SetShown(editBox:IsShown() and (not editBox.IsVisible or editBox:IsVisible()))
+    end
+    backdrop:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    backdrop:SetBackdropColor(0.025, 0.025, 0.025, 1)
+    backdrop:SetBackdropBorderColor(0.48, 0.35, 0.16, 1)
+    editBox.iRCSearchBackdrop = backdrop
+    editBox:SetHeight(24)
+    editBox:SetTextInsets(31, 28, 0, 0)
+    if editBox.SetHighlightColor then editBox:SetHighlightColor(1, 0.59, 0.09, 0.28) end
+
+    local icon = editBox:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(15, 15)
+    icon:SetPoint("LEFT", editBox, "LEFT", 9, 0)
+    icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
+    icon:SetDesaturated(true)
+    icon:SetVertexColor(0.78, 0.66, 0.43)
+    editBox.iRCSearchIcon = icon
+
+    if placeholder then
+        placeholder:ClearAllPoints()
+        placeholder:SetPoint("LEFT", editBox, "LEFT", 31, 0)
+        placeholder:SetPoint("RIGHT", editBox, "RIGHT", -28, 0)
+        placeholder:SetJustifyH("LEFT")
+    end
+
+    local clear = CreateFrame("Button", nil, editBox)
+    clear:SetSize(22, 20)
+    clear:SetPoint("RIGHT", editBox, "RIGHT", -2, 0)
+    clear:SetFrameLevel(editBox:GetFrameLevel() + 2)
+    clear.text = clear:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    clear.text:SetPoint("CENTER", 0, 1)
+    clear.text:SetText("x")
+    clear.text:SetTextColor(0.72, 0.58, 0.36)
+    clear:SetScript("OnEnter", function(self) self.text:SetTextColor(1, 0.59, 0.09) end)
+    clear:SetScript("OnLeave", function(self) self.text:SetTextColor(0.72, 0.58, 0.36) end)
+    clear:SetScript("OnClick", function()
+        editBox:SetText("")
+        editBox:ClearFocus()
+    end)
+    clear:SetShown(editBox:GetText() ~= "")
+    editBox.iRCSearchClear = clear
+
+    editBox:HookScript("OnTextChanged", function(self)
+        self.iRCSearchClear:SetShown(self:GetText() ~= "")
+    end)
+    editBox:HookScript("OnEditFocusGained", function(self)
+        self.iRCSearchBackdrop:SetBackdropColor(0.04, 0.035, 0.028, 1)
+        self.iRCSearchBackdrop:SetBackdropBorderColor(1, 0.59, 0.09, 1)
+    end)
+    editBox:HookScript("OnEditFocusLost", function(self)
+        self.iRCSearchBackdrop:SetBackdropColor(0.025, 0.025, 0.025, 1)
+        self.iRCSearchBackdrop:SetBackdropBorderColor(0.48, 0.35, 0.16, 1)
+    end)
+    return editBox
+end
+
 function iRC:IsSecretValue(value)
     local checker = _G and _G.issecretvalue
     return type(checker) == "function" and checker(value) == true
+end
+
+function iRC:HasSecretValues(...)
+    for index = 1, select("#", ...) do
+        if self:IsSecretValue(select(index, ...)) then return true end
+    end
+    return false
 end
 
 function iRC:NormalizeName(name)

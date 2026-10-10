@@ -642,6 +642,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "TIME_PLAYED_MSG" then
         if not playedRequestToken then return end
         local totalPlayed, levelPlayed = ...
+        if iRC:HasSecretValues(totalPlayed, levelPlayed) then
+            playedRequestToken = nil
+            C_Timer.After(0, restorePlayedChatFrames)
+            return
+        end
         local history, now = localHistory(), time()
         history.playedTotal = math.max(0, math.floor(tonumber(totalPlayed) or 0))
         history.playedLevel = math.max(0, math.floor(tonumber(levelPlayed) or 0))
@@ -666,6 +671,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         Sync:RecordDeath(iRC:GetPlayerName())
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, msg, channel, sender = ...
+        if iRC:HasSecretValues(prefix, msg, channel, sender) then return end
         if (channel ~= "GUILD" and channel ~= "WHISPER") or type(msg) ~= "string" or #msg > 255 then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if prefix == IRC_ROSTER then

@@ -251,6 +251,7 @@ function Dashboard:Create()
     end)
     frame.verificationSearch:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     frame.verificationSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    iRC:StyleSearchBox(frame.verificationSearch, frame.verificationSearch.hint)
     frame.verificationSearch:Hide()
     frame.summaryCards = {}
     for index = 1, 5 do

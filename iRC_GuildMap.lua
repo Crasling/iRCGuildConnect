@@ -210,6 +210,9 @@ function GuildMap:UpdatePins()
 end
 
 function GuildMap:BroadcastPosition()
+    -- Forever can protect map/unit position data during combat. Resume one
+    -- current position broadcast after combat instead of touching secret data.
+    if iRC:DeferLowTraffic("traffic:guild-map-position", function() GuildMap:BroadcastPosition() end) then return false end
     if not enabled() or iRC:GetSettings().shareGuildMapPosition == false or not C_Map then return false end
     local _, instanceType = GetInstanceInfo()
     if instanceType and instanceType ~= "none" then return false end
@@ -393,6 +396,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         GuildMap:UpdatePins()
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, _, sender = ...
+        if iRC:HasSecretValues(prefix, message, sender) then return end
         if prefix ~= iRC.Prefix or not enabled() or not iRC:IsGuildMemberName(sender)
             or iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         local version, mapId, xWire, yWire = tostring(message or ""):match("^MAP_POS\t([^\t]+)\t(%d+)\t(%d+)\t(%d+)$")

@@ -18,11 +18,13 @@ local MAX_SHARED_HISTORY = 50
 local HISTORY_REQUEST_COOLDOWN = 60
 local HISTORY_RESPONSE_COOLDOWN = 60
 local MAX_HISTORY_RESPONSE_WORK = 200
+local GUILD_LOG_DUPLICATE_WINDOW = 120
 local initializedGuildLogStores = setmetatable({}, { __mode = "k" })
 local shownLinkRequests = {}
 local lastLinkRelayAt = 0
+local knownGuildKicks = {}
 local SYNCED_EVENT_TYPES = {
-    JOIN = true, REJOIN = true, LEAVE = true, PROMOTE = true, DEMOTE = true,
+    JOIN = true, REJOIN = true, LEAVE = true, KICK = true, PROMOTE = true, DEMOTE = true,
     LEVEL = true, NAME = true, NOTE = true, OFFICER_NOTE = true, RETURN = true,
 }
 
@@ -45,6 +47,44 @@ local function eventFingerprint(eventType, name, text, occurredAt)
     return string.format("%08x", hash)
 end
 
+local function eventSemanticKey(eventType, name, text)
+    local normalizedText = tostring(text or "")
+        :gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+        :gsub("%s+", " "):match("^%s*(.-)%s*$"):lower()
+    return table.concat({ tostring(eventType or ""), iRC:NormalizeName(name), normalizedText }, "|")
+end
+
+local function findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt)
+    local wantedKey = eventSemanticKey(eventType, name, text)
+    local wantedAt = tonumber(occurredAt) or 0
+    for index = #(store and store.guildLog or {}), 1, -1 do
+        local existing = store.guildLog[index]
+        local existingAt = tonumber(existing and existing.occurredAt) or 0
+        if wantedAt >= existingAt and wantedAt - existingAt > GUILD_LOG_DUPLICATE_WINDOW then break end
+        if math.abs(existingAt - wantedAt) <= GUILD_LOG_DUPLICATE_WINDOW
+            and eventSemanticKey(existing.eventType, existing.name, existing.text) == wantedKey then
+            return index, existing
+        end
+    end
+    return nil, nil
+end
+
+local function findRecentGuildLogEvent(store, eventType, name, occurredAt)
+    local wantedKey = iRC:NormalizeName(name)
+    local wantedAt = tonumber(occurredAt) or 0
+    for index = #(store and store.guildLog or {}), 1, -1 do
+        local existing = store.guildLog[index]
+        local existingAt = tonumber(existing and existing.occurredAt) or 0
+        if existingAt < wantedAt - GUILD_LOG_DUPLICATE_WINDOW then break end
+        if math.abs(existingAt - wantedAt) <= GUILD_LOG_DUPLICATE_WINDOW
+            and existing.eventType == eventType
+            and iRC:NormalizeName(existing.name) == wantedKey then
+            return index, existing
+        end
+    end
+    return nil, nil
+end
+
 local function guildStore(create)
     local guildKey = iRC:GetGuildKey()
     if not guildKey then return nil end
@@ -65,10 +105,21 @@ local function guildStore(create)
         store.guildLog = type(store.guildLog) == "table" and store.guildLog or {}
         store.guildLogIds = type(store.guildLogIds) == "table" and store.guildLogIds or {}
         if not initializedGuildLogStores[store] then
+            table.sort(store.guildLog, function(a, b)
+                return (tonumber(a and a.occurredAt) or 0) < (tonumber(b and b.occurredAt) or 0)
+            end)
+            local cleanedLog = {}
+            local cleanedStore = { guildLog = cleanedLog }
+            store.guildLogIds = {}
             for _, record in ipairs(store.guildLog) do
                 record.id = record.id or eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
                 store.guildLogIds[record.id] = true
+                if not findRecentMatchingGuildLogEvent(cleanedStore, record.eventType, record.name,
+                    record.text, record.occurredAt) then
+                    cleanedLog[#cleanedLog + 1] = record
+                end
             end
+            store.guildLog = cleanedLog
             initializedGuildLogStores[store] = true
         end
         store.memberHistory = type(store.memberHistory) == "table" and store.memberHistory or {}
@@ -226,6 +277,22 @@ function Identity:GetMainName()
     return store and store.main and store.characters[store.main] or nil
 end
 
+-- Resolve any linked character to the main character representing that
+-- player. Unlinked characters return nil so callers can use the character
+-- itself as its own identity group.
+function Identity:GetMainCharacterName(name)
+    local store, key = guildStore(false), characterKey(name)
+    if not store or not key then return nil end
+    if store.characters[key] then
+        return store.main and store.characters[store.main] or nil
+    end
+    local assignment = store.identityAssignments[key]
+    if assignment then return assignment.mainName end
+    for _, linked in pairs(store.identityAssignments) do
+        if linked.mainKey == key then return linked.mainName or iRC:FormatPlayerName(name) end
+    end
+end
+
 function Identity:GetCharacters()
     local store, result = guildStore(false), {}
     for key, name in pairs(store and store.characters or {}) do
@@ -338,8 +405,10 @@ end
 local function addGuildLog(store, eventType, name, text, classFile)
     local log = store and store.guildLog
     if not log then return end
+    local occurredAt = time()
+    if findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt) then return false end
     local record = {
-        occurredAt = time(),
+        occurredAt = occurredAt,
         eventType = eventType,
         name = iRC:FormatPlayerName(name or ""),
         text = text,
@@ -350,6 +419,74 @@ local function addGuildLog(store, eventType, name, text, classFile)
     store.guildLogIds[record.id] = true
     trimGuildLog(store)
     if Identity.BroadcastGuildLog then Identity:BroadcastGuildLog(record) end
+    return true
+end
+
+function Identity:SetGuildJoinInviter(name, inviter)
+    local store, nameKey = guildStore(false), characterKey(name)
+    inviter = iRC:FormatPlayerName(inviter)
+    if not store or nameKey == "" or characterKey(inviter) == "" then return false end
+    local now = time()
+    for index = #store.guildLog, 1, -1 do
+        local record = store.guildLog[index]
+        local occurredAt = tonumber(record and record.occurredAt) or 0
+        if occurredAt < now - GUILD_LOG_DUPLICATE_WINDOW then break end
+        if (record.eventType == "JOIN" or record.eventType == "REJOIN")
+            and characterKey(record.name) == nameKey then
+            local baseText = tostring(record.text or (iRC:FormatPlayerName(name) .. " joined the guild."))
+                :gsub("%s+Invited by .-%.$", "")
+            local updatedText = baseText .. " Invited by " .. inviter .. "."
+            if record.text == updatedText then return false end
+            local previousId = record.id
+            record.text = updatedText
+            record.id = eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
+            if previousId then store.guildLogIds[previousId] = nil end
+            store.guildLogIds[record.id] = true
+            self:BroadcastGuildLog(record)
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+            return true
+        end
+    end
+    return false
+end
+
+function Identity:RecordKnownGuildKick(name, officer)
+    local store, key = guildStore(false), characterKey(name)
+    officer = iRC:FormatPlayerName(officer or iRC:GetPlayerName())
+    if key == "" or characterKey(officer) == "" then return false end
+    knownGuildKicks[key] = { officer = officer, recordedAt = time() }
+    if not store then return true end
+    local now = time()
+    for index = #store.guildLog, 1, -1 do
+        local record = store.guildLog[index]
+        local occurredAt = tonumber(record and record.occurredAt) or 0
+        if occurredAt < now - GUILD_LOG_DUPLICATE_WINDOW then break end
+        if (record.eventType == "LEAVE" or record.eventType == "KICK")
+            and characterKey(record.name) == key then
+            local previousId = record.id
+            record.eventType = "KICK"
+            record.text = iRC:FormatPlayerName(name) .. " was removed from the guild by " .. officer .. "."
+            record.id = eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
+            if previousId then store.guildLogIds[previousId] = nil end
+            store.guildLogIds[record.id] = true
+            local former = store.formerMembers[key]
+            if former then former.departureType = "Removed by " .. officer end
+            self:BroadcastGuildLog(record)
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+            knownGuildKicks[key] = nil
+            return true
+        end
+    end
+    return true
+end
+
+local function guildJoinText(eventType, name)
+    local displayName = iRC:FormatPlayerName(name)
+    local text = displayName .. (eventType == "REJOIN" and " rejoined the guild." or " joined the guild.")
+    local inviter = iRC.Recruitment and iRC.Recruitment.GetAcceptedInviter
+        and iRC.Recruitment:GetAcceptedInviter(name)
+    if inviter then text = text .. " Invited by " .. inviter .. "." end
+    return text
 end
 
 function Identity:GetGuildLog()
@@ -695,18 +832,58 @@ function Identity:ReceiveSync(parts, sender)
     local now = time()
     if id == "" or not occurredAt or occurredAt > now + 300 or occurredAt < now - 180 * 86400
         or not SYNCED_EVENT_TYPES[eventType] or name == ""
-        or not iRC:IsGuildMemberName(name) and eventType ~= "LEAVE" then return false end
+        or not iRC:IsGuildMemberName(name) and eventType ~= "LEAVE" and eventType ~= "KICK" then return false end
     local store = guildStore(true)
     if not store or store.guildLogIds[id] then return false end
-    -- Different clients can observe the same roster change a few seconds apart.
-    -- Treat that as one event even when their timestamp-based IDs differ.
-    for _, existing in ipairs(store.guildLog) do
-        if existing.eventType == eventType and characterKey(existing.name) == characterKey(name)
-            and tostring(existing.text or "") == text
-            and math.abs((tonumber(existing.occurredAt) or 0) - occurredAt) <= 10 then
-            store.guildLogIds[id] = true
-            return false
+    -- JOIN records may be enriched with the recruiter after the roster event,
+    -- and a confirmed iRC removal may replace an earlier ambiguous LEAVE.
+    -- Merge those updates into the original row instead of adding a duplicate.
+    local _, relatedRecord
+    if eventType == "JOIN" or eventType == "REJOIN" then
+        _, relatedRecord = findRecentGuildLogEvent(store, eventType, name, occurredAt)
+    elseif eventType == "KICK" or eventType == "LEAVE" then
+        _, relatedRecord = findRecentGuildLogEvent(store, "KICK", name, occurredAt)
+        if not relatedRecord then _, relatedRecord = findRecentGuildLogEvent(store, "LEAVE", name, occurredAt) end
+    end
+    if relatedRecord then
+        local incomingHasInviter = text:find(" Invited by ", 1, true) ~= nil
+        local existingHasInviter = tostring(relatedRecord.text or ""):find(" Invited by ", 1, true) ~= nil
+        local preferIncoming = eventType == "KICK" and relatedRecord.eventType ~= "KICK"
+            or incomingHasInviter and not existingHasInviter
+        store.guildLogIds[id] = true
+        if preferIncoming then
+            relatedRecord.id, relatedRecord.eventType, relatedRecord.text = id, eventType, text
+            if classFile ~= "" then relatedRecord.classFile = classFile end
         end
+        if occurredAt < (tonumber(relatedRecord.occurredAt) or occurredAt) then
+            relatedRecord.occurredAt = math.floor(occurredAt)
+            table.sort(store.guildLog, function(a, b)
+                return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0)
+            end)
+        end
+        local relatedKey = characterKey(name)
+        if relatedRecord.eventType == "KICK" then
+            local former = store.formerMembers[relatedKey]
+            local officer = tostring(relatedRecord.text or ""):match(" removed from the guild by (.-)%.$")
+            if former and officer then former.departureType = "Removed by " .. officer end
+        end
+        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        return false
+    end
+    -- Different clients can observe one roster change on different refreshes.
+    -- Treat matching details within the observation window as one event even
+    -- when their timestamp-based IDs differ.
+    local _, matchingRecord = findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt)
+    if matchingRecord then
+        store.guildLogIds[id] = true
+        if occurredAt < (tonumber(matchingRecord.occurredAt) or occurredAt) then
+            matchingRecord.occurredAt = math.floor(occurredAt)
+            if classFile ~= "" then matchingRecord.classFile = classFile end
+            table.sort(store.guildLog, function(a, b)
+                return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0)
+            end)
+        end
+        return false
     end
     local record = { id = id, occurredAt = math.floor(occurredAt), eventType = eventType,
         name = iRC:FormatPlayerName(name), classFile = classFile ~= "" and classFile or nil, text = text }
@@ -721,7 +898,7 @@ function Identity:ReceiveSync(parts, sender)
     history.firstSeenAt = math.min(tonumber(history.firstSeenAt) or occurredAt, occurredAt)
     if eventType == "JOIN" then history.joinedAt = occurredAt
     elseif eventType == "REJOIN" then history.rejoinedAt, history.departedAt = occurredAt, nil
-    elseif eventType == "LEAVE" then history.departedAt = occurredAt
+    elseif eventType == "LEAVE" or eventType == "KICK" then history.departedAt = occurredAt
     elseif eventType == "PROMOTE" or eventType == "DEMOTE" then
         local fromRank, toRank = text:match(" from (.-) to (.-)%.$")
         if fromRank and toRank then
@@ -769,7 +946,7 @@ function Identity:ScanRoster()
             former.rejoinCount = (former.rejoinCount or 0) + 1
             history.rejoinedAt = former.rejoinedAt
             history.departedAt = nil
-            addGuildLog(store, "REJOIN", member.name, iRC:FormatPlayerName(member.name) .. " rejoined the guild.", member.classFile)
+            addGuildLog(store, "REJOIN", member.name, guildJoinText("REJOIN", member.name), member.classFile)
         elseif store.rosterReady and not store.roster[key] then
             local renamed = member.guid and previousByGUID[member.guid]
             if renamed and renamed.key ~= key then
@@ -805,7 +982,7 @@ function Identity:ScanRoster()
                 addGuildLog(store, "NAME", member.name, renamed.member.name .. " is now known as " .. iRC:FormatPlayerName(member.name) .. ".", member.classFile)
             else
                 history.joinedAt = time()
-                addGuildLog(store, "JOIN", member.name, iRC:FormatPlayerName(member.name) .. " joined the guild.", member.classFile)
+                addGuildLog(store, "JOIN", member.name, guildJoinText("JOIN", member.name), member.classFile)
             end
         elseif store.rosterReady then
             local previous = store.roster[key]
@@ -844,12 +1021,24 @@ function Identity:ScanRoster()
                 store.missingCounts[key] = (store.missingCounts[key] or 0) + 1
                 if store.missingCounts[key] >= 2 then
                     local record = store.formerMembers[key] or {}
+                    local knownKick = knownGuildKicks[key]
+                    if knownKick and time() - (tonumber(knownKick.recordedAt) or 0) > GUILD_LOG_DUPLICATE_WINDOW then
+                        knownGuildKicks[key], knownKick = nil, nil
+                    end
                     record.name, record.lastRankIndex, record.level, record.className = previous.name, previous.rankIndex, previous.level, previous.className
-                    record.departedAt, record.departureType, record.currentMember = time(), "Left or removed", false
+                    record.departedAt, record.departureType, record.currentMember = time(),
+                        knownKick and ("Removed by " .. knownKick.officer) or "Left or removed", false
                     record.identity = self:GetIdentityLabel(previous.name)
                     store.formerMembers[key] = record
                     store.missingCounts[key] = nil
-                    addGuildLog(store, "LEAVE", previous.name, previous.name .. " left or was removed from the guild.", previous.classFile)
+                    if knownKick then
+                        addGuildLog(store, "KICK", previous.name, iRC:FormatPlayerName(previous.name)
+                            .. " was removed from the guild by " .. knownKick.officer .. ".", previous.classFile)
+                        knownGuildKicks[key] = nil
+                    else
+                        addGuildLog(store, "LEAVE", previous.name,
+                            previous.name .. " left or was removed from the guild.", previous.classFile)
+                    end
                     local history = store.memberHistory[key]
                     if history then history.departedAt = record.departedAt end
                 else

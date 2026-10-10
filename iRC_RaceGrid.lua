@@ -1578,6 +1578,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
+        if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
         handleMessage(prefix, message, sender, distribution)
     elseif event == "CHAT_MSG_CHANNEL_LIST" or event == "CHAT_MSG_SYSTEM" then
         captureAdminChannelList(...)

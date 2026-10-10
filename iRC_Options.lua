@@ -2268,6 +2268,7 @@ do
         rosterHistory = "Guild Log and member history", identity = "Assign member mains and alts",
         memberRemoval = "Review and remove inactive members",
         rankManagement = "Promote and demote guild members",
+        recruitment = "Search for and invite guild recruits",
     }
     local function rankValues(minimumRankIndex)
         local values = {}
@@ -2438,6 +2439,7 @@ do
         else selectPermissionMember(self:GetText()) end
     end)
     memberSearch:SetScript("OnEscapePressed", function(self) suggestions:Hide(); self:ClearFocus() end)
+    iRC:StyleSearchBox(memberSearch)
     memberY = memberY - 62
 
     for _, permission in ipairs(iRC.PermissionOrder) do

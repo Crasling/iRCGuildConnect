@@ -163,23 +163,37 @@ local function makeMemberRow(parent, index)
 end
 
 local function setMemberRowDensity(row, compact)
+    row:EnableMouse(true)
     row:SetHeight(compact and 40 or 44)
     row.name:ClearAllPoints()
     row.name:SetPoint("TOPLEFT", 14, -6)
+    row.name:SetJustifyH("LEFT")
     row.detail:ClearAllPoints()
     row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
+end
+
+local function memberIdentityTag(name)
+    if not (iRC.Identity and iRC.Identity.GetIdentityLabel) then return "" end
+    local label = iRC.Identity:GetIdentityLabel(name)
+    if type(label) ~= "string" or label == "" then return "" end
+    if label == "Main" then return " |cffffb347[Main]|r" end
+    if label:find("Personal Bank Alt", 1, true) then return " |cff66b3ff[Bank Alt]|r" end
+    if label:find("Alt of", 1, true) then return " |cff80c080[Alt]|r" end
+    return ""
 end
 
 local function resetInactiveMemberView(frame)
     if not frame then return end
     frame.inactiveMemberDays = 30
     frame.inactiveExcludedRank = nil
+    frame.inactiveExcludeAlts = false
     if frame.inactiveThreshold and frame.inactiveThreshold.input then
         frame.inactiveThreshold.input:SetText("30")
         frame.inactiveThreshold.input:ClearFocus()
     end
     if frame.RefreshInactiveRankExclude then frame:RefreshInactiveRankExclude() end
+    if frame.RefreshInactiveAltExclude then frame:RefreshInactiveAltExclude() end
     for _, row in ipairs(frame.memberRows or {}) do row:SetAlpha(1) end
 end
 
@@ -412,6 +426,7 @@ local MAIN_NAVIGATION = {
     { id = "Guild Log", label = "Guild Log", child = true, permission = "rosterHistory" },
     { id = "Inactive Member Management", label = "Inactive Members", child = true, permission = "memberRemoval", requiresGuild = true },
     { id = "Rank Management", label = "Rank Management", child = true, permission = "rankManagement", requiresGuild = true },
+    { id = "Recruitment Management", label = "Recruitment", child = true, permission = "recruitment", requiresGuild = true },
     { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, permission = "verification", dashboardTab = "Verification", requiresConnection = true },
     { id = "Incident Management", label = iRC:Text("INCIDENT_TAB"), grandchild = true, permission = "incidents", dashboardTab = "Incidents" },
     { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications", requiresConnection = true },
@@ -527,7 +542,7 @@ local function getRankActionMembers(rankIndex, action, testAdminPreview)
     return members
 end
 
-local function getEligibleInactiveMembers(threshold, testAdminPreview, excludedRank)
+local function getEligibleInactiveMembers(threshold, testAdminPreview, excludedRank, excludeAlts)
     threshold = math.max(0, math.min(9999, math.floor(tonumber(threshold) or 30)))
     excludedRank = type(excludedRank) == "number" and excludedRank or nil
     local members = {}
@@ -539,6 +554,7 @@ local function getEligibleInactiveMembers(threshold, testAdminPreview, excludedR
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
             and iRC:NormalizeName(member.name) ~= selfKey
             and not (excludedRank and type(member.rankIndex) == "number" and member.rankIndex <= excludedRank)
+            and not (excludeAlts == true and iRC.Identity and iRC.Identity:IsAlt(member.name))
             and (preview or type(member.rankIndex) == "number" and member.rankIndex > ownRank) then
             members[#members + 1] = member
         end
@@ -672,6 +688,7 @@ local function createMemberProfessionSearch(main, frame)
         local first = search.buttons[1]
         if first.entry and search.suggestions:IsShown() then first:Click() else self:ClearFocus() end
     end)
+    iRC:StyleSearchBox(search.edit, search.hint)
     search:Hide()
     search.suggestions:Hide()
     return search
@@ -988,7 +1005,7 @@ function UI:Create()
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", bulkChild, "TOPLEFT", 0, -((index - 1) * 36))
             row:SetPoint("TOPRIGHT", bulkChild, "TOPRIGHT", 0, -((index - 1) * 36))
-            row.name:SetText(iRC:FormatPlayerName(candidate.name))
+            row.name:SetText(iRC:FormatPlayerName(candidate.name) .. memberIdentityTag(candidate.name))
             row.detail:SetText(candidate.detail or (math.floor(candidate.lastOnlineDays + 0.5) .. " days · "
                 .. tostring(candidate.rankName or "Unknown rank")))
             row.mark:Show()
@@ -1049,7 +1066,7 @@ function UI:Create()
                     row:SetJustifyH("LEFT")
                     self.batchList.rows[index] = row
                 end
-                row:SetText(tostring(index) .. ".  " .. iRC:FormatPlayerName(name))
+                row:SetText(tostring(index) .. ".  " .. iRC:FormatPlayerName(name) .. memberIdentityTag(name))
                 row:Show()
             end
             for index = #names + 1, #self.batchList.rows do self.batchList.rows[index]:Hide() end
@@ -1174,9 +1191,9 @@ function UI:Create()
         return true
     end
 
-    local function findQueueCandidate(name, threshold, testPreview, excludedRank)
+    local function findQueueCandidate(name, threshold, testPreview, excludedRank, excludeAlts)
         if iRC.InvalidateGuildRosterSnapshot then iRC:InvalidateGuildRosterSnapshot() end
-        for _, member in ipairs(getEligibleInactiveMembers(threshold, testPreview, excludedRank)) do
+        for _, member in ipairs(getEligibleInactiveMembers(threshold, testPreview, excludedRank, excludeAlts)) do
             if iRC:NormalizeName(member.name) == iRC:NormalizeName(name) then return member end
         end
         return nil
@@ -1243,6 +1260,9 @@ function UI:Create()
                     .. iRC.Colors.Reset)
             else
                 removalQueue.removed = (removalQueue.removed or 0) + 1
+                if iRC.Identity and iRC.Identity.RecordKnownGuildKick then
+                    iRC.Identity:RecordKnownGuildKick(name, iRC:GetPlayerName())
+                end
                 iRC:Print(iRC:Text("INACTIVE_MEMBERS_QUEUE_CONFIRMED", iRC:FormatPlayerName(name)))
             end
         end
@@ -1268,7 +1288,7 @@ function UI:Create()
             while cursor <= removalQueue.total do
                 local requestedName = removalQueue.items[cursor]
                 local candidate = findQueueCandidate(requestedName, removalQueue.threshold,
-                    removalQueue.testPreview, removalQueue.excludedRank)
+                    removalQueue.testPreview, removalQueue.excludedRank, removalQueue.excludeAlts)
                 if candidate then
                     local line = "/gremove " .. tostring(candidate.name):gsub("[\r\n]", "")
                     local body = table.concat(commands, "\n")
@@ -1334,13 +1354,14 @@ function UI:Create()
         finishRemovalQueue()
     end
 
-    local function startRemovalQueue(names, threshold, testPreview, excludedRank)
+    local function startRemovalQueue(names, threshold, testPreview, excludedRank, excludeAlts)
         if type(names) ~= "table" or #names == 0 then return false end
         removalQueue.items = names
         removalQueue.total = #names
         removalQueue.index = 1
         removalQueue.threshold = threshold
         removalQueue.excludedRank = type(excludedRank) == "number" and excludedRank or nil
+        removalQueue.excludeAlts = excludeAlts == true
         removalQueue.removed = 0
         removalQueue.skipped = 0
         removalQueue.failed = 0
@@ -1363,6 +1384,7 @@ function UI:Create()
         self.timerTicket = nil
         self.testPreview = nil
         self.excludedRank = nil
+        self.excludeAlts = nil
         self:Hide()
     end
 
@@ -1505,15 +1527,13 @@ function UI:Create()
         if iRC.Diagnostics then iRC.Diagnostics:Trace("RANK_MANAGEMENT", tostring(message)) end
     end
 
-    local function prepareRankMacro(names, action)
+    local function prepareRankMacro(calls)
         if InCombatLockdown and InCombatLockdown() then return false end
         if not GetMacroIndexByName or not CreateMacro or not EditMacro then return false end
-        local prefix = action == "PROMOTE" and "/gpromote " or "/gdemote "
-        local commands = {}
-        for _, name in ipairs(names or {}) do
-            commands[#commands + 1] = prefix .. tostring(name):gsub("[\r\n]", "")
-        end
-        local command = table.concat(commands, "\n")
+        -- SetGuildRankOrder is Blizzard-only and produces ForceTaint_Strong
+        -- from addon Lua, including /run macros. Native guild slash commands
+        -- are the supported secure path and move one rank per hardware click.
+        local command = table.concat(calls or {}, "\n")
         if command == "" or #command > 255 then return false end
         local index = GetMacroIndexByName(rankMacroName)
         local ok
@@ -1561,7 +1581,7 @@ function UI:Create()
                 .. " skipped, " .. failed .. " failed.")
             iRC:RefreshGuildRoster()
         end
-        rankQueue.testPreview, rankQueue.targetRank, rankQueue.stageChangedNames = nil, nil, nil
+        rankQueue.testPreview, rankQueue.targetRank, rankQueue.stageTargetRank = nil, nil, nil
         rankQueue.simulatedRanks = nil
         UI:RefreshIfShown()
     end
@@ -1574,7 +1594,7 @@ function UI:Create()
             .. " queued action(s)", 1)
         rankQueue.active, rankQueue.currentNames, rankQueue.waitingNames, rankQueue.waitingByKey = nil, nil, nil, nil
         rankQueue.timerTicket, rankQueue.macroReady, rankQueue.testPreview = nil, nil, nil
-        rankQueue.targetRank, rankQueue.stageChangedNames, rankQueue.simulatedRanks = nil, nil, nil
+        rankQueue.targetRank, rankQueue.stageTargetRank, rankQueue.simulatedRanks = nil, nil, nil
         rankQueue:Hide()
         iRC:Print(iRC.Colors.Red .. "Rank-management queue stopped: WoW says this character does not have native "
             .. "guild permission. " .. tostring(remaining) .. " queued action(s) were cancelled."
@@ -1602,8 +1622,7 @@ function UI:Create()
         local key = iRC:NormalizeName(name)
         local confirmedName = rankQueue.waitingByKey[key]
         if not confirmedName then return false end
-        local confirmedRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
-            or rankQueue.expectedRank + 1
+        local confirmedRank = rankQueue.stageTargetRank
         rankQueueDebug((source or "WoW") .. " confirmed " .. tostring(rankQueue.action)
             .. " for " .. tostring(confirmedName))
         if iRC.RecordConfirmedGuildRankChange then
@@ -1611,7 +1630,6 @@ function UI:Create()
         end
         rankQueue.waitingByKey[key] = nil
         rankQueue.changed = (rankQueue.changed or 0) + 1
-        rankQueue.stageChangedNames[#rankQueue.stageChangedNames + 1] = confirmedName
         iRC:Print((rankQueue.action == "PROMOTE" and "Promoted " or "Demoted ")
             .. iRC:FormatPlayerName(confirmedName) .. ".")
         completeRankBatch()
@@ -1631,8 +1649,7 @@ function UI:Create()
 
     local function resolvePendingRankChange(finalCheck)
         if not rankQueue.active or not rankQueue.waitingNames then return end
-        local wantedRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
-            or rankQueue.expectedRank + 1
+        local wantedRank = rankQueue.stageTargetRank
         local pending = {}
         for _, name in ipairs(rankQueue.waitingNames) do
             if rankQueue.waitingByKey[iRC:NormalizeName(name)] then pending[#pending + 1] = name end
@@ -1681,10 +1698,19 @@ function UI:Create()
             rankQueue:Hide()
             return
         end
+        if rankQueue.index > rankQueue.total then
+            rankQueue.expectedRank = rankQueue.stageTargetRank
+            if rankQueue.expectedRank == rankQueue.targetRank then
+                finishRankQueue()
+                return
+            end
+            rankQueue.index = 1
+        end
+        rankQueue.stageTargetRank = rankQueue.expectedRank
+            + (rankQueue.action == "PROMOTE" and -1 or 1)
         while rankQueue.index <= rankQueue.total do
-            local batchNames, commands = {}, {}
+            local batchNames, calls = {}, {}
             local cursor = rankQueue.index
-            local prefix = rankQueue.action == "PROMOTE" and "/gpromote " or "/gdemote "
             while cursor <= rankQueue.total do
                 local name = rankQueue.items[cursor]
                 local currentRank, member = getCurrentRank(name)
@@ -1693,12 +1719,15 @@ function UI:Create()
                 end
                 local valid = currentRank == rankQueue.expectedRank
                     and (rankQueue.testPreview or isRankActionEligible(member, rankQueue.action, false))
+                    and (rankQueue.testPreview or member and type(member.name) == "string"
+                        and member.name ~= "" and not member.name:find("[/%c]"))
                 if valid then
-                    local line = prefix .. tostring(member.name):gsub("[\r\n]", "")
-                    local body = table.concat(commands, "\n")
-                    local nextLength = #body + (#commands > 0 and 1 or 0) + #line
+                    local call = rankQueue.testPreview and ""
+                        or ((rankQueue.action == "PROMOTE" and "/gpromote " or "/gdemote ") .. member.name)
+                    local body = table.concat(calls, "\n")
+                    local nextLength = #body + (#calls > 0 and 1 or 0) + #call
                     if nextLength > 255 then break end
-                    commands[#commands + 1] = line
+                    calls[#calls + 1] = call
                     batchNames[#batchNames + 1] = member.name
                 else
                     rankQueue.skipped = rankQueue.skipped + 1
@@ -1721,10 +1750,8 @@ function UI:Create()
                 rankQueue:SetBatchMembers(batchNames)
                 rankQueue.progress:SetText(rankQueue.index .. "-" .. (cursor - 1) .. " / " .. rankQueue.total)
                 local verb = rankQueue.action == "PROMOTE" and "Promote" or "Demote"
-                local nextRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
-                    or rankQueue.expectedRank + 1
-                local stageDetail = " Rank " .. rankQueue.expectedRank .. " to Rank " .. nextRank
-                    .. " (target Rank " .. rankQueue.targetRank .. ")."
+                local stageDetail = " This step moves Rank " .. rankQueue.expectedRank .. " to Rank "
+                    .. rankQueue.stageTargetRank .. "; selected target is Rank " .. rankQueue.targetRank .. "."
                 rankQueue.title:SetText(verb .. " guild members")
                 if rankQueue.testPreview then
                     rankQueue.macroReady = nil
@@ -1741,13 +1768,13 @@ function UI:Create()
                 else
                     rankQueue.simulate:Hide()
                     rankQueue.apply.text:SetText(verb .. " batch (" .. #batchNames .. ")")
-                    rankQueue.macroReady = prepareRankMacro(batchNames, rankQueue.action)
+                    rankQueue.macroReady = prepareRankMacro(calls)
                     rankQueue.apply:SetEnabled(rankQueue.macroReady == true)
                     rankQueue.apply:SetAlpha(rankQueue.macroReady and 1 or 0.42)
                     rankQueue.combatBlocker:Hide()
                     rankQueue.body:SetText(rankQueue.macroReady
-                        and ("Click once to " .. verb:lower() .. " this batch of " .. #batchNames
-                            .. " members." .. stageDetail .. " iRC will verify every rank change before continuing.")
+                        and ("Click once to move this batch of " .. #batchNames .. " members by one rank."
+                            .. stageDetail .. " iRC verifies the result before preparing the next step.")
                         or "iRC could not create or update its iRC_RankQueue macro. Free a general macro slot and reopen the queue.")
                 end
                 rankQueue.skip:SetEnabled(true)
@@ -1756,23 +1783,6 @@ function UI:Create()
                 rankQueue:Raise()
                 return
             end
-        end
-        local hasAnotherLevel = false
-        if type(rankQueue.targetRank) == "number" then
-            hasAnotherLevel = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1 > rankQueue.targetRank
-                or rankQueue.action == "DEMOTE" and rankQueue.expectedRank + 1 < rankQueue.targetRank
-        end
-        if hasAnotherLevel and rankQueue.stageChangedNames[1] then
-            rankQueue.items = rankQueue.stageChangedNames
-            rankQueue.total, rankQueue.index = #rankQueue.items, 1
-            rankQueue.expectedRank = rankQueue.action == "PROMOTE" and rankQueue.expectedRank - 1
-                or rankQueue.expectedRank + 1
-            rankQueue.stageChangedNames = {}
-            rankQueueDebug("continuing multi-level rank change at rank " .. tostring(rankQueue.expectedRank)
-                .. " toward target rank " .. tostring(rankQueue.targetRank))
-            iRC:RefreshGuildRoster()
-            advanceRankQueue()
-            return
         end
         finishRankQueue()
     end
@@ -1793,8 +1803,8 @@ function UI:Create()
         rankQueue.items, rankQueue.total, rankQueue.index = names, #names, 1
         rankQueue.action, rankQueue.expectedRank = action, expectedRank
         rankQueue.targetRank = targetRank
+        rankQueue.stageTargetRank = expectedRank
         rankQueue.changed, rankQueue.skipped, rankQueue.failed = 0, 0, 0
-        rankQueue.stageChangedNames = {}
         rankQueue.simulatedRanks = {}
         for _, name in ipairs(names) do
             rankQueue.simulatedRanks[iRC:NormalizeName(name)] = expectedRank
@@ -1811,7 +1821,7 @@ function UI:Create()
     function rankQueue:Cancel()
         self.active, self.currentNames, self.waitingNames, self.waitingByKey = nil, nil, nil, nil
         self.batchNextIndex, self.timerTicket = nil, nil
-        self.testPreview, self.targetRank, self.stageChangedNames, self.simulatedRanks = nil, nil, nil, nil
+        self.testPreview, self.targetRank, self.stageTargetRank, self.simulatedRanks = nil, nil, nil, nil
         self:Hide()
     end
     rankQueue.cancel:SetScript("OnClick", function() rankQueue:Cancel() end)
@@ -1828,9 +1838,7 @@ function UI:Create()
         for _, name in ipairs(rankQueue.currentNames) do
             iRC:Print("Test: would " .. rankQueue.action:lower() .. " " .. iRC:FormatPlayerName(name) .. ".")
             rankQueue.changed = rankQueue.changed + 1
-            rankQueue.stageChangedNames[#rankQueue.stageChangedNames + 1] = name
-            rankQueue.simulatedRanks[iRC:NormalizeName(name)] = rankQueue.action == "PROMOTE"
-                and rankQueue.expectedRank - 1 or rankQueue.expectedRank + 1
+            rankQueue.simulatedRanks[iRC:NormalizeName(name)] = rankQueue.stageTargetRank
         end
         rankQueue.index = rankQueue.batchNextIndex or rankQueue.index
         rankQueue.currentNames, rankQueue.batchNextIndex = nil, nil
@@ -1888,6 +1896,7 @@ function UI:Create()
         local removeAll = removeMemberConfirm.removeAll == true
         local testPreview = removeMemberConfirm.testPreview == true
         local excludedRank = removeMemberConfirm.excludedRank
+        local excludeAlts = removeMemberConfirm.excludeAlts == true
         local selectedNames, selectedOrder = {}, {}
         if removeAll then
             for _, candidate in ipairs(removeMemberConfirm.bulkCandidates or {}) do
@@ -1908,6 +1917,7 @@ function UI:Create()
         removeMemberConfirm.sourceRank = nil
         removeMemberConfirm.targetRank = nil
         removeMemberConfirm.excludedRank = nil
+        removeMemberConfirm.excludeAlts = nil
         if rankAction then
             if not iRC:HasGuildPermission("rankManagement") and not testPreview then return end
             startRankQueue(selectedOrder, rankAction, sourceRank, testPreview, targetRank)
@@ -1916,10 +1926,10 @@ function UI:Create()
         if removeAll then
             if not iRC:HasGuildPermission("memberRemoval") then return end
             if testPreview then
-                startRemovalQueue(selectedOrder, threshold, true, excludedRank)
+                startRemovalQueue(selectedOrder, threshold, true, excludedRank, excludeAlts)
                 return
             end
-            local eligible = getEligibleInactiveMembers(threshold, false, excludedRank)
+            local eligible = getEligibleInactiveMembers(threshold, false, excludedRank, excludeAlts)
             if #eligible == 0 then
                 if testPreview then return end
                 iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
@@ -1933,7 +1943,7 @@ function UI:Create()
                 iRC:Print(iRC.Colors.Yellow .. iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL_NONE") .. iRC.Colors.Reset)
                 return
             end
-            startRemovalQueue(removals, threshold, false, excludedRank)
+            startRemovalQueue(removals, threshold, false, excludedRank, excludeAlts)
             return
         end
         if not targetName or not iRC:HasGuildPermission("memberRemoval") then return end
@@ -2185,7 +2195,7 @@ function UI:Create()
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Guild Overview roster scope")
-        GameTooltip:AddLine("Count only main and unlinked characters in every Guild Overview total and calculation.", 1, 1, 1, true)
+        GameTooltip:AddLine("Count each linked main and alt group as one player. If an alt is online or recently active, that activity is credited to the main player.", 1, 1, 1, true)
         GameTooltip:Show()
     end)
     frame.guildOverviewAltToggle:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -2276,6 +2286,7 @@ function UI:Create()
     frame.guildStatsSearch.hint:SetPoint("LEFT", 7, 0)
     frame.guildStatsSearch.hint:SetText(iRC:Text("GUILD_STATS_SEARCH_HINT"))
     frame.guildStatsSearch.hint:SetTextColor(0.55, 0.55, 0.55)
+    iRC:StyleSearchBox(frame.guildStatsSearch, frame.guildStatsSearch.hint)
     frame.guildStatsSearch:Hide()
 
     frame.guildLogSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
@@ -2300,8 +2311,8 @@ function UI:Create()
     frame.guildLogSearch.suggestions = CreateFrame("Frame", nil, frame.guildLogSearch, "BackdropTemplate")
     frame.guildLogSearch.suggestions:SetSize(300, 128)
     frame.guildLogSearch.suggestions:SetPoint("TOPLEFT", frame.guildLogSearch, "BOTTOMLEFT", 0, -2)
-    frame.guildLogSearch.suggestions:SetFrameStrata("DIALOG")
-    frame.guildLogSearch.suggestions:SetFrameLevel(main:GetFrameLevel() + 20)
+    frame.guildLogSearch.suggestions:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame.guildLogSearch.suggestions:SetFrameLevel(main:GetFrameLevel() + 50)
     frame.guildLogSearch.suggestions:SetBackdrop({
         bgFile = "Interface\\BUTTONS\\WHITE8X8",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -2379,6 +2390,7 @@ function UI:Create()
         local first = self.buttons[1]
         if first.value and self.suggestions:IsShown() then first:Click() else self:ClearFocus() end
     end)
+    iRC:StyleSearchBox(frame.guildLogSearch, frame.guildLogSearch.hint)
     frame.guildLogSearch:Hide()
     frame.guildLogSearch.suggestions:Hide()
 
@@ -2503,6 +2515,24 @@ function UI:Create()
         if self.menu:IsShown() then self.menu:Raise() end
     end)
     frame:RefreshInactiveRankExclude()
+    frame.inactiveThreshold.excludeAlts = makeIRCActionButton(frame.inactiveThreshold, 135, 25,
+        "Exclude alts: OFF", false)
+    frame.inactiveThreshold.excludeAlts:SetPoint("LEFT", excludeRankDropdown, "RIGHT", 10, 0)
+    function frame:RefreshInactiveAltExclude()
+        local enabled = frame.inactiveExcludeAlts == true
+        frame.inactiveThreshold.excludeAlts:SetText(enabled and "Exclude alts: ON" or "Exclude alts: OFF")
+        frame.inactiveThreshold.excludeAlts:SetBackdropColor(enabled and 0.18 or 0.055,
+            enabled and 0.09 or 0.045, enabled and 0.025 or 0.035, 0.98)
+        frame.inactiveThreshold.excludeAlts:SetBackdropBorderColor(enabled and COLORS.gold[1] or 0.28,
+            enabled and COLORS.gold[2] or 0.23, enabled and COLORS.gold[3] or 0.16, enabled and 1 or 0.9)
+    end
+    frame.inactiveThreshold.excludeAlts:SetScript("OnClick", function()
+        frame.inactiveExcludeAlts = frame.inactiveExcludeAlts ~= true
+        frame:RefreshInactiveAltExclude()
+        if frame.scroll then frame.scroll:SetVerticalScroll(0) end
+        UI:Refresh()
+    end)
+    frame:RefreshInactiveAltExclude()
     frame.inactiveThreshold:Hide()
     frame.inactiveRemoveAll = makeIRCActionButton(main, 190, 25,
         iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", 0), true)
@@ -2511,10 +2541,11 @@ function UI:Create()
         local threshold = math.max(0, math.min(9999,
             math.floor(tonumber(frame.inactiveMemberDays) or 30)))
         local excludedRank = frame.inactiveExcludedRank
-        local eligible = getEligibleInactiveMembers(threshold, false, excludedRank)
+        local excludeAlts = frame.inactiveExcludeAlts == true
+        local eligible = getEligibleInactiveMembers(threshold, false, excludedRank, excludeAlts)
         local testPreview = false
         if #eligible == 0 and iRC:IsTestAdmin() then
-            eligible = getEligibleInactiveMembers(threshold, true, excludedRank)
+            eligible = getEligibleInactiveMembers(threshold, true, excludedRank, excludeAlts)
             testPreview = true
         end
         if #eligible == 0 and not testPreview then
@@ -2528,6 +2559,7 @@ function UI:Create()
         confirm.targetName = nil
         confirm.threshold = threshold
         confirm.excludedRank = excludedRank
+        confirm.excludeAlts = excludeAlts
         confirm.testPreview = testPreview
         confirm:SetBulkLayout(false)
         confirm.bulkList:Show()
@@ -3052,6 +3084,7 @@ function UI:Create()
             self:ClearFocus()
         end
     end)
+    iRC:StyleSearchBox(assignAltPopup.search, assignAltPopup.searchHint)
 
     function assignAltPopup:Open(targetName)
         self.targetName = targetName
@@ -3818,9 +3851,44 @@ end
 
 local GUILD_LOG_COLORS = {
     JOIN = COLORS.green, REJOIN = COLORS.green, PROMOTE = COLORS.gold,
-    DEMOTE = { 1.00, 0.55, 0.20 }, LEAVE = { 1.00, 0.50, 0.50 }, NAME = COLORS.gold,
+    DEMOTE = { 1.00, 0.55, 0.20 }, LEAVE = { 1.00, 0.50, 0.50 }, KICK = { 1.00, 0.25, 0.20 }, NAME = COLORS.gold,
     LEVEL = COLORS.green, RETURN = COLORS.green, NOTE = COLORS.parchment, OFFICER_NOTE = COLORS.parchment,
 }
+
+local function formatGuildLogDate(timestamp)
+    if not timestamp then return "Date unknown" end
+    return date("%A, %B ", timestamp) .. tostring(tonumber(date("%d", timestamp)) or date("%d", timestamp))
+        .. date(", %Y", timestamp)
+end
+
+local function createGuildLogDateMarker(parent)
+    local marker = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    marker:SetHeight(26)
+    marker.background = marker:CreateTexture(nil, "BACKGROUND")
+    marker.background:SetAllPoints()
+    marker.label = marker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    marker.label:SetPoint("CENTER", marker, "CENTER", 0, 0)
+    marker.leftLine = marker:CreateTexture(nil, "ARTWORK")
+    marker.leftLine:SetPoint("LEFT", marker, "LEFT", 8, 0)
+    marker.leftLine:SetPoint("RIGHT", marker.label, "LEFT", -12, 0)
+    marker.leftLine:SetHeight(1)
+    marker.rightLine = marker:CreateTexture(nil, "ARTWORK")
+    marker.rightLine:SetPoint("LEFT", marker.label, "RIGHT", 12, 0)
+    marker.rightLine:SetPoint("RIGHT", marker, "RIGHT", -8, 0)
+    marker.rightLine:SetHeight(1)
+    return marker
+end
+
+local function styleGuildLogDateMarker(marker, label, isToday)
+    marker:SetBackdrop(nil)
+    marker.background:SetColorTexture(isToday and 0.10 or 0.035,
+        isToday and 0.06 or 0.03, isToday and 0.015 or 0.025, 0.92)
+    marker.label:SetText(label)
+    marker.label:SetTextColor(unpack(isToday and COLORS.gold or COLORS.parchment))
+    local lineColor = isToday and COLORS.gold or { 0.38, 0.32, 0.23 }
+    marker.leftLine:SetColorTexture(lineColor[1], lineColor[2], lineColor[3], isToday and 0.85 or 0.65)
+    marker.rightLine:SetColorTexture(lineColor[1], lineColor[2], lineColor[3], isToday and 0.85 or 0.65)
+end
 
 local function updateGuildLog(frame)
     if iRC.Identity then iRC.Identity:RequestGuildHistory() end
@@ -3842,42 +3910,131 @@ local function updateGuildLog(frame)
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         currentClasses[iRC:NormalizeName(member.name)] = member.classFile
     end
+    frame.guildLogDateMarkers = frame.guildLogDateMarkers or {}
+    for _, marker in ipairs(frame.guildLogDateMarkers) do marker:Hide() end
+    local todayKey = date("%Y-%m-%d")
+    local previousDateKey
+    local markerCount = 0
+    local yOffset = 0
+    local dateSections = {}
     for index, record in ipairs(records) do
+        local timestamp = tonumber(record.occurredAt)
+        local dateKey = timestamp and date("%Y-%m-%d", timestamp) or "unknown"
+        if dateKey ~= previousDateKey then
+            markerCount = markerCount + 1
+            local marker = frame.guildLogDateMarkers[markerCount]
+            if not marker then
+                marker = createGuildLogDateMarker(frame.scrollContent)
+                frame.guildLogDateMarkers[markerCount] = marker
+            end
+            local isToday = dateKey == todayKey
+            local label = (isToday and "TODAY  -  " or "") .. formatGuildLogDate(timestamp)
+            marker:ClearAllPoints()
+            marker:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
+            marker:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -yOffset)
+            styleGuildLogDateMarker(marker, label, isToday)
+            marker:Show()
+            dateSections[#dateSections + 1] = { offset = yOffset, label = label, isToday = isToday }
+            yOffset = yOffset + 32
+            previousDateKey = dateKey
+        end
         local row = frame.memberRows[index]
         if not row then
             row = makeMemberRow(frame.scrollContent, index)
             frame.memberRows[index] = row
         end
         setMemberRowDensity(row, true)
+        row:SetHeight(34)
         row:SetAlpha(1)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 44))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 44))
-        row.name:SetFontObject(GameFontNormal)
-        row.name:SetText(record.name or "Unknown member")
-        row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -yOffset)
+        local occurredAt = timestamp and date("%H:%M", timestamp) or "Unknown time"
+        row.name:ClearAllPoints()
+        row.name:SetPoint("RIGHT", row, "RIGHT", -14, 0)
+        row.name:SetWidth(75)
+        row.name:SetJustifyH("RIGHT")
+        row.name:SetFontObject(GameFontDisableSmall)
+        row.name:SetText(occurredAt)
+        row.name:SetTextColor(0.55, 0.55, 0.55)
         local classFile = record.classFile or currentClasses[iRC:NormalizeName(record.name)]
         local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
-        if classColor then
-            row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
-        else
-            row.name:SetTextColor(unpack(COLORS.gold))
-        end
         row.onlineTag:Hide()
         row.tag:ClearAllPoints()
-        row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
+        row.tag:SetPoint("LEFT", row, "LEFT", 14, 0)
         row.tag:SetText("[" .. tostring(record.eventType or "CHANGE"):gsub("_", " ") .. "]")
         row.tag:SetTextColor(unpack(GUILD_LOG_COLORS[record.eventType] or COLORS.parchment))
         row.tag:Show()
-        local occurredAt = record.occurredAt and date("%Y-%m-%d %H:%M", record.occurredAt) or "Unknown time"
-        row.detail:SetText(occurredAt .. " - " .. (record.text or "Guild roster changed."))
+        local eventText = record.text or "Guild roster changed."
+        local eventName = tostring(record.name or "")
+        local nameStart, nameEnd = eventName ~= "" and eventText:find(eventName, 1, true) or nil, nil
+        if nameStart then
+            nameEnd = nameStart + #eventName - 1
+            local nameColor = classColor or COLORS.gold
+            local colorCode = string.format("ff%02x%02x%02x",
+                math.floor((nameColor.r or nameColor[1] or 1) * 255 + 0.5),
+                math.floor((nameColor.g or nameColor[2] or 0.67) * 255 + 0.5),
+                math.floor((nameColor.b or nameColor[3] or 0.15) * 255 + 0.5))
+            eventText = eventText:sub(1, nameStart - 1) .. "|c" .. colorCode
+                .. eventText:sub(nameStart, nameEnd) .. "|r" .. eventText:sub(nameEnd + 1)
+        end
+        row.detail:ClearAllPoints()
+        row.detail:SetPoint("LEFT", row.tag, "RIGHT", 10, 0)
+        row.detail:SetPoint("RIGHT", row.name, "LEFT", -12, 0)
+        row.detail:SetText(eventText)
+        row.detail:SetWordWrap(false)
         row:SetScript("OnClick", nil)
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
+        row:EnableMouse(false)
         row:Show()
+        yOffset = yOffset + 38
     end
     for index = #records + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
-    frame.scrollContent:SetHeight(math.max(1, #records * 44))
+    for index = markerCount + 1, #frame.guildLogDateMarkers do frame.guildLogDateMarkers[index]:Hide() end
+    frame.scrollContent:SetHeight(math.max(1, yOffset))
+    frame.guildLogDateSections = dateSections
+    if not frame.guildLogStickyDate then
+        local sticky = createGuildLogDateMarker(frame.scroll)
+        sticky:SetFrameStrata("DIALOG")
+        -- Keep the pinned divider above every scrolling log row. The search
+        -- suggestions use FULLSCREEN_DIALOG so they still render above it.
+        sticky:SetFrameLevel(100)
+        sticky:EnableMouse(false)
+        frame.guildLogStickyDate = sticky
+    end
+    function frame:UpdateGuildLogStickyDate()
+        local sticky = self.guildLogStickyDate
+        local sections = self.guildLogDateSections or {}
+        if self.category ~= "Guild Log" or #sections == 0 then
+            sticky:Hide()
+            return
+        end
+        local scrollOffset = self.scroll:GetVerticalScroll() or 0
+        local activeIndex = 1
+        for index = 2, #sections do
+            if sections[index].offset > scrollOffset then break end
+            activeIndex = index
+        end
+        local active = sections[activeIndex]
+        local pushOffset = 0
+        local nextSection = sections[activeIndex + 1]
+        if nextSection then
+            pushOffset = math.min(0, nextSection.offset - scrollOffset - 28)
+        end
+        sticky:ClearAllPoints()
+        sticky:SetPoint("TOPLEFT", self.scroll, "TOPLEFT", 0, pushOffset)
+        sticky:SetPoint("TOPRIGHT", self.scroll, "TOPRIGHT", 0, pushOffset)
+        styleGuildLogDateMarker(sticky, active.label, active.isToday)
+        sticky:Show()
+    end
+    if not frame.guildLogStickyHooked then
+        frame.scroll:HookScript("OnVerticalScroll", function()
+            if frame.UpdateGuildLogStickyDate then frame:UpdateGuildLogStickyDate() end
+        end)
+        frame.guildLogStickyHooked = true
+    end
+    frame:UpdateGuildLogStickyDate()
     frame.contentTitle:SetText("Guild Log")
     frame.contentSubtitle:SetText(#records > 0 and iRC:Text("GUILD_LOG_DESCRIPTION")
         or (query ~= "" and iRC:Text("GUILD_LOG_NO_SEARCH_RESULTS") or iRC:Text("GUILD_LOG_EMPTY")))
@@ -3895,13 +4052,16 @@ local function updateInactiveMembers(frame)
         frame.inactiveThreshold.input:SetText(tostring(threshold))
     end
     if frame.RefreshInactiveRankExclude then frame:RefreshInactiveRankExclude() end
+    if frame.RefreshInactiveAltExclude then frame:RefreshInactiveAltExclude() end
     local members = {}
     local selfKey = iRC:NormalizeName(iRC:GetPlayerName())
     local excludedRank = frame.inactiveExcludedRank
+    local excludeAlts = frame.inactiveExcludeAlts == true
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
             and iRC:NormalizeName(member.name) ~= selfKey
-            and not (excludedRank and type(member.rankIndex) == "number" and member.rankIndex <= excludedRank) then
+            and not (excludedRank and type(member.rankIndex) == "number" and member.rankIndex <= excludedRank)
+            and not (excludeAlts and iRC.Identity and iRC.Identity:IsAlt(member.name)) then
             members[#members + 1] = member
         end
     end
@@ -3923,7 +4083,7 @@ local function updateInactiveMembers(frame)
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 48))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 48))
         row.name:SetFontObject(GameFontNormal)
-        row.name:SetText(iRC:FormatPlayerName(member.name))
+        row.name:SetText(iRC:FormatPlayerName(member.name) .. memberIdentityTag(member.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
         local classColor = member.classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile]
         if classColor then row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
@@ -3976,7 +4136,7 @@ local function updateInactiveMembers(frame)
         frame.memberRows[index]:Hide()
     end
     if eligibleCount == 0 and iRC:IsTestAdmin() then
-        eligibleCount = #getEligibleInactiveMembers(threshold, true, excludedRank)
+        eligibleCount = #getEligibleInactiveMembers(threshold, true, excludedRank, excludeAlts)
     end
     frame.scrollContent:SetHeight(math.max(1, #members * 48))
     frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
@@ -4048,7 +4208,7 @@ local function updateRankManagement(frame)
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 48))
         row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 48))
         row.name:SetFontObject(GameFontNormal)
-        row.name:SetText(iRC:FormatPlayerName(member.name))
+        row.name:SetText(iRC:FormatPlayerName(member.name) .. memberIdentityTag(member.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
         local classColor = member.classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile]
         if isSelf then row.name:SetTextColor(unpack(COLORS.gray))
@@ -4090,8 +4250,8 @@ local function updateRankManagement(frame)
     frame.contentTitle:SetText("Guild Rank Management")
     frame.contentSubtitle:SetText(type(frame.rankManagementRank) == "number"
         and (#members .. " member(s) currently hold " .. tostring(rankName or ("Rank " .. frame.rankManagementRank))
-            .. ". Click one member for a single action, or use the buttons above for a selected batch.")
-        or "Choose a current guild rank to review its members for one-step promotion or demotion.")
+            .. ". Click one member to choose a target rank, or use the buttons above for a selected batch.")
+        or "Choose a current guild rank, then move members toward another eligible rank through verified secure steps.")
 end
 
 local GUILD_HEALTH_CLASS_ORDER = {
@@ -4233,12 +4393,48 @@ updateGuildOverview = function(frame)
     frame.guildOverviewAltToggle:SetBackdropBorderColor(excludeAlts and COLORS.gold[1] or 0.28,
         excludeAlts and COLORS.gold[2] or 0.23, excludeAlts and COLORS.gold[3] or 0.16, excludeAlts and 1 or 0.9)
     local rosterMembers, members = iRC:GetGuildRosterRows(), {}
-    for _, member in ipairs(rosterMembers) do
-        if not excludeAlts or not (iRC.Identity and iRC.Identity:IsAlt(member.name)) then
-            members[#members + 1] = member
+    local identityActivity = {}
+    if excludeAlts and iRC.Identity then
+        local representatives, groupOrder = {}, {}
+        for _, member in ipairs(rosterMembers) do
+            local mainName = iRC.Identity:GetMainCharacterName(member.name)
+            local groupKey = iRC:NormalizeName(mainName or member.name)
+            local memberKey = iRC:NormalizeName(member.name)
+            if not representatives[groupKey] then
+                representatives[groupKey] = member
+                groupOrder[#groupOrder + 1] = groupKey
+            elseif memberKey == groupKey then
+                -- Prefer the registered main's level and class for overview
+                -- distribution, even when an alt supplied the online state.
+                representatives[groupKey] = member
+            end
+            local activity = identityActivity[groupKey] or {
+                online = false,
+                mainOnline = false,
+                altOnline = false,
+                verifiedOnline = false,
+            }
+            activity.online = activity.online or member.online == true
+            if member.online then
+                if mainName and memberKey ~= groupKey then
+                    activity.altOnline = true
+                else
+                    activity.mainOnline = true
+                end
+            end
+            activity.verifiedOnline = activity.verifiedOnline
+                or member.online == true and member.verification and member.verification.state == "verified"
+            local days = member.online and 0 or tonumber(member.lastOnlineDays)
+            if days ~= nil and (activity.lastOnlineDays == nil or days < activity.lastOnlineDays) then
+                activity.lastOnlineDays = days
+            end
+            identityActivity[groupKey] = activity
         end
+        for _, groupKey in ipairs(groupOrder) do members[#members + 1] = representatives[groupKey] end
+    else
+        for _, member in ipairs(rosterMembers) do members[#members + 1] = member end
     end
-    local total, online, active30, verifiedOnline, attention = #members, 0, 0, 0, 0
+    local total, online, onlineViaAlt, active30, verifiedOnline, attention = #members, 0, 0, 0, 0, 0
     local levelCounts = { 0, 0, 0, 0, 0, 0 }
     local classTotals, classActive = {}, {}
     local retention = { 0, 0, 0, 0, 0, 0 }
@@ -4246,18 +4442,27 @@ updateGuildOverview = function(frame)
     local responseRequired = iRC:IsAddonResponseRequired()
 
     for _, member in ipairs(members) do
+        local mainName = excludeAlts and iRC.Identity and iRC.Identity:GetMainCharacterName(member.name)
+        local activity = excludeAlts and identityActivity[iRC:NormalizeName(mainName or member.name)] or nil
+        local memberOnline = activity and activity.online or member.online == true
+        local memberVerifiedOnline = activity and activity.verifiedOnline
+            or member.online == true and member.verification and member.verification.state == "verified"
         local level = math.max(1, math.min(60, math.floor(tonumber(member.level) or 1)))
-        levelCounts[math.min(6, math.floor((level - 1) / 10) + 1)] = levelCounts[math.min(6, math.floor((level - 1) / 10) + 1)] + 1
+        local levelBucket = level <= 9 and 1 or math.min(6, math.floor(level / 10) + 1)
+        levelCounts[levelBucket] = levelCounts[levelBucket] + 1
         local class = tostring(member.class or "UNKNOWN"):upper():gsub("[^A-Z]", "")
         classTotals[class] = (classTotals[class] or 0) + 1
-        if member.online then online = online + 1 end
-        if member.online and member.verification and member.verification.state == "verified" then verifiedOnline = verifiedOnline + 1 end
+        if memberOnline then
+            online = online + 1
+            if activity and activity.altOnline and not activity.mainOnline then onlineViaAlt = onlineViaAlt + 1 end
+        end
+        if memberVerifiedOnline then verifiedOnline = verifiedOnline + 1 end
 
         local recencyAttention = false
         recencyTotal = recencyTotal + 1
         local bucket, weight
-        local days = tonumber(member.lastOnlineDays)
-        if member.online or days and days <= 7 then bucket, weight = 1, 1
+        local days = activity and activity.lastOnlineDays or tonumber(member.lastOnlineDays)
+        if memberOnline or days and days <= 7 then bucket, weight = 1, 1
         elseif days and days <= 13 then bucket, weight = 2, 0.8
         elseif days and days <= 29 then bucket, weight = 3, 0.5
         elseif days and days <= 59 then bucket, weight = 4, 0.2
@@ -4273,14 +4478,19 @@ updateGuildOverview = function(frame)
             knownActivity = knownActivity + 1
         end
         recencyAttention = bucket == 4 or bucket == 5
-        local needsIRC = responseRequired and member.online
-            and (not member.verification or member.verification.state ~= "verified")
+        local needsIRC = responseRequired and memberOnline and not memberVerifiedOnline
         if recencyAttention or needsIRC then attention = attention + 1 end
     end
 
+    local onlineDetail = total > 0 and (math.floor(online / total * 100 + 0.5) .. "% of counted players")
+        or "No players counted"
+    if excludeAlts and onlineViaAlt > 0 then
+        onlineDetail = onlineDetail .. " - " .. tostring(onlineViaAlt) .. " via "
+            .. (onlineViaAlt == 1 and "alt" or "alts")
+    end
     local metricValues = {
-        { total, excludeAlts and "main and unlinked characters" or "characters counted", COLORS.gold },
-        { online, total > 0 and (math.floor(online / total * 100 + 0.5) .. "% of counted members") or "No members counted", COLORS.green },
+        { total, excludeAlts and "linked characters count as one player" or "characters counted", COLORS.gold },
+        { online, onlineDetail, COLORS.green },
         { active30, recencyTotal > 0 and (math.floor(active30 / recencyTotal * 100 + 0.5)
             .. "% active this month") or "No activity data", { 0.32, 0.75, 1 } },
         { attention, responseRequired and "inactive or missing iRC" or "inactive-member review", attention > 0 and COLORS.red or COLORS.green },
@@ -4293,11 +4503,13 @@ updateGuildOverview = function(frame)
         card.accent:SetColorTexture(color[1], color[2], color[3], 0.95)
     end
 
-    overview.levels.subtitle:SetText(tostring(total) .. " counted members grouped by level")
+    overview.levels.subtitle:SetText(tostring(total) .. (excludeAlts and " counted players grouped by main level"
+        or " counted characters grouped by level"))
     local maxLevelCount = 0
     for _, count in ipairs(levelCounts) do maxLevelCount = math.max(maxLevelCount, count) end
+    local levelLabels = { "Level 1-9", "Level 10-19", "Level 20-29", "Level 30-39", "Level 40-49", "Level 50-60" }
     for index, count in ipairs(levelCounts) do
-        setGuildHealthBar(overview.levels.rows[index], "Level " .. tostring((index - 1) * 10 + 1) .. "-" .. tostring(index * 10),
+        setGuildHealthBar(overview.levels.rows[index], levelLabels[index],
             count, maxLevelCount, { 0.32, 0.66, 1 })
     end
 
@@ -4318,7 +4530,7 @@ updateGuildOverview = function(frame)
     end
 
     overview.retention.subtitle:SetText("Last seen by the guild roster - "
-        .. (excludeAlts and "main characters only" or "all characters"))
+        .. (excludeAlts and "alt activity included with mains" or "all characters"))
     local retentionLabels = { "Seen this week", "Seen last week", "Seen this month", "Inactive 30-59 days", "Inactive 60+ days", "Activity unknown" }
     local retentionColors = { { 0.30, 0.85, 0.48 }, { 1, 0.67, 0.25 }, { 1, 0.47, 0.18 }, { 0.95, 0.25, 0.18 }, { 0.50, 0.18, 0.16 }, COLORS.gray }
     local retentionThresholds = { 0, 8, 14, 30, 60 }
@@ -4375,6 +4587,8 @@ local function updateGuildRules(frame)
     local connectionActive = connection and connection.active == true
     local progression = iRC:GetProgressionMode(rules)
     local maxLevelProgression = iRC:GetMaxLevelProgressionMode(rules)
+    local enforcementRequiresIRC = progression ~= "NONE" or rules.raceLock == true
+        or rules.nativeTongueOnly == true or rules.sameRaceGroupsOnly == true or rules.guildGroupsOnly == true
     local guildFoundRuleActive = rules.guildFoundOnly == true or rules.level60GuildFound == true
     local entries = {
         {
@@ -4390,11 +4604,14 @@ local function updateGuildRules(frame)
         },
         {
             section = "Guild Connection",
-            title = "Require iRC AddOn",
-            description = "Requires every online guild member to run and respond with iRC, even when no progression or group rule is active.",
-            active = rules.requireIRC == true,
+            title = enforcementRequiresIRC and "iRC AddOn Required by Enforcement" or "Require iRC AddOn",
+            description = enforcementRequiresIRC
+                and "Automatically required while progression, Race-Locked, or group enforcement rules are active."
+                or "Requires every online guild member to run and respond with iRC, even when no progression or group rule is active.",
+            active = enforcementRequiresIRC or rules.requireIRC == true,
             activeLabel = "REQUIRED",
             inactiveLabel = "OPTIONAL",
+            locked = enforcementRequiresIRC,
             set = function(value) return iRC:SetConnectionRule("requireIRC", value) end,
         },
         {
@@ -4624,8 +4841,9 @@ local function updateGuildRules(frame)
         row.title:SetText(entry.title)
         row.description:SetText(entry.description)
         row.state:SetText(entry.active and (entry.activeLabel or "ACTIVE") or (entry.inactiveLabel or "INACTIVE"))
-        local editable = canEdit and (entry.activation or connectionActive) and entry.available ~= false
-        local blocked = canEdit and not editable
+        local locked = entry.locked == true
+        local editable = canEdit and (entry.activation or connectionActive) and entry.available ~= false and not locked
+        local blocked = canEdit and not editable and not locked
         local currentEntry, currentEditable = entry, editable
         row:SetEnabled(editable and true or false)
         row:SetAlpha(blocked and 0.45 or 1)
@@ -5138,15 +5356,23 @@ function UI:Refresh()
     if frame.LayoutNavigation then frame.LayoutNavigation() end
     local managementPanelKey = MANAGEMENT_PANEL_KEYS[frame.category]
     local dashboardTab = DASHBOARD_PANEL_TABS[frame.category]
+    local recruitmentPanel = frame.category == "Recruitment Management"
     if managementPanelKey then
+        if iRC.Recruitment then iRC.Recruitment:Hide() end
         if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then iRC.ConnectionDashboard:HideEmbedded() end
         if iRC.ShowManagementPanel then iRC:ShowManagementPanel(managementPanelKey, frame.main) end
     elseif dashboardTab then
+        if iRC.Recruitment then iRC.Recruitment:Hide() end
         if iRC.HideManagementPanels then iRC:HideManagementPanels() end
         if iRC.ConnectionDashboard and iRC.ConnectionDashboard.ShowEmbedded then
             iRC.ConnectionDashboard:ShowEmbedded(frame.main, frame, dashboardTab)
         end
+    elseif recruitmentPanel then
+        if iRC.HideManagementPanels then iRC:HideManagementPanels() end
+        if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then iRC.ConnectionDashboard:HideEmbedded() end
+        if iRC.Recruitment then iRC.Recruitment:Show(frame.main) end
     elseif iRC.HideManagementPanels then
+        if iRC.Recruitment then iRC.Recruitment:Hide() end
         iRC:HideManagementPanels()
         if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then iRC.ConnectionDashboard:HideEmbedded() end
     end
@@ -5156,7 +5382,7 @@ function UI:Refresh()
     end
     frame.serverNameHeader:SetText(currentServerNavigationName())
     frame.guildNameHeader:SetText(currentGuildNavigationName())
-    local embeddedManagement = managementPanelKey or dashboardTab
+    local embeddedManagement = managementPanelKey or dashboardTab or recruitmentPanel
     frame.raceRefresh:SetShown(not embeddedManagement and frame.category == "Race Overview")
     frame.guildOverviewRefresh:SetShown(not embeddedManagement and frame.category == "Guild Overview")
     frame.guildOverviewAltToggle:SetShown(not embeddedManagement and frame.category == "Guild Overview")
@@ -5183,6 +5409,10 @@ function UI:Refresh()
     frame.rankManagementControls:SetShown(not embeddedManagement and frame.category == "Rank Management")
     if frame.category ~= "Rank Management" and frame.rankMemberMenu then frame.rankMemberMenu:Hide() end
     if frame.category ~= "Guild Log" then frame.guildLogSearch.suggestions:Hide() end
+    if frame.category ~= "Guild Log" then
+        for _, marker in ipairs(frame.guildLogDateMarkers or {}) do marker:Hide() end
+        if frame.guildLogStickyDate then frame.guildLogStickyDate:Hide() end
+    end
     if frame.category ~= "Guild Rules" then
         for _, row in ipairs(frame.ruleRows or {}) do row:Hide() end
         for _, header in ipairs(frame.ruleSectionHeaders or {}) do header:Hide() end

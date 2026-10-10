@@ -12,6 +12,7 @@ local PROBE_INTERVAL, PROBE_ATTEMPTS, CONFIRMATION_WINDOW, LOGIN_GRACE = 15, 3, 
 local sessionStartedAt = time()
 local guildRosterSnapshot, guildRosterSnapshotValid = {}, false
 local confirmedRankChanges = {}
+local CONFIRMED_RANK_OVERRIDE_LIFETIME = 15
 local memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries
 local memberRowsDirty = {}
 local rosterUpdateTicket
@@ -75,6 +76,7 @@ function iRC:RecordConfirmedGuildRankChange(name, rankIndex)
         guildKey = self:GetGuildKey(),
         rankIndex = rankIndex,
         rankName = getRankName(rankIndex),
+        confirmedAt = GetTime and GetTime() or 0,
     }
     self:InvalidateGuildRosterSnapshot()
     return true
@@ -118,14 +120,17 @@ function iRC:GetGuildRosterSnapshot()
             local nameKey = self:NormalizeName(name)
             local confirmedRank = confirmedRankChanges[nameKey]
             if confirmedRank then
+                local confirmedAge = (GetTime and GetTime() or 0) - (tonumber(confirmedRank.confirmedAt) or 0)
                 if confirmedRank.guildKey ~= self:GetGuildKey()
-                    or rankIndex == confirmedRank.rankIndex then
+                    or rankIndex == confirmedRank.rankIndex
+                    or confirmedAge >= CONFIRMED_RANK_OVERRIDE_LIFETIME then
                     confirmedRankChanges[nameKey] = nil
                 else
                     -- WoW has already confirmed this exact command. Forever
-                    -- can keep returning the old roster rank for an extended
-                    -- period, so retain the confirmed value until the native
-                    -- roster catches up instead of reverting on a timer.
+                    -- can briefly return the old roster rank. Keep the confirmed
+                    -- value during that short propagation window, then trust the
+                    -- native roster again so later changes by another officer are
+                    -- never hidden behind a permanent local override.
                     rankIndex, rankName = confirmedRank.rankIndex, confirmedRank.rankName
                 end
             end
@@ -187,7 +192,12 @@ end
 
 function iRC:RefreshGuildRoster()
     if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
-    if GuildRoster then GuildRoster() end
+    self:InvalidateGuildRosterSnapshot()
+    if C_GuildInfo and type(C_GuildInfo.GuildRoster) == "function" then
+        C_GuildInfo.GuildRoster()
+    elseif GuildRoster then
+        GuildRoster()
+    end
 end
 
 function iRC:GetMemberVerification(name, online, profile, context)
@@ -642,6 +652,17 @@ frame:SetScript("OnEvent", function(_, event)
         if C_Timer and C_Timer.NewTicker then
             C_Timer.NewTicker(15, function()
                 if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+                local mainFrame = iRC.MainUI and iRC.MainUI.frame
+                local category = mainFrame and mainFrame.category
+                if mainFrame and mainFrame:IsShown()
+                    and (category == "Guild Members" or category == "Guild Overview"
+                        or category == "Guild Log" or category == "Inactive Member Management"
+                        or category == "Rank Management") then
+                    -- Forever does not reliably push another officer's roster
+                    -- changes to every client. Request a current native roster
+                    -- while a roster-dependent page is actually being viewed.
+                    iRC:RefreshGuildRoster()
+                end
                 -- Detect expired iRC presence even if WoW still lists the
                 -- previous notifier online (for example, addon disabled).
                 if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
@@ -663,6 +684,8 @@ frame:SetScript("OnEvent", function(_, event)
             if iRC.MainUI and iRC.MainUI.frame
                 and (iRC.MainUI.frame.category == "Guild Members"
                     or iRC.MainUI.frame.category == "Guild Overview"
+                    or iRC.MainUI.frame.category == "Guild Log"
+                    or iRC.MainUI.frame.category == "Inactive Member Management"
                     or iRC.MainUI.frame.category == "Rank Management") then
                 iRC.MainUI:RefreshIfShown()
             end

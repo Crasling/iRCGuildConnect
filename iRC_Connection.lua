@@ -507,6 +507,12 @@ function iRC:SendRankPermissions(targetName, force)
     send(self.Prefix, table.concat({ "RANK_MANAGEMENT_PERMISSION", WIRE_VERSION, rankManagement, tostring(timestamp),
         rulesBackupChecksum(rankManagement .. SEP .. timestamp) }, SEP),
         targetName and "WHISPER" or "GUILD", targetName)
+    local recruitment = tostring(math.max(0, math.min(9,
+        math.floor(tonumber(connection.rankPermissions.recruitment)
+            or self.DefaultRankPermissions.recruitment))))
+    send(self.Prefix, table.concat({ "RECRUITMENT_PERMISSION", WIRE_VERSION, recruitment, tostring(timestamp),
+        rulesBackupChecksum(recruitment .. SEP .. timestamp) }, SEP),
+        targetName and "WHISPER" or "GUILD", targetName)
     self:SendMemberPermissions(nil, targetName, true)
     return true
 end
@@ -1205,6 +1211,10 @@ local function handleMessage(prefix, message, distribution, sender)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
+    if kind == "RECRUIT_STATUS" or kind == "RECRUIT_REQUEST" then
+        if iRC.Recruitment and iRC:IsGuildMemberName(sender) then iRC.Recruitment:ReceiveSync(parts, sender) end
+        return
+    end
     if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_MEMBER" or kind == "IDENT_ADMIN_MEMBER"
         or kind == "IDENT_LINK_REQUEST" or kind == "IDENT_LINK_DECLINE" then
         if iRC.Identity and iRC:IsGuildMemberName(sender) then iRC.Identity:ReceiveSync(parts, sender) end
@@ -1420,6 +1430,19 @@ local function handleMessage(prefix, message, distribution, sender)
             if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
             if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
         end
+    elseif kind == "RECRUITMENT_PERMISSION" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        local connection = iRC:GetConnection()
+        local senderRank = getRulesRank(sender, connection)
+        local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
+        local now = time()
+        if rankHasGuildMasterAuthority(senderRank, connection) and value and value >= 0 and value <= 9
+            and value == math.floor(value) and timestamp and timestamp > 0 and timestamp <= now + 300
+            and checksum == rulesBackupChecksum(tostring(parts[3]) .. SEP .. timestamp)
+            and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
+            connection.rankPermissions.recruitment = value
+            if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+            if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        end
     elseif kind == "MEMBER_PERMISSIONS" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
@@ -1430,7 +1453,7 @@ local function handleMessage(prefix, message, distribution, sender)
         local key = iRC:NormalizeName(name)
         local current = connection and connection.memberPermissions and connection.memberPermissions[key]
         if connection and rankHasGuildMasterAuthority(senderRank, connection) and name ~= ""
-            and iRC:IsGuildMemberName(name) and mask and mask == math.floor(mask) and mask >= 0 and mask <= 1023
+            and iRC:IsGuildMemberName(name) and mask and mask == math.floor(mask) and mask >= 0 and mask <= 2047
             and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= ""
             and checksum == memberPermissionsChecksum(name, math.floor(mask), math.floor(timestamp), source)
             and timestamp >= math.floor(tonumber(current and current.timestamp) or 0) then
@@ -2080,6 +2103,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
+        if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
         if prefix == iRC.Prefix and iRC:QueuePerformanceIncoming(message, function()
             handleMessage(prefix, message, distribution, sender)
         end) then return end

@@ -69,6 +69,10 @@ end
 captureFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
+        if iRC:HasSecretValues(prefix, message, distribution, sender) then
+            Append("IRC_RECEIVE", "<secret>")
+            return
+        end
         if prefix == iRC.Prefix or prefix == "iRCGridV1" or prefix == "iRCIconV1"
             or prefix == "iRCGFRoster" then
             Append("IRC_RECEIVE", prefix, type(message) == "string" and (message:match("^([A-Z][A-Z0-9_]*)") or "other") or "?",

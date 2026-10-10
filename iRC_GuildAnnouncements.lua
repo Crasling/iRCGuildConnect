@@ -399,6 +399,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         Announcements:AnnounceLevel60(...)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
+        if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
         if prefix == ICON_PREFIX then Announcements:ReceiveIconWire(message, distribution, sender) end
     end
 end)
