@@ -1064,7 +1064,7 @@ pinSizeSlider:SetScript("OnValueChanged", function(_, value)
     pinSizeValue:SetText(tostring(value))
     if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
 end)
-pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 8))))
+pinSizeSlider:SetValue(math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12))))
 y = y - 74
 _, y = CreateSectionHeader(generalContent, L.CHAT_ICON_HEADER, y - 4)
 local hideChatIconCheck

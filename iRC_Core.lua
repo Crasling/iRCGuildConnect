@@ -525,7 +525,7 @@ local DEFAULT_SETTINGS = {
     showAttentionReminders = true,
     excludeAltsFromGuildSnapshot = true,
     showGuildMap = true,
-    guildMapPinSize = 8,
+    guildMapPinSize = 12,
     shareGuildMapPosition = true,
 }
 local savedVariablesReady = false

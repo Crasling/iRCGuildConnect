@@ -394,6 +394,8 @@ function Recruitment:AdvanceScan(ticket)
     self.retryClassName = nil
     local settings = getSettings()
     local query = tostring(settings.minLevel) .. "-" .. tostring(settings.maxLevel) .. " c-\"" .. className .. "\""
+    iRC:DebugMsg("Recruitment scan " .. tostring(self.scanIndex) .. "/" .. tostring(#self.scanClasses)
+        .. " started: " .. query, 3)
     if self.panel then self.panel.status:SetText("Scanning " .. className .. " (" .. self.scanIndex .. "/" .. #self.scanClasses .. ")...") end
     local whoAttempt = {}
     self.whoAttempt = whoAttempt
@@ -408,6 +410,7 @@ function Recruitment:AdvanceScan(ticket)
         self.waitingForWho = nil
         self.whoAttempt = nil
         self.scanActive = nil
+        iRC:DebugMsg("Recruitment scan stopped: WHO is unavailable.", 1)
         if self.panel then self.panel.status:SetText("WHO scanning is not available on this client.") end
         self:Refresh()
         return false
@@ -435,6 +438,9 @@ function Recruitment:FinishCurrentClassScan(timedOut, retryDelay)
         self.scanIndex = math.max(0, self.scanIndex - 1)
         self.retryClassName = failedClass
         retryDelay = math.max(0, tonumber(retryDelay) or 0)
+        iRC:DebugMsg("Recruitment WHO failed for " .. tostring(failedClass)
+            .. (retryDelay > 0 and ("; retry allowed in " .. tostring(retryDelay) .. " seconds.")
+                or "; retry allowed now."), 2)
         self.nextScanAllowedAt = retryDelay > 0 and (GetTime() + retryDelay) or nil
         if self.panel then
             self.panel.status:SetText(retryDelay > 0
@@ -448,6 +454,7 @@ function Recruitment:FinishCurrentClassScan(timedOut, retryDelay)
         self.fullScanComplete = true
         self.newScanConfirmUntil = nil
         self.nextScanAllowedAt = nil
+        iRC:DebugMsg("Recruitment scan complete: " .. tostring(#self.results) .. " available result(s).", 3)
         if self.panel then
             self.panel.status:SetText("Scan complete (" .. #self.scanClasses .. "/" .. #self.scanClasses
                 .. "). 0 scans left - " .. tostring(#self.results) .. " available result(s).")
@@ -459,6 +466,8 @@ function Recruitment:FinishCurrentClassScan(timedOut, retryDelay)
         self.nextScanAllowedAt = GetTime() + NEXT_SCAN_DELAY + NEXT_SCAN_SAFETY
         local nextClass = self.scanClasses[self.scanIndex + 1]
         local scansLeft = #self.scanClasses - self.scanIndex
+        iRC:DebugMsg("Recruitment WHO completed for " .. tostring(self.scanClasses[self.scanIndex])
+            .. "; " .. tostring(scansLeft) .. " scan(s) left.", 3)
         self.panel.status:SetText("Next: " .. tostring(nextClass) .. " in " .. NEXT_SCAN_DELAY
             .. "s (" .. scansLeft .. " left).")
     end
@@ -479,6 +488,8 @@ function Recruitment:CancelScan()
     self.fullScanComplete = true
     -- Invalidate the timeout belonging to the cancelled WHO request.
     self.scanTicket = {}
+    iRC:DebugMsg("Recruitment scan cancelled after " .. tostring(completedScans)
+        .. "/" .. tostring(totalScans) .. "; collected results preserved.", 2)
     if self.panel then
         self.panel.status:SetText("Scan cancelled after " .. completedScans .. "/" .. totalScans
             .. ". Collected results are preserved.")
@@ -1123,11 +1134,9 @@ function Recruitment:Create(parent)
         row:SetBackdropColor(0.035, 0.031, 0.027, 0.96)
         row:SetBackdropBorderColor(0.25, 0.20, 0.13, 0.9)
         row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-        row:SetScript("OnClick", function(self, button)
-            if button == "LeftButton" and self.info and not self.info.historyRecord then
-                Recruitment:Invite(self.info)
-            end
-        end)
+        -- Cards are informational. Only the explicit Invite button may send a
+        -- whisper or guild invitation, preventing accidental recruitment.
+        row:SetScript("OnClick", nil)
         row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.name:SetPoint("TOPLEFT", 9, -7)
         row.name:SetWidth(185)
@@ -1332,12 +1341,17 @@ eventFrame:RegisterEvent("WHO_LIST_UPDATE")
 eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
 eventFrame:SetScript("OnEvent", function(_, event, message)
     if event == "WHO_LIST_UPDATE" and Recruitment.scanActive and Recruitment.waitingForWho then
+        iRC:DebugMsg("Recruitment WHO response received for "
+            .. tostring(Recruitment.scanClasses and Recruitment.scanClasses[Recruitment.scanIndex] or "unknown class")
+            .. ": " .. tostring(whoCount()) .. " result(s).", 3)
         Recruitment:CollectWhoResults()
         Recruitment:FinishCurrentClassScan(false)
     elseif event == "CHAT_MSG_SYSTEM" then
         local retryDelay = Recruitment.scanActive and Recruitment.waitingForWho
             and whoThrottleDelay(message)
         if retryDelay then
+            iRC:DebugMsg("Recruitment WHO throttle detected from the system message; retry in "
+                .. tostring(retryDelay) .. " seconds.", 2)
             Recruitment:FinishCurrentClassScan(true, retryDelay)
             return
         end

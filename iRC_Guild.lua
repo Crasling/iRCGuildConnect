@@ -656,8 +656,7 @@ frame:SetScript("OnEvent", function(_, event)
                 local category = mainFrame and mainFrame.category
                 if mainFrame and mainFrame:IsShown()
                     and (category == "Guild Members" or category == "Guild Overview"
-                        or category == "Guild Log" or category == "Inactive Member Management"
-                        or category == "Rank Management") then
+                        or category == "Guild Log" or category == "Member Management") then
                     -- Forever does not reliably push another officer's roster
                     -- changes to every client. Request a current native roster
                     -- while a roster-dependent page is actually being viewed.
@@ -685,8 +684,7 @@ frame:SetScript("OnEvent", function(_, event)
                 and (iRC.MainUI.frame.category == "Guild Members"
                     or iRC.MainUI.frame.category == "Guild Overview"
                     or iRC.MainUI.frame.category == "Guild Log"
-                    or iRC.MainUI.frame.category == "Inactive Member Management"
-                    or iRC.MainUI.frame.category == "Rank Management") then
+                    or iRC.MainUI.frame.category == "Member Management") then
                 iRC.MainUI:RefreshIfShown()
             end
         end

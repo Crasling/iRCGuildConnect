@@ -450,11 +450,31 @@ function Identity:SetGuildJoinInviter(name, inviter)
     return false
 end
 
+local function linkedGuildMemberCount(identity, name)
+    local targetKey, count = characterKey(name), 0
+    for _, linkedName in ipairs(identity:GetLinkedCharacters(name)) do
+        if characterKey(linkedName) ~= targetKey and iRC:IsGuildMemberName(linkedName) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function guildKickText(name, officer, linkedCount)
+    local text = iRC:FormatPlayerName(name) .. " was removed from the guild by " .. officer .. "."
+    if (tonumber(linkedCount) or 0) > 0 then
+        text = text .. " " .. tostring(linkedCount) .. " linked character"
+            .. (linkedCount == 1 and " remains" or "s remain") .. " in the guild."
+    end
+    return text
+end
+
 function Identity:RecordKnownGuildKick(name, officer)
     local store, key = guildStore(false), characterKey(name)
     officer = iRC:FormatPlayerName(officer or iRC:GetPlayerName())
     if key == "" or characterKey(officer) == "" then return false end
-    knownGuildKicks[key] = { officer = officer, recordedAt = time() }
+    local linkedCount = linkedGuildMemberCount(self, name)
+    knownGuildKicks[key] = { officer = officer, recordedAt = time(), linkedCount = linkedCount }
     if not store then return true end
     local now = time()
     for index = #store.guildLog, 1, -1 do
@@ -465,7 +485,7 @@ function Identity:RecordKnownGuildKick(name, officer)
             and characterKey(record.name) == key then
             local previousId = record.id
             record.eventType = "KICK"
-            record.text = iRC:FormatPlayerName(name) .. " was removed from the guild by " .. officer .. "."
+            record.text = guildKickText(name, officer, linkedCount)
             record.id = eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
             if previousId then store.guildLogIds[previousId] = nil end
             store.guildLogIds[record.id] = true
@@ -864,7 +884,7 @@ function Identity:ReceiveSync(parts, sender)
         local relatedKey = characterKey(name)
         if relatedRecord.eventType == "KICK" then
             local former = store.formerMembers[relatedKey]
-            local officer = tostring(relatedRecord.text or ""):match(" removed from the guild by (.-)%.$")
+            local officer = tostring(relatedRecord.text or ""):match(" removed from the guild by (.-)%.")
             if former and officer then former.departureType = "Removed by " .. officer end
         end
         if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
@@ -1032,8 +1052,8 @@ function Identity:ScanRoster()
                     store.formerMembers[key] = record
                     store.missingCounts[key] = nil
                     if knownKick then
-                        addGuildLog(store, "KICK", previous.name, iRC:FormatPlayerName(previous.name)
-                            .. " was removed from the guild by " .. knownKick.officer .. ".", previous.classFile)
+                        addGuildLog(store, "KICK", previous.name,
+                            guildKickText(previous.name, knownKick.officer, knownKick.linkedCount), previous.classFile)
                         knownGuildKicks[key] = nil
                     else
                         addGuildLog(store, "LEAVE", previous.name,

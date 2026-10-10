@@ -431,6 +431,12 @@ function Dashboard:Create()
     end
 
     local function showGuildFoundReport(targetName)
+        -- Progression audit reports have no meaning when neither Self-Found
+        -- nor Guild-Found is part of the active guild rules.
+        if iRC:GetProgressionMode() == "NONE" then
+            frame.memberReport:Hide()
+            return
+        end
         local status = iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(targetName)
         local member
         for _, rosterMember in ipairs(iRC:GetGuildRosterRows()) do
@@ -810,8 +816,9 @@ local function getEffectiveVerificationState(member, progressionMode, usesGuildF
     local hasLiveAddon = iRC:IsLiveAddonState(state)
     local guildFoundStatus = memberGuildFoundStatus(member)
     local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(member.name)
-    local guildFoundApplies = personalBank or (usesGuildFound
-        and iRC:IsGuildFoundProgressionApplicable(member.level, member.selfFound, connection and connection.rules))
+    local progressionRulesActive = progressionMode ~= "NONE"
+    local guildFoundApplies = progressionRulesActive and (personalBank or (usesGuildFound
+        and iRC:IsGuildFoundProgressionApplicable(member.level, member.selfFound, connection and connection.rules)))
     if state == "verified" and guildFoundApplies and guildFoundStatus and guildFoundStatus.clean == false then
         return "attention"
     end
@@ -911,8 +918,15 @@ function Dashboard:Refresh()
     local connection = iRC:GetConnection()
     if frame.tab ~= "Verification" and frame.memberMenu then frame.memberMenu:Hide() end
     if frame.tab == "Champions" or frame.tab == "Leaderboard" then frame.tab = "Verification" end
-    if frame.tabs.Incidents then frame.tabs.Incidents:SetShown(iRC:HasGuildPermission("incidents")) end
-    if frame.tab == "Incidents" and not iRC:HasGuildPermission("incidents") then frame.tab = "Verification" end
+    local canVerify = iRC:HasGuildPermission("verification")
+    local canViewIncidents = iRC:HasGuildPermission("incidents")
+    if frame.tabs.Verification then frame.tabs.Verification:SetShown(canVerify) end
+    if frame.tabs.Incidents then frame.tabs.Incidents:SetShown(canViewIncidents) end
+    if frame.tab == "Incidents" and not canViewIncidents then
+        frame.tab = canVerify and "Verification" or "Incidents"
+    elseif frame.tab == "Verification" and not canVerify then
+        frame.tab = canViewIncidents and "Incidents" or "Verification"
+    end
     frame.verificationSearch:SetShown(frame.tab == "Verification")
     local visibleTabIndex = 0
     for _, tab in ipairs(frame.tabOrder or {}) do
@@ -964,7 +978,11 @@ function Dashboard:Refresh()
         local rules = iRC:GetConnectionRules() or {}
         local responseRequired = iRC:IsAddonResponseRequired(connection)
         local progressionMode = iRC:GetProgressionMode(rules)
-        local guildFoundRequired = iRC:IsGuildFoundRequired(connection)
+        local progressionRulesActive = progressionMode ~= "NONE"
+        if not progressionRulesActive then
+            frame.memberReport:Hide()
+            frame.memberMenu:Hide()
+        end
         local usesSelfFound = progressionMode == "SELF_FOUND" or progressionMode == "SELF_FOUND_OR_GUILD_FOUND"
         local usesGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
             or (progressionMode == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND")
@@ -987,22 +1005,51 @@ function Dashboard:Refresh()
             elseif state == "offline" or state == "inactive" then offline = offline + 1
             else attention = attention + 1 end
         end
-        local cards = {
-            { label = "Verified", value = tostring(verified), color = GREEN },
-        }
-        if not responseRequired then cards[#cards + 1] = { label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), value = tostring(optional), color = GRAY } end
-        cards[#cards + 1] = { label = "Needs attention", value = tostring(attention), color = RED }
-        cards[#cards + 1] = { label = "Offline", value = tostring(offline), color = GRAY }
+        local cards
+        if progressionRulesActive then
+            cards = { { label = "Verified", value = tostring(verified), color = GREEN } }
+            if not responseRequired then
+                cards[#cards + 1] = {
+                    label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), value = tostring(optional), color = GRAY,
+                }
+            end
+            cards[#cards + 1] = { label = "Needs attention", value = tostring(attention), color = RED }
+            cards[#cards + 1] = { label = "Offline", value = tostring(offline), color = GRAY }
+        else
+            cards = {
+                { label = "All members", value = tostring(#members), color = ORANGE },
+                { label = "Verified", value = tostring(verified), color = GREEN },
+                { label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), value = tostring(optional), color = GRAY },
+            }
+        end
         setSummaryCards(frame, cards)
-        local filters = { { id = "all", label = "All members" }, { id = "attention", label = "Needs attention", flash = attention > 0 },
-            { id = "verified", label = "Verified" } }
-        if not responseRequired then filters[#filters + 1] = { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD") } end
+        local filters
+        if progressionRulesActive then
+            filters = { { id = "all", label = "All members" },
+                { id = "attention", label = "Needs attention", flash = attention > 0 },
+                { id = "verified", label = "Verified" } }
+            if not responseRequired then
+                filters[#filters + 1] = { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD") }
+            end
+        else
+            filters = {
+                { id = "all", label = "All members" },
+                { id = "verified", label = "Verified" },
+                { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD") },
+            }
+        end
         local filter = setFilters(frame, filters)
         frame.title:SetText("Guild verification")
         frame.subtitle:SetText(iRC:Text(responseRequired and "VERIFICATION_RESPONSE_REQUIRED_DESC" or "VERIFICATION_RESPONSE_OPTIONAL_DESC"))
-        setHeaders(frame,
-            { "Member", "Race / Class", "Level", "Live status", progressHeader, iRC:Text("VERIFICATION_STATUS_COLUMN") },
-            { "name", "race", "level", "status", "progress", "clean" }, "name")
+        if progressionRulesActive then
+            setHeaders(frame,
+                { "Member", "Race / Class", "Level", "Live status", progressHeader, iRC:Text("VERIFICATION_STATUS_COLUMN") },
+                { "name", "race", "level", "status", "progress", "clean" }, "name")
+        else
+            setHeaders(frame,
+                { "Member", "Race / Class", "Level", "Live status" },
+                { "name", "race", "level", "status" }, "name")
+        end
         local searchQuery = frame.verificationSearch:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "")
         members = filterAndSort(frame, members, function(member)
             local state = effectiveVerificationState(member)
@@ -1058,7 +1105,7 @@ function Dashboard:Refresh()
             local hasSelfFoundSource = hasLiveAddon
             local progressText, progressColor
             local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(member.name)
-            if personalBank then
+            if personalBank and progressionRulesActive then
                 local verified = guildFoundStatus and guildFoundStatus.verified == true
                 progressText = iRC:Text("VERIFICATION_GUILD_FOUND",
                     iRC:Text(hasLiveAddon and verified and "RL_VERIFIED" or "RL_UNVERIFIED"))
@@ -1113,35 +1160,47 @@ function Dashboard:Refresh()
                 cleanText = ""
                 progressColor = GRAY
             end
-            local statusTooltip = selfFound
-            local guildFoundVerificationApplies = personalBank or (usesGuildFound and ((progressionMode == "GUILD_FOUND")
+            local statusTooltip = progressionRulesActive and selfFound or nil
+            local guildFoundVerificationApplies = progressionRulesActive and (personalBank or (usesGuildFound and ((progressionMode == "GUILD_FOUND")
                     or (progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and member.selfFound ~= true)
-                    or (progressionMode == "SELF_FOUND" and (member.level or 0) >= 60)))
-            if iRC.RaceLockedSync then
+                    or (progressionMode == "SELF_FOUND" and (member.level or 0) >= 60))))
+            if progressionRulesActive and iRC.RaceLockedSync then
                 statusTooltip = statusTooltip .. "\n" .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus, not guildFoundVerificationApplies)
             end
-            if raceWarning then statusTooltip = statusTooltip .. "\n\n" .. raceWarning end
-            if canVerify then statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT") end
+            if raceWarning then
+                statusTooltip = statusTooltip and (statusTooltip .. "\n\n" .. raceWarning) or raceWarning
+            end
+            if progressionRulesActive and canVerify then
+                statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT")
+            end
             local effectiveState = effectiveVerificationState(member)
             local color = effectiveState == "attention" and RED
                 or (verification.state == "verified" and GREEN
                 or ((verification.state == "offline" or verification.state == "inactive" or verification.state == "optional") and GRAY or RED))
-            local data = setRow(frame, count, { displayMemberName(member.name), member.race .. " / " .. member.class, tostring(member.level), addon, progressText, cleanText }, color, function(_, mouseButton)
+            local rowValues = { displayMemberName(member.name), member.race .. " / " .. member.class,
+                tostring(member.level), addon }
+            if progressionRulesActive then
+                rowValues[5], rowValues[6] = progressText, cleanText
+            end
+            local rowClick = progressionRulesActive and function(_, mouseButton)
                 if mouseButton == "RightButton" then
                     openMemberManagementMenu(frame, selectedMember)
                 elseif frame.showMemberReport then
                     frame.showMemberReport(selectedMember.name)
                 end
-            end, statusTooltip)
+            end or nil
+            local data = setRow(frame, count, rowValues, color, rowClick, statusTooltip)
             data.attentionSince, data.addonText = member.attentionSince, addonText
-            data.columnColors = {
-                [4] = member.raceMismatch and RED or nil,
-                [5] = progressColor,
-                [6] = (selfFoundViolation or (liveState == "verified" and guildFoundStatus and guildFoundStatus.clean == false)) and RED
+            data.columnColors = { [4] = member.raceMismatch and RED or nil }
+            if progressionRulesActive then
+                data.columnColors[5] = progressColor
+                data.columnColors[6] = (selfFoundViolation
+                    or (liveState == "verified" and guildFoundStatus and guildFoundStatus.clean == false)) and RED
                     or (not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
                     or (belowMaxLevel and GREEN
-                    or (guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY))),
-            }
+                    or (guildFoundStatus and guildFoundStatus.clean ~= nil
+                        and (guildFoundStatus.clean and GREEN or RED) or GRAY)))
+            end
         end
     elseif frame.tab == "Incidents" then
         local incidents = connection and connection.officerIncidents or {}
@@ -1210,9 +1269,14 @@ end
 
 function Dashboard:ShowEmbedded(parent, overlayParent, tabName)
     local frame = self:Create()
+    local sameHost = self.embedded and frame.main:GetParent() == parent
     self.embedded = true
     frame.embedded = true
-    frame.tab = tabName == "Incidents" and "Incidents" or "Verification"
+    if tabName == "Incidents" then
+        frame.tab = "Incidents"
+    elseif not sameHost or (frame.tab ~= "Verification" and frame.tab ~= "Incidents") then
+        frame.tab = "Verification"
+    end
     frame.main:SetParent(parent)
     frame.main:ClearAllPoints()
     frame.main:SetAllPoints(parent)

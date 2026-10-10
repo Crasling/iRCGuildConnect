@@ -2,6 +2,22 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.22 - Guild Member & Interface Improvements
+--------------------------------------------------------------------------------
+[ADDED] Member Management combines Inactive Members, Rank Management, and searchable Kick Specific tools, including optional linked Main, Alt, and Personal Bank removal
+[ADDED] Guild Members adds online and offline filters, movable member details, and searches that prioritize the linked Main
+[ADDED] The top three Guild Leaderboard entries open movable guild-information popups
+[ADDED] Recruitment debug logging covers WHO queries, responses, throttling, retries, cancellation, and completion
+[FIXED] Recruitment cards are informational and only the explicit Invite button can send whispers or invitations
+[FIXED] Roster refreshes preserve list position, update member state correctly, and size short search-result menus to their contents
+[FIXED] Popups block click-through without locking the main window; dragging, mouse-wheel capture, and Escape behavior now work consistently
+[FIXED] Rank and removal queues safely pause protected actions, roster checks, and secret system-event parsing during combat
+[FIXED] Guild Map positions publish promptly, cached locations redraw immediately when opening, zooming, or changing zones, and large pin sets cluster efficiently
+[CHANGED] Guild Verification uses a permission-aware Incidents tab and a simplified All Members, Verified, and Optional view when progression rules are inactive
+[CHANGED] Member, rank, and removal views use clearer class-colored cards with prominent Main, Alt, and Personal Bank identities and linked-character removal details
+[CHANGED] Guild Log names can be clicked to search, and kick records report how many linked characters remain
+[CHANGED] Guild Map pins default to size 12 with stronger outlines, class-colored action names, and compact nearby-member clusters with accurate counts and five-name previews
+
 v0.5.21 - Recruitment Messaging & Scan Controls
 --------------------------------------------------------------------------------
 [ADDED] Recruitment messages support up to five personalized whispers, one per line, with %s replaced by the invited character's name
