@@ -10,8 +10,39 @@ local CLASS_ORDER = { "DRUID", "HUNTER", "MAGE", "PALADIN", "PRIEST", "ROGUE", "
 local SCAN_TIMEOUT = 15
 local NEXT_SCAN_DELAY = 5
 local NEXT_SCAN_SAFETY = 0.25
+local MAX_CHAT_MESSAGE_BYTES = 255
+local RESERVED_RECRUITMENT_NAME_BYTES = 40
+local MAX_RECRUITMENT_WHISPERS = 5
+local MAX_RECRUITMENT_MESSAGE_BYTES = MAX_CHAT_MESSAGE_BYTES * MAX_RECRUITMENT_WHISPERS
+    + (MAX_RECRUITMENT_WHISPERS - 1) * 2
+local WHISPER_SPACING = 0.50
 local lastSyncRequestAt = 0
 local STATUS_PRIORITY = { CLEAR = 0, CONTACTED = 1, DECLINED = 2, ACCEPTED = 3, BLOCKED = 4, ANTISPAM = 5 }
+local VALID_SEARCH_CLASSES = { ALL = true }
+for _, classFile in ipairs(CLASS_ORDER) do VALID_SEARCH_CLASSES[classFile] = true end
+
+local function localizedClassName(classFile)
+    return LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classFile]
+        or classFile:sub(1, 1) .. classFile:sub(2):lower()
+end
+
+local function searchClassLabel(classFile)
+    return classFile == "ALL" and "All classes" or localizedClassName(classFile)
+end
+
+local function searchClassOptions()
+    local options = { { value = "ALL", label = "All classes" } }
+    for _, classFile in ipairs(CLASS_ORDER) do
+        options[#options + 1] = { value = classFile, label = localizedClassName(classFile) }
+    end
+    table.sort(options, function(a, b)
+        if a.value == "ALL" or b.value == "ALL" then
+            return a.value == "ALL" and b.value ~= "ALL"
+        end
+        return a.label < b.label
+    end)
+    return options
+end
 
 local function playerKey(name)
     return iRC:NormalizeName(name)
@@ -19,6 +50,99 @@ end
 
 local function clean(value, limit)
     return tostring(value or ""):gsub("[%c]", " "):sub(1, limit)
+end
+
+local function truncateUtf8(value, maximumBytes)
+    value = tostring(value or "")
+    if #value <= maximumBytes then return value end
+    local cut, characterStart = maximumBytes, maximumBytes
+    while characterStart > 0 do
+        local byte = value:byte(characterStart)
+        if not byte or byte < 128 or byte >= 192 then break end
+        characterStart = characterStart - 1
+    end
+    local lead = value:byte(characterStart) or 0
+    local characterBytes = lead < 128 and 1 or (lead < 224 and 2 or (lead < 240 and 3 or 4))
+    if characterStart + characterBytes - 1 > cut then cut = characterStart - 1 end
+    return value:sub(1, cut)
+end
+
+local function normalizeChatMessage(value)
+    local message = tostring(value or ""):gsub("[%c]", " "):match("^%s*(.-)%s*$")
+    return truncateUtf8(message, MAX_CHAT_MESSAGE_BYTES)
+end
+
+local function truncateRecruitmentTemplate(value)
+    value = tostring(value or "")
+    local _, placeholders = value:gsub("%%s", "")
+    if placeholders == 0 then return truncateUtf8(value, MAX_CHAT_MESSAGE_BYTES) end
+    local literalBudget = math.max(0, MAX_CHAT_MESSAGE_BYTES
+        - placeholders * RESERVED_RECRUITMENT_NAME_BYTES)
+    local parts, startAt = {}, 1
+    while true do
+        local placeholderAt = value:find("%s", startAt, true)
+        local literal = placeholderAt and value:sub(startAt, placeholderAt - 1) or value:sub(startAt)
+        literal = truncateUtf8(literal, literalBudget)
+        parts[#parts + 1] = literal
+        literalBudget = literalBudget - #literal
+        if not placeholderAt then break end
+        parts[#parts + 1] = "%s"
+        startAt = placeholderAt + 2
+    end
+    return table.concat(parts)
+end
+
+local function normalizeRecruitmentWhisper(value)
+    local message = tostring(value or ""):gsub("[%c]", " "):match("^%s*(.-)%s*$")
+    return truncateRecruitmentTemplate(message)
+end
+
+local function getRecruitmentWhispers(value)
+    local whispers = {}
+    value = tostring(value or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+    for line in (value .. "\n"):gmatch("(.-)\n") do
+        line = normalizeRecruitmentWhisper(line)
+        if line ~= "" then
+            whispers[#whispers + 1] = line
+            if #whispers >= MAX_RECRUITMENT_WHISPERS then break end
+        end
+    end
+    return whispers
+end
+
+local function normalizeRecruitmentMessage(value)
+    return table.concat(getRecruitmentWhispers(value), "\n")
+end
+
+local function capRecruitmentEditor(value)
+    local lines, messageCount = {}, 0
+    value = tostring(value or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+    local startAt = 1
+    while true do
+        local newlineAt = value:find("\n", startAt, true)
+        local line = newlineAt and value:sub(startAt, newlineAt - 1) or value:sub(startAt)
+        line = truncateRecruitmentTemplate(line:gsub("[%c]", " "))
+        if line ~= "" then
+            messageCount = messageCount + 1
+            if messageCount > MAX_RECRUITMENT_WHISPERS then break end
+        end
+        lines[#lines + 1] = line
+        if not newlineAt then break end
+        startAt = newlineAt + 1
+    end
+    return table.concat(lines, "\n")
+end
+
+local function limitRecruitmentEditor(value, addVisualSpacing)
+    value = capRecruitmentEditor(value)
+    if not addVisualSpacing then return value end
+    local lines = {}
+    for line in (value .. "\n"):gmatch("(.-)\n") do
+        if line ~= "" then lines[#lines + 1] = line end
+    end
+    local limited = table.concat(lines, "\n\n")
+    if #lines < MAX_RECRUITMENT_WHISPERS and value:sub(-1) == "\n" then limited = limited .. "\n\n" end
+    return limited
 end
 
 local function getStore(create)
@@ -44,11 +168,13 @@ local function getSettings()
     local settings = iRCCharDB.recruitment
     settings.minLevel = math.max(1, math.floor(tonumber(settings.minLevel) or 10))
     settings.maxLevel = math.max(settings.minLevel, math.floor(tonumber(settings.maxLevel) or 15))
-    settings.message = type(settings.message) == "string" and settings.message
-        or "Hello! Would you like to join our guild?"
+    settings.searchClass = VALID_SEARCH_CLASSES[settings.searchClass] and settings.searchClass or "ALL"
+    settings.message = normalizeRecruitmentMessage(type(settings.message) == "string" and settings.message
+        or "Hi %s, are you looking for a guild? We're a friendly social guild building a community of like-minded players to level, group, and adventure together. Would you like to join us?")
+    settings.whispersCollapsed = settings.whispersCollapsed ~= false
     settings.welcomeEnabled = settings.welcomeEnabled == true
-    settings.welcomeMessage = type(settings.welcomeMessage) == "string" and settings.welcomeMessage
-        or "Welcome %s to the guild!"
+    settings.welcomeMessage = normalizeChatMessage(type(settings.welcomeMessage) == "string" and settings.welcomeMessage
+        or "Welcome %s to the guild!")
     return settings
 end
 
@@ -76,7 +202,7 @@ local function makeEdit(parent, width, height, multiline)
     box:SetBackdropColor(0.025, 0.025, 0.025, 0.98)
     box:SetBackdropBorderColor(0.42, 0.31, 0.16, 1)
     box:SetScript("OnEscapePressed", box.ClearFocus)
-    box:SetScript("OnEnterPressed", function(self) if not multiline then self:ClearFocus() end end)
+    if not multiline then box:SetScript("OnEnterPressed", box.ClearFocus) end
     return box
 end
 
@@ -258,16 +384,20 @@ function Recruitment:AdvanceScan(ticket)
         self.fullScanComplete = true
         self.newScanConfirmUntil = nil
         if self.panel then
-            self.panel.status:SetText("Full scan complete (" .. #self.scanClasses .. "/" .. #self.scanClasses
+            self.panel.status:SetText("Scan complete (" .. #self.scanClasses .. "/" .. #self.scanClasses
                 .. "). 0 scans left - " .. tostring(#self.results) .. " available result(s).")
         end
         self:Refresh()
         return true
     end
     local className = self.scanClasses[self.scanIndex]
+    self.retryClassName = nil
     local settings = getSettings()
     local query = tostring(settings.minLevel) .. "-" .. tostring(settings.maxLevel) .. " c-\"" .. className .. "\""
     if self.panel then self.panel.status:SetText("Scanning " .. className .. " (" .. self.scanIndex .. "/" .. #self.scanClasses .. ")...") end
+    local whoAttempt = {}
+    self.whoAttempt = whoAttempt
+    self.waitingForWho = true
     if C_FriendList and type(C_FriendList.SendWho) == "function" then
         -- SendWho is protected in Forever. This must stay on the direct path
         -- from the recruiter's button click; pcall and timer callbacks taint it.
@@ -275,14 +405,20 @@ function Recruitment:AdvanceScan(ticket)
     elseif type(SendWho) == "function" then
         SendWho(query)
     else
+        self.waitingForWho = nil
+        self.whoAttempt = nil
         self.scanActive = nil
         if self.panel then self.panel.status:SetText("WHO scanning is not available on this client.") end
         self:Refresh()
         return false
     end
-    self.waitingForWho = true
+    -- A throttle system message may be delivered while SendWho is returning.
+    -- Do not arm a timeout after that attempt has already been rejected.
+    if not self.scanActive or self.scanTicket ~= ticket
+        or self.whoAttempt ~= whoAttempt or not self.waitingForWho then return true end
     C_Timer.After(SCAN_TIMEOUT, function()
-        if self.scanActive and self.scanTicket == ticket and self.waitingForWho then
+        if self.scanActive and self.scanTicket == ticket
+            and self.whoAttempt == whoAttempt and self.waitingForWho then
             self:FinishCurrentClassScan(true)
         end
     end)
@@ -290,36 +426,65 @@ function Recruitment:AdvanceScan(ticket)
     return true
 end
 
-function Recruitment:FinishCurrentClassScan(timedOut)
+function Recruitment:FinishCurrentClassScan(timedOut, retryDelay)
     if not self.scanActive then return end
     self.waitingForWho = nil
+    self.whoAttempt = nil
     if timedOut then
         local failedClass = self.scanClasses[self.scanIndex]
         self.scanIndex = math.max(0, self.scanIndex - 1)
-        self.nextScanAllowedAt = nil
+        self.retryClassName = failedClass
+        retryDelay = math.max(0, tonumber(retryDelay) or 0)
+        self.nextScanAllowedAt = retryDelay > 0 and (GetTime() + retryDelay) or nil
         if self.panel then
-            self.panel.status:SetText("No WHO response. Click to retry " .. tostring(failedClass) .. ".")
+            self.panel.status:SetText(retryDelay > 0
+                and ("WHO throttled. Retry " .. tostring(failedClass) .. " in "
+                    .. math.ceil(retryDelay) .. " second" .. (retryDelay > 1 and "s" or "") .. ".")
+                or ("No WHO response. Click to retry " .. tostring(failedClass) .. "."))
         end
     elseif self.scanIndex >= #self.scanClasses then
+        self.retryClassName = nil
         self.scanActive = nil
         self.fullScanComplete = true
         self.newScanConfirmUntil = nil
         self.nextScanAllowedAt = nil
         if self.panel then
-            self.panel.status:SetText("Full scan complete (" .. #self.scanClasses .. "/" .. #self.scanClasses
+            self.panel.status:SetText("Scan complete (" .. #self.scanClasses .. "/" .. #self.scanClasses
                 .. "). 0 scans left - " .. tostring(#self.results) .. " available result(s).")
         end
     elseif self.panel then
+        self.retryClassName = nil
         -- Give the server a small buffer beyond its displayed five-second
         -- WHO throttle so a click at the boundary is not silently discarded.
         self.nextScanAllowedAt = GetTime() + NEXT_SCAN_DELAY + NEXT_SCAN_SAFETY
         local nextClass = self.scanClasses[self.scanIndex + 1]
         local scansLeft = #self.scanClasses - self.scanIndex
-        self.panel.status:SetText("Class scan complete (" .. self.scanIndex .. "/" .. #self.scanClasses .. "). "
-            .. scansLeft .. " scan" .. (scansLeft == 1 and "" or "s") .. " left. "
-            .. tostring(nextClass) .. " becomes available in " .. NEXT_SCAN_DELAY .. " seconds.")
+        self.panel.status:SetText("Next: " .. tostring(nextClass) .. " in " .. NEXT_SCAN_DELAY
+            .. "s (" .. scansLeft .. " left).")
     end
     self:Refresh()
+end
+
+function Recruitment:CancelScan()
+    if not self.scanActive then return false end
+    local totalScans = self.scanClasses and #self.scanClasses or 0
+    local completedScans = math.max(0, math.min(totalScans,
+        (self.scanIndex or 0) - (self.waitingForWho and 1 or 0)))
+    self.scanActive = nil
+    self.waitingForWho = nil
+    self.whoAttempt = nil
+    self.nextScanAllowedAt = nil
+    self.retryClassName = nil
+    self.newScanConfirmUntil = nil
+    self.fullScanComplete = true
+    -- Invalidate the timeout belonging to the cancelled WHO request.
+    self.scanTicket = {}
+    if self.panel then
+        self.panel.status:SetText("Scan cancelled after " .. completedScans .. "/" .. totalScans
+            .. ". Collected results are preserved.")
+    end
+    self:Refresh()
+    return true
 end
 
 function Recruitment:StartScan()
@@ -345,7 +510,10 @@ function Recruitment:StartScan()
     local settings = getSettings()
     settings.minLevel = math.max(1, math.floor(tonumber(self.panel.minLevel:GetText()) or settings.minLevel))
     settings.maxLevel = math.max(settings.minLevel, math.floor(tonumber(self.panel.maxLevel:GetText()) or settings.maxLevel))
-    settings.message = self.panel.message:GetText():match("^%s*(.-)%s*$")
+    self.panel.minLevel:ClearFocus()
+    self.panel.maxLevel:ClearFocus()
+    settings.message = normalizeRecruitmentMessage(self.panel.message:GetText())
+    self.panel.message:SetText(settings.message)
     if settings.message == "" then
         self.panel.status:SetText("Write the recruitment whisper before scanning.")
         return false
@@ -357,13 +525,17 @@ function Recruitment:StartScan()
     self.results, self.resultByKey = {}, {}
     if self.panel and self.panel.resultsScroll then self:SetResultsScroll(0) end
     self.scanClasses = {}
-    for _, classFile in ipairs(CLASS_ORDER) do
-        self.scanClasses[#self.scanClasses + 1] = LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classFile]
-            or classFile:sub(1, 1) .. classFile:sub(2):lower()
+    if settings.searchClass == "ALL" then
+        for _, classFile in ipairs(CLASS_ORDER) do
+            self.scanClasses[#self.scanClasses + 1] = localizedClassName(classFile)
+        end
+        table.sort(self.scanClasses)
+    else
+        self.scanClasses[1] = localizedClassName(settings.searchClass)
     end
-    table.sort(self.scanClasses)
     self.scanIndex, self.scanActive = 0, true
     self.nextScanAllowedAt = nil
+    self.retryClassName = nil
     self.scanTicket = {}
     self:Refresh()
     self:AdvanceScan(self.scanTicket)
@@ -377,9 +549,27 @@ function Recruitment:Invite(info)
         return false
     end
     local settings = getSettings()
+    local message = normalizeRecruitmentMessage(settings.message)
+    local whispers = getRecruitmentWhispers(message)
+    settings.message = message
+    if self.panel and self.panel.message and self.panel.message:GetText() ~= message then
+        self.panel.message:SetText(message)
+    end
     local whispered = false
-    if type(SendChatMessage) == "function" then
-        SendChatMessage(settings.message, "WHISPER", nil, info.name)
+    if #whispers > 0 and type(SendChatMessage) == "function" then
+        local target = info.name
+        local displayName = iRC:FormatPlayerName(target)
+        for index, whisper in ipairs(whispers) do
+            whisper = normalizeChatMessage(whisper:gsub("%%s", function() return displayName end))
+            if index == 1 or not (C_Timer and C_Timer.After) then
+                SendChatMessage(whisper, "WHISPER", nil, target)
+            else
+                local queuedWhisper = whisper
+                C_Timer.After((index - 1) * WHISPER_SPACING, function()
+                    SendChatMessage(queuedWhisper, "WHISPER", nil, target)
+                end)
+            end
+        end
         whispered = true
     end
     local invited = false
@@ -398,7 +588,8 @@ function Recruitment:Invite(info)
             -- send a duplicate welcome for somebody else's invitation.
             self.pendingInvites[playerKey(info.name)] = { name = info.name, at = GetTime() }
         end
-        self:SetStatus(info.name, "CONTACTED", "Whispered and invited")
+        self:SetStatus(info.name, "CONTACTED", whispered and invited and "Whispered and invited"
+            or (whispered and "Whispered" or "Invited"))
         info.localStatus = "Contacted"
         self:Refresh()
         return true
@@ -416,16 +607,38 @@ end
 function Recruitment:UpdateScanButton()
     local panel = self.panel
     if not panel then return end
+    local settings = getSettings()
+    local scanActive = self.scanActive == true
+    panel.minLevel:SetEnabled(not scanActive)
+    panel.maxLevel:SetEnabled(not scanActive)
+    panel.minLevel:SetAlpha(scanActive and 0.45 or 1)
+    panel.maxLevel:SetAlpha(scanActive and 0.45 or 1)
+    if panel.cancelScan then
+        panel.cancelScan:SetShown(scanActive and (self.view or "search") == "search")
+        panel.status:ClearAllPoints()
+        panel.status:SetPoint("LEFT", scanActive and panel.cancelScan or panel.scan, "RIGHT", 12, 0)
+        panel.status:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
+    end
+    if panel.searchSelector then
+        if panel.searchSelector.RefreshSelection then
+            panel.searchSelector:RefreshSelection(settings.searchClass)
+        else
+            panel.searchSelector.text:SetText(searchClassLabel(settings.searchClass))
+        end
+        panel.searchSelector:SetEnabled(not self.scanActive)
+        panel.searchSelector:SetAlpha(self.scanActive and 0.45 or 1)
+        if self.scanActive and panel.searchSelector.menu then panel.searchSelector.menu:Hide() end
+    end
     if self.fullScanComplete then
         local confirmRemaining = self.newScanConfirmUntil
             and math.max(0, math.ceil(self.newScanConfirmUntil - GetTime())) or 0
         if self.newScanConfirmUntil and confirmRemaining <= 0 then
             self.newScanConfirmUntil = nil
             confirmRemaining = 0
-            panel.status:SetText("Full scan results are preserved. Start a new full scan when ready.")
+            panel.status:SetText("Scan results are preserved. Choose a search and start a new scan when ready.")
         end
         local confirming = confirmRemaining > 0
-        panel.scan.text:SetText(confirming and ("Confirm New Scan (" .. confirmRemaining .. ")") or "New Full Scan")
+        panel.scan.text:SetText(confirming and ("Confirm New Scan (" .. confirmRemaining .. ")") or "New Scan")
         panel.scan:SetEnabled(true)
         panel.scan:SetAlpha(1)
         panel.scan:SetBackdropColor(confirming and 0.20 or 0.075, confirming and 0.035 or 0.055,
@@ -435,21 +648,27 @@ function Recruitment:UpdateScanButton()
         return
     end
     local nextClass = self.scanActive and self.scanClasses and self.scanClasses[self.scanIndex + 1]
-    local totalScans = self.scanClasses and #self.scanClasses or #CLASS_ORDER
+    local totalScans = self.scanClasses and #self.scanClasses
+        or (settings.searchClass == "ALL" and #CLASS_ORDER or 1)
     local scansLeft = self.scanActive and math.max(0, totalScans - (self.scanIndex or 0)) or totalScans
     local remaining = self.nextScanAllowedAt and math.max(0, math.ceil(self.nextScanAllowedAt - GetTime())) or 0
     if self.nextScanAllowedAt and remaining <= 0 then
         self.nextScanAllowedAt = nil
         if nextClass then
-            panel.status:SetText(scansLeft .. " scan" .. (scansLeft == 1 and "" or "s")
-                .. " left. Ready to scan " .. tostring(nextClass) .. ".")
+            panel.status:SetText(self.retryClassName
+                and ("Ready to retry " .. tostring(nextClass) .. ".")
+                or ("Ready: " .. tostring(nextClass) .. " (" .. scansLeft .. " left)."))
         end
     end
     local disabled = self.waitingForWho or remaining > 0
     panel.scan.text:SetText(self.waitingForWho and ("Scanning " .. self.scanIndex .. "/" .. totalScans)
-        or (remaining > 0 and ("Next in " .. math.min(NEXT_SCAN_DELAY, remaining) .. "s - " .. scansLeft .. " left"))
-        or (nextClass and ("Scan " .. nextClass .. " - " .. scansLeft .. " left")
-            or ("Start Full Scan - " .. totalScans)))
+        or (remaining > 0 and (self.retryClassName
+            and ("Retry in " .. remaining .. "s - " .. tostring(self.retryClassName))
+            or ("Next in " .. math.min(NEXT_SCAN_DELAY, remaining) .. "s - " .. scansLeft .. " left")))
+        or (nextClass and ((self.retryClassName and "Retry " or "Scan ")
+            .. nextClass .. " - " .. scansLeft .. " left")
+            or (settings.searchClass == "ALL" and ("Start Full Scan - " .. totalScans)
+                or ("Scan " .. searchClassLabel(settings.searchClass)))))
     panel.scan:SetEnabled(not disabled)
     panel.scan:SetAlpha(disabled and 0.45 or 1)
     panel.scan:SetBackdropColor(0.075, 0.055, 0.035, 0.98)
@@ -605,7 +824,11 @@ function Recruitment:Refresh()
     panel.scan:SetShown(searchView)
     panel.status:SetShown(searchView)
     panel.messageLabel:SetShown(searchView)
-    panel.message:SetShown(searchView)
+    panel.messageCollapse:SetShown(searchView)
+    panel.searchSelector:SetShown(searchView)
+    panel.cancelScan:SetShown(searchView and self.scanActive == true)
+    if not searchView then panel.searchSelector.menu:Hide() end
+    if panel.RefreshWhisperCollapse then panel:RefreshWhisperCollapse(searchView) end
     panel.welcomeToggle:SetShown(searchView)
     panel.welcomeMessage:SetShown(searchView)
     panel.historySummary:SetShown(not searchView)
@@ -646,7 +869,6 @@ function Recruitment:Create(parent)
     panel.background = panel:CreateTexture(nil, "BACKGROUND")
     panel.background:SetAllPoints()
     panel.background:SetColorTexture(0.006, 0.006, 0.006, 1)
-    self.panel = panel
 
     panel.title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     panel.title:SetPoint("TOPLEFT", 18, -14)
@@ -669,7 +891,7 @@ function Recruitment:Create(parent)
     panel.help:SetPoint("TOPLEFT", panel.title, "BOTTOMLEFT", 0, -5)
     panel.help:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
     panel.help:SetJustifyH("LEFT")
-    panel.help:SetText("Scan one class per click for the selected level range. WoW requires each WHO search to be initiated by you. Contacted and blocked players are shared and excluded from later scans.")
+    panel.help:SetText("Choose all classes or one class for the selected level range. WoW requires each WHO search to be initiated by you. Contacted and blocked players are shared and excluded from later scans.")
 
     local minLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     minLabel:SetPoint("TOPLEFT", panel.help, "BOTTOMLEFT", 0, -14)
@@ -683,8 +905,80 @@ function Recruitment:Create(parent)
     panel.levelDash = dash
     panel.maxLevel = makeEdit(panel, 45, 24)
     panel.maxLevel:SetPoint("LEFT", dash, "RIGHT", 5, 0)
+    panel.searchSelector = makeButton(panel, 145, "All classes")
+    panel.searchSelector:SetPoint("LEFT", panel.maxLevel, "RIGHT", 10, 0)
+    panel.searchSelector.text:ClearAllPoints()
+    panel.searchSelector.text:SetPoint("LEFT", 9, 0)
+    panel.searchSelector.text:SetPoint("RIGHT", -25, 0)
+    panel.searchSelector.text:SetJustifyH("LEFT")
+    panel.searchSelector.arrow = panel.searchSelector:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    panel.searchSelector.arrow:SetPoint("RIGHT", -9, 0)
+    panel.searchSelector.arrow:SetText("v")
+    panel.searchSelector.menu = CreateFrame("Frame", nil, panel.searchSelector, "BackdropTemplate")
+    panel.searchSelector.menu:SetPoint("TOPLEFT", panel.searchSelector, "BOTTOMLEFT", 0, -2)
+    panel.searchSelector.menu:SetPoint("TOPRIGHT", panel.searchSelector, "BOTTOMRIGHT", 0, -2)
+    panel.searchSelector.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    panel.searchSelector.menu:SetFrameLevel(panel:GetFrameLevel() + 30)
+    panel.searchSelector.menu:SetClampedToScreen(true)
+    panel.searchSelector.menu:SetToplevel(true)
+    panel.searchSelector.menu:EnableMouse(true)
+    panel.searchSelector.menu:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    panel.searchSelector.menu:SetBackdropColor(0.025, 0.022, 0.018, 0.995)
+    panel.searchSelector.menu:SetBackdropBorderColor(0.72, 0.43, 0.08, 1)
+    panel.searchSelector.menu.buttons = {}
+    local classOptions = searchClassOptions()
+    panel.searchSelector.menu:SetHeight(#classOptions * 26 + 8)
+    for index, option in ipairs(classOptions) do
+        local optionButton = makeButton(panel.searchSelector.menu, 100, option.label)
+        optionButton:ClearAllPoints()
+        optionButton:SetPoint("TOPLEFT", panel.searchSelector.menu, "TOPLEFT", 4, -4 - (index - 1) * 26)
+        optionButton:SetPoint("TOPRIGHT", panel.searchSelector.menu, "TOPRIGHT", -4, -4 - (index - 1) * 26)
+        optionButton.value = option.value
+        optionButton.text:ClearAllPoints()
+        optionButton.text:SetPoint("LEFT", 9, 0)
+        optionButton.text:SetPoint("RIGHT", -9, 0)
+        optionButton.text:SetJustifyH("LEFT")
+        optionButton:SetScript("OnClick", function(self)
+            if Recruitment.scanActive then return end
+            local settings = getSettings()
+            settings.searchClass = self.value
+            panel.searchSelector.menu:Hide()
+            panel.searchSelector.text:SetText(searchClassLabel(self.value))
+            if Recruitment.fullScanComplete then
+                panel.status:SetText("Scan results are preserved. " .. searchClassLabel(self.value)
+                    .. " is selected for the next scan.")
+            else
+                panel.status:SetText(self.value == "ALL" and "Ready to begin a full 9-class scan."
+                    or ("Ready to scan " .. searchClassLabel(self.value) .. "."))
+            end
+            Recruitment:UpdateScanButton()
+        end)
+        panel.searchSelector.menu.buttons[index] = optionButton
+    end
+    function panel.searchSelector:RefreshSelection(selected)
+        self.text:SetText(searchClassLabel(selected))
+        for _, optionButton in ipairs(self.menu.buttons) do
+            local active = optionButton.value == selected
+            optionButton:SetBackdropColor(active and 0.12 or 0.075, active and 0.16 or 0.055,
+                active and 0.055 or 0.035, 0.98)
+            optionButton:SetBackdropBorderColor(active and 0.18 or 0.42, active and 0.78 or 0.31,
+                active and 0.28 or 0.16, 1)
+            optionButton.text:SetTextColor(active and 0.35 or 1, active and 1 or 1,
+                active and 0.45 or 1)
+        end
+    end
+    panel.searchSelector.menu:Hide()
+    panel.searchSelector:SetScript("OnClick", function(self)
+        if Recruitment.scanActive then return end
+        self.menu:SetShown(not self.menu:IsShown())
+        if self.menu:IsShown() then self.menu:Raise() end
+    end)
     panel.scan = makeButton(panel, 175, "Start Full Scan - 9")
-    panel.scan:SetPoint("LEFT", panel.maxLevel, "RIGHT", 12, 0)
+    panel.scan:SetPoint("LEFT", panel.searchSelector, "RIGHT", 8, 0)
     panel.scan:SetScript("OnClick", function() Recruitment:StartScan() end)
     panel.scan:SetScript("OnUpdate", function(self, elapsed)
         if not Recruitment.nextScanAllowedAt and not Recruitment.newScanConfirmUntil then return end
@@ -693,20 +987,79 @@ function Recruitment:Create(parent)
         self.countdownElapsed = 0
         Recruitment:UpdateScanButton()
     end)
+    panel.cancelScan = makeButton(panel, 72, "Cancel")
+    panel.cancelScan:SetPoint("LEFT", panel.scan, "RIGHT", 8, 0)
+    panel.cancelScan:SetBackdropColor(0.16, 0.035, 0.025, 0.98)
+    panel.cancelScan:SetBackdropBorderColor(0.82, 0.20, 0.12, 1)
+    panel.cancelScan.text:SetTextColor(1, 0.55, 0.45)
+    panel.cancelScan:SetScript("OnClick", function() Recruitment:CancelScan() end)
+    panel.cancelScan:Hide()
     panel.status = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     panel.status:SetPoint("LEFT", panel.scan, "RIGHT", 12, 0)
     panel.status:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
+    panel.status:SetHeight(20)
     panel.status:SetJustifyH("LEFT")
+    panel.status:SetJustifyV("MIDDLE")
+    panel.status:SetWordWrap(false)
     panel.status:SetTextColor(0.72, 0.72, 0.72)
     panel.status:SetText("Ready to begin a full 9-class scan.")
 
-    local messageLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    messageLabel:SetPoint("TOPLEFT", minLabel, "BOTTOMLEFT", 0, -18)
-    messageLabel:SetText("Recruitment whisper")
+    local messageHeader = CreateFrame("Frame", nil, panel)
+    messageHeader:SetHeight(24)
+    messageHeader:SetPoint("TOPLEFT", minLabel, "BOTTOMLEFT", 0, -8)
+    messageHeader:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
+    local messageLabel = messageHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    messageLabel:SetPoint("LEFT", messageHeader, "LEFT", 0, 0)
+    messageLabel:SetText("Recruitment whispers (0/5 - Enter = new - %s = name)")
     panel.messageLabel = messageLabel
     panel.message = makeEdit(panel, 400, 42, true)
-    panel.message:SetPoint("TOPLEFT", messageLabel, "BOTTOMLEFT", 0, -5)
+    panel.message:SetPoint("TOPLEFT", messageHeader, "BOTTOMLEFT", 0, -5)
     panel.message:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
+    panel.message:SetMaxLetters(MAX_RECRUITMENT_MESSAGE_BYTES)
+    panel.message:SetScript("OnTextChanged", function(self)
+        if self.limitingText then return end
+        local text = self:GetText()
+        local deleting = self.lastRecruitmentEditorText and #text < #self.lastRecruitmentEditorText
+        local limited = limitRecruitmentEditor(text, not deleting)
+        if limited ~= text then
+            local cursor = self:GetCursorPosition()
+            local cursorWasAtEnd = cursor >= #text
+            local adjustedCursor = deleting and math.min(cursor, #limited)
+                or #limitRecruitmentEditor(text:sub(1, math.max(0, cursor)), true)
+            self.limitingText = true
+            self:SetText(limited)
+            self:SetCursorPosition(cursorWasAtEnd and #limited or math.min(adjustedCursor, #limited))
+            self.limitingText = nil
+        end
+        self.lastRecruitmentEditorText = limited
+        local count = #getRecruitmentWhispers(limited)
+        messageLabel:SetText("Recruitment whispers (" .. count
+            .. "/5 - Enter = new - %s = name)")
+        if panel.RefreshWhisperPreview then panel:RefreshWhisperPreview() end
+    end)
+    panel.messageCollapse = makeButton(messageHeader, 88, "Collapse")
+    panel.messageCollapse:SetPoint("RIGHT", messageHeader, "RIGHT", 0, 0)
+    messageLabel:SetPoint("RIGHT", panel.messageCollapse, "LEFT", -12, 0)
+    messageLabel:SetJustifyH("LEFT")
+    panel.messagePreview = CreateFrame("Frame", nil, panel, "BackdropTemplate")
+    panel.messagePreview:SetHeight(44)
+    panel.messagePreview:SetPoint("TOPLEFT", messageHeader, "BOTTOMLEFT", 0, -5)
+    panel.messagePreview:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
+    panel.messagePreview:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    panel.messagePreview:SetBackdropColor(0.025, 0.025, 0.025, 0.98)
+    panel.messagePreview:SetBackdropBorderColor(0.42, 0.31, 0.16, 1)
+    if panel.messagePreview.SetClipsChildren then panel.messagePreview:SetClipsChildren(true) end
+    panel.messagePreview.text = panel.messagePreview:CreateFontString(nil, "OVERLAY", "ChatFontNormal")
+    panel.messagePreview.text:SetPoint("TOPLEFT", 7, -5)
+    panel.messagePreview.text:SetPoint("RIGHT", panel.messagePreview, "RIGHT", -7, 0)
+    panel.messagePreview.text:SetJustifyH("LEFT")
+    panel.messagePreview.text:SetJustifyV("TOP")
+    panel.messagePreview.text:SetWordWrap(true)
+    panel.messagePreview:Hide()
 
     panel.welcomeToggle = makeButton(panel, 154, "Guild welcome: Disabled")
     panel.welcomeToggle:SetPoint("TOPLEFT", panel.message, "BOTTOMLEFT", 0, -8)
@@ -824,8 +1177,37 @@ function Recruitment:Create(parent)
     local settings = getSettings()
     panel.minLevel:SetText(tostring(settings.minLevel))
     panel.maxLevel:SetText(tostring(settings.maxLevel))
+    panel.status:SetText(settings.searchClass == "ALL" and "Ready to begin a full 9-class scan."
+        or ("Ready to scan " .. searchClassLabel(settings.searchClass) .. "."))
     panel.message:SetText(settings.message)
     panel.welcomeMessage:SetText(settings.welcomeMessage)
+    function panel:RefreshWhisperPreview()
+        local firstWhisper = getRecruitmentWhispers(self.message:GetText())[1]
+        self.messagePreview.text:SetText(firstWhisper or "No recruitment whisper configured.")
+        self.messagePreview.text:SetTextColor(firstWhisper and 1 or 0.55,
+            firstWhisper and 1 or 0.55, firstWhisper and 1 or 0.55)
+        self.messagePreview:SetHeight(math.max(34, self.messagePreview.text:GetStringHeight() + 10))
+    end
+    function panel:RefreshWhisperCollapse(searchVisible)
+        local collapsed = settings.whispersCollapsed == true
+        self.message:SetShown(searchVisible ~= false and not collapsed)
+        self.messagePreview:SetShown(searchVisible ~= false and collapsed)
+        self.messageCollapse:SetShown(searchVisible ~= false)
+        self.messageCollapse.text:SetText(collapsed and "Edit" or "Collapse")
+        self.message:SetBackdropColor(0.018, 0.085, 0.035, 0.98)
+        self.message:SetBackdropBorderColor(0.16, 0.78, 0.30, 1)
+        self.welcomeToggle:ClearAllPoints()
+        self.welcomeToggle:SetPoint("TOPLEFT", collapsed and self.messagePreview or self.message,
+            "BOTTOMLEFT", 0, -8)
+    end
+    panel.messageCollapse:SetScript("OnClick", function()
+        settings.whispersCollapsed = not settings.whispersCollapsed
+        panel.message:ClearFocus()
+        panel:RefreshWhisperCollapse((Recruitment.view or "search") == "search")
+        Recruitment:Refresh()
+    end)
+    panel:RefreshWhisperPreview()
+    panel:RefreshWhisperCollapse(true)
     local function refreshWelcomeControls()
         local enabled = settings.welcomeEnabled == true
         panel.welcomeToggle.text:SetText(enabled and "Guild welcome: Enabled" or "Guild welcome: Disabled")
@@ -852,11 +1234,14 @@ function Recruitment:Create(parent)
         self:SetText(tostring(settings.maxLevel))
     end)
     panel.message:SetScript("OnEditFocusLost", function(self)
-        settings.message = self:GetText():match("^%s*(.-)%s*$")
+        settings.message = normalizeRecruitmentMessage(self:GetText())
+        self:SetText(settings.message)
     end)
     panel.welcomeMessage:SetScript("OnEditFocusLost", function(self)
-        settings.welcomeMessage = self:GetText():match("^%s*(.-)%s*$")
+        settings.welcomeMessage = normalizeChatMessage(self:GetText())
+        self:SetText(settings.welcomeMessage)
     end)
+    self.panel = panel
     return panel
 end
 
@@ -917,10 +1302,10 @@ local function recruitmentResponse(message)
             if accepted and locallyInvited and type(SendChatMessage) == "function" then
                 local settings = getSettings()
                 local welcome = settings.welcomeEnabled and settings.welcomeMessage or ""
-                welcome = tostring(welcome or ""):match("^%s*(.-)%s*$")
+                welcome = normalizeChatMessage(welcome)
                 if welcome ~= "" then
                     local displayName = iRC:FormatPlayerName(name)
-                    welcome = welcome:gsub("%%s", function() return displayName end):sub(1, 255)
+                    welcome = normalizeChatMessage(welcome:gsub("%%s", function() return displayName end))
                     SendChatMessage(welcome, "GUILD")
                 end
             end
@@ -934,6 +1319,14 @@ local function recruitmentResponse(message)
     end
 end
 
+local function whoThrottleDelay(message)
+    if iRC:IsSecretValue(message) or type(message) ~= "string" then return nil end
+    local lower = message:lower()
+    if not lower:find("/who", 1, true) or not lower:find("wait", 1, true) then return nil end
+    local seconds = tonumber(lower:match("wait%s+(%d+)%s+seconds?"))
+    return seconds and math.max(0, seconds) or nil
+end
+
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("WHO_LIST_UPDATE")
 eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
@@ -942,6 +1335,12 @@ eventFrame:SetScript("OnEvent", function(_, event, message)
         Recruitment:CollectWhoResults()
         Recruitment:FinishCurrentClassScan(false)
     elseif event == "CHAT_MSG_SYSTEM" then
+        local retryDelay = Recruitment.scanActive and Recruitment.waitingForWho
+            and whoThrottleDelay(message)
+        if retryDelay then
+            Recruitment:FinishCurrentClassScan(true, retryDelay)
+            return
+        end
         recruitmentResponse(message)
     end
 end)

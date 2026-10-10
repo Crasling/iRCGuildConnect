@@ -164,6 +164,7 @@ end
 
 local function setMemberRowDensity(row, compact)
     row:EnableMouse(true)
+    if row.logTagButton then row.logTagButton:Hide() end
     row:SetHeight(compact and 40 or 44)
     row.name:ClearAllPoints()
     row.name:SetPoint("TOPLEFT", 14, -6)
@@ -3901,7 +3902,13 @@ local function updateGuildLog(frame)
     if query ~= "" then
         local filtered = {}
         for _, record in ipairs(records) do
-            local searchable = table.concat({ record.name or "", record.eventType or "", record.text or "" }, " "):lower()
+            local eventType = tostring(record.eventType or "")
+            local searchable = table.concat({
+                record.name or "",
+                eventType,
+                eventType:gsub("_", " "),
+                record.text or "",
+            }, " "):lower()
             if searchable:find(query, 1, true) then filtered[#filtered + 1] = record end
         end
         records = filtered
@@ -3960,11 +3967,32 @@ local function updateGuildLog(frame)
         local classFile = record.classFile or currentClasses[iRC:NormalizeName(record.name)]
         local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
         row.onlineTag:Hide()
+        local eventType = tostring(record.eventType or "CHANGE")
+        local eventLabel = eventType:gsub("_", " ")
         row.tag:ClearAllPoints()
         row.tag:SetPoint("LEFT", row, "LEFT", 14, 0)
-        row.tag:SetText("[" .. tostring(record.eventType or "CHANGE"):gsub("_", " ") .. "]")
+        row.tag:SetText("[" .. eventLabel .. "]")
         row.tag:SetTextColor(unpack(GUILD_LOG_COLORS[record.eventType] or COLORS.parchment))
         row.tag:Show()
+        if not row.logTagButton then
+            local tagButton = CreateFrame("Button", nil, row)
+            tagButton:SetHeight(28)
+            tagButton:EnableMouse(true)
+            tagButton:RegisterForClicks("LeftButtonUp")
+            tagButton:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+            tagButton:SetScript("OnClick", function(self)
+                if not self.searchText or self.searchText == "" then return end
+                frame.guildLogSearch:SetText(self.searchText)
+                frame.guildLogSearch:ClearFocus()
+                if frame.guildLogSearch.suggestions then frame.guildLogSearch.suggestions:Hide() end
+            end)
+            row.logTagButton = tagButton
+        end
+        row.logTagButton:ClearAllPoints()
+        row.logTagButton:SetPoint("LEFT", row.tag, "LEFT", -6, 0)
+        row.logTagButton:SetWidth(math.max(44, row.tag:GetStringWidth() + 12))
+        row.logTagButton.searchText = eventLabel
+        row.logTagButton:Show()
         local eventText = record.text or "Guild roster changed."
         local eventName = tostring(record.name or "")
         local nameStart, nameEnd = eventName ~= "" and eventText:find(eventName, 1, true) or nil, nil
@@ -4341,7 +4369,7 @@ local function ensureGuildOverview(frame)
     root.levels = makeGuildHealthPanel(root, "Level Distribution", 330, 188)
     root.levels:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -76)
     root.levels.rows = {}
-    for index = 1, 6 do root.levels.rows[index] = makeGuildHealthBarRow(root.levels, -45 - (index - 1) * 23, 82, 160) end
+    for index = 1, 7 do root.levels.rows[index] = makeGuildHealthBarRow(root.levels, -45 - (index - 1) * 20, 82, 160) end
 
     root.classes = makeGuildHealthPanel(root, "Class Distribution", 340, 188)
     root.classes:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -76)
@@ -4435,7 +4463,7 @@ updateGuildOverview = function(frame)
         for _, member in ipairs(rosterMembers) do members[#members + 1] = member end
     end
     local total, online, onlineViaAlt, active30, verifiedOnline, attention = #members, 0, 0, 0, 0, 0
-    local levelCounts = { 0, 0, 0, 0, 0, 0 }
+    local levelCounts = { 0, 0, 0, 0, 0, 0, 0 }
     local classTotals, classActive = {}, {}
     local retention = { 0, 0, 0, 0, 0, 0 }
     local retentionPoints, knownActivity, recencyTotal = 0, 0, 0
@@ -4448,7 +4476,7 @@ updateGuildOverview = function(frame)
         local memberVerifiedOnline = activity and activity.verifiedOnline
             or member.online == true and member.verification and member.verification.state == "verified"
         local level = math.max(1, math.min(60, math.floor(tonumber(member.level) or 1)))
-        local levelBucket = level <= 9 and 1 or math.min(6, math.floor(level / 10) + 1)
+        local levelBucket = level == 60 and 7 or level <= 9 and 1 or math.floor(level / 10) + 1
         levelCounts[levelBucket] = levelCounts[levelBucket] + 1
         local class = tostring(member.class or "UNKNOWN"):upper():gsub("[^A-Z]", "")
         classTotals[class] = (classTotals[class] or 0) + 1
@@ -4507,7 +4535,10 @@ updateGuildOverview = function(frame)
         or " counted characters grouped by level"))
     local maxLevelCount = 0
     for _, count in ipairs(levelCounts) do maxLevelCount = math.max(maxLevelCount, count) end
-    local levelLabels = { "Level 1-9", "Level 10-19", "Level 20-29", "Level 30-39", "Level 40-49", "Level 50-60" }
+    local levelLabels = {
+        "Level 1-9", "Level 10-19", "Level 20-29", "Level 30-39",
+        "Level 40-49", "Level 50-59", "Level 60",
+    }
     for index, count in ipairs(levelCounts) do
         setGuildHealthBar(overview.levels.rows[index], levelLabels[index],
             count, maxLevelCount, { 0.32, 0.66, 1 })

@@ -2,6 +2,19 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.21 - Recruitment Messaging & Scan Controls
+--------------------------------------------------------------------------------
+[ADDED] Recruitment messages support up to five personalized whispers, one per line, with %s replaced by the invited character's name
+[ADDED] Recruitment searches can target all classes or one selected class, and active scan cycles can be cancelled without discarding collected results
+[ADDED] Guild Log event tags can be clicked to filter the log by that event type
+[FIXED] Recruitment whispers and welcome messages enforce WoW's chat limit safely, including reserved space for substituted character names
+[FIXED] The recruitment whisper editor handles new lines correctly and initializes without cached partial panels, overlapping headers, or wrapped scan status
+[FIXED] WHO throttle messages fail only the current class attempt, provide a timed retry, and cannot leave stale timeout callbacks affecting later attempts
+[CHANGED] The recruitment whisper editor starts collapsed with a first-message preview and uses a green editing state with clear Edit and Collapse controls
+[CHANGED] New recruitment settings use a friendly personalized default whisper
+[CHANGED] Recruitment level and class controls remain locked throughout an active scan cycle
+[CHANGED] Guild Overview separates level 60 from the level 50-59 distribution bracket
+
 v0.5.20 - Recruitment & Guild Activity
 --------------------------------------------------------------------------------
 [ADDED] Recruitment Management with protected one-class-per-click WHO searches, selectable level ranges, and click-to-whisper-and-invite actions
