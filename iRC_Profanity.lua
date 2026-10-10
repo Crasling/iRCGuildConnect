@@ -3,7 +3,7 @@
 local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
-
+ 
 local blockedWords = {
     ["aand"] = true,
     ["aandu"] = true,
