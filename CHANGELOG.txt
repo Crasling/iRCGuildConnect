@@ -2,6 +2,16 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.26 - Communication Split & Verification Tools
+--------------------------------------------------------------------------------
+[ADDED] Debug mode reports communication prefix registration, rejected prefix or protocol mismatches, delayed Admin Probe replies, and confirmed public Guild Report receivers
+[ADDED] Guild Verification search suggests matching roster names with click, Enter, and Tab completion
+[FIXED] Guild Verification displays Verification and permission-gated Incidents as compact horizontal sub-tabs matching Member Management
+[CHANGED] Refresh Verification uses iRC styling and refreshes only the roster and iRC presence without publishing a Guild Leaderboard report
+[CHANGED] Cross-guild traffic is split into dedicated protocol 6 prefixes: iRCGridV1 for Guild Reports and cache sharing, iRCLayerV1 for layer coordination, and iRCAdminV1 for Admin Probe
+[CHANGED] Protocol 5 compatibility is removed; Guild Report sharing remains compatible with v0.5.25, while layer coordination and Admin Probe require v0.5.26
+[FIXED] Admin Probe tolerates delayed chat delivery for up to five minutes, suppresses duplicate refresh requests, and accepts delayed replies as live confirmations
+
 v0.5.25 - Layer Reliability, Profession Links & Sharing
 --------------------------------------------------------------------------------
 [ADDED] Guild profession links can import visible skill and recipe data for members without iRC; confirmed iRC users continue to use live profession syncing

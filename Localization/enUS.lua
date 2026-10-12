@@ -316,6 +316,7 @@ iRC.L = {
     RACEGRID_CHANNEL_JOIN = "Joining external race data channel %s.",
     RACEGRID_EXTERNAL_CHANNEL_READY = "External race data channel %s is ready and hidden from chat windows.",
     RACEGRID_GUILD_REPORT_RECEIVED = "Received iRC guild report for %s: %d active level 30s (5d), %d active members, %d online peak, %d total.",
+    RACEGRID_GUILD_REPORT_RECEIPTS = "Public guild report delivery confirmed by %d compatible iRC user(s).",
     RACEGRID_GUILD_REPORT_SENT = "Sent iRC guild report for %s: %d active level 30s (5d), %d active members, %d online peak, %d total.",
     RACEGRID_INITIALIZED = "Guild Leaderboard initialized. Public sharing is %s. Incoming reports update automatically; sending requires Refresh / Share.",
     RACEGRID_OWN_CHANNEL_JOIN = "Joining the iRC global race data channel.",

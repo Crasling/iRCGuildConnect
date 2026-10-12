@@ -129,7 +129,8 @@ function Dashboard:Create()
     frame:Hide()
     frame.attentionTimerElapsed = 0
     frame:SetScript("OnUpdate", function(self, elapsed)
-        if not self:IsShown() or (self.tab ~= "Verification" and self.tab ~= "Incidents") then return end
+        if (not self:IsShown() and not self.embedded)
+            or (self.tab ~= "Verification" and self.tab ~= "Incidents") then return end
         self.attentionTimerElapsed = self.attentionTimerElapsed + elapsed
         if self.attentionTimerElapsed >= 1 then
             self.attentionTimerElapsed = 0
@@ -181,6 +182,7 @@ function Dashboard:Create()
     sidebar:SetPoint("TOPLEFT", 15, -77)
     sidebar:SetPoint("BOTTOMLEFT", 15, 16)
     sidebar:SetWidth(194)
+    frame.sidebar = sidebar
     setBackdrop(sidebar, { 0.10, 0.065, 0.03, 0.98 }, { 0.54, 0.40, 0.16, 1 })
     local sideTitle = sidebar:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     sideTitle:SetPoint("TOPLEFT", 14, -14)
@@ -202,6 +204,8 @@ function Dashboard:Create()
         tab.label:SetText((item.adminOnly and "- " or "") .. (item.label or label))
         tab.tabName = label
         tab.adminOnly = item.adminOnly
+        tab.displayLabel = item.label or label
+        tab:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
         tab:SetScript("OnClick", function(button)
             if frame.memberMenu then frame.memberMenu:Hide() end
             if frame.memberReport then frame.memberReport:Hide() end
@@ -212,15 +216,21 @@ function Dashboard:Create()
         frame.tabs[label] = tab
         frame.tabOrder[#frame.tabOrder + 1] = tab
     end
-    local refreshButton = CreateFrame("Button", nil, sidebar, "UIPanelButtonTemplate")
+    local refreshButton = CreateFrame("Button", nil, sidebar, "BackdropTemplate")
     refreshButton:SetSize(166, 27)
     refreshButton:SetPoint("BOTTOM", 0, 16)
-    refreshButton:SetText("Refresh verification")
+    setBackdrop(refreshButton, { 0.08, 0.06, 0.035, 0.98 }, { 0.52, 0.38, 0.17, 1 })
+    refreshButton.text = refreshButton:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    refreshButton.text:SetPoint("CENTER")
+    refreshButton.text:SetText("Refresh verification")
+    refreshButton.text:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+    refreshButton:SetFontString(refreshButton.text)
+    refreshButton:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    frame.refreshButton = refreshButton
     refreshButton:SetScript("OnClick", function()
         iRC:RefreshGuildRoster()
         iRC:SendHello()
         iRC:RequestGuildPresence()
-        if iRC.RaceGrid then iRC.RaceGrid:PublishFromClick() end
         Dashboard:Refresh()
     end)
 
@@ -245,14 +255,106 @@ function Dashboard:Create()
     frame.verificationSearch.hint = frame.verificationSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.verificationSearch.hint:SetPoint("LEFT", frame.verificationSearch, "LEFT", 7, 0)
     frame.verificationSearch.hint:SetText(iRC:Text("VERIFICATION_SEARCH_PLACEHOLDER"))
-    frame.verificationSearch:SetScript("OnTextChanged", function(self)
-        self.hint:SetShown(self:GetText() == "")
-        if frame.tab == "Verification" then Dashboard:Refresh() end
-    end)
-    frame.verificationSearch:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-    frame.verificationSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     iRC:StyleSearchBox(frame.verificationSearch, frame.verificationSearch.hint)
     frame.verificationSearch:Hide()
+
+    frame.verificationSuggestions = CreateFrame("Frame", nil, main, "BackdropTemplate")
+    frame.verificationSuggestions:SetPoint("TOPLEFT", frame.verificationSearch, "BOTTOMLEFT", 0, -3)
+    frame.verificationSuggestions:SetPoint("TOPRIGHT", frame.verificationSearch, "BOTTOMRIGHT", 0, -3)
+    frame.verificationSuggestions:SetHeight(1)
+    frame.verificationSuggestions:SetFrameLevel(main:GetFrameLevel() + 30)
+    setBackdrop(frame.verificationSuggestions, { 0.025, 0.022, 0.018, 1 }, { 0.54, 0.40, 0.16, 1 })
+    frame.verificationSuggestionButtons = {}
+
+    local function selectVerificationSuggestion(member)
+        if not member then return end
+        frame.verificationSearch.settingSelection = true
+        frame.verificationSearch:SetText(iRC:FormatPlayerName(member.name))
+        frame.verificationSearch:SetCursorPosition(frame.verificationSearch:GetNumLetters())
+        frame.verificationSearch.settingSelection = nil
+        frame.verificationSuggestions:Hide()
+        Dashboard:Refresh()
+    end
+
+    local function updateVerificationSuggestions()
+        local search = frame.verificationSearch
+        local query = search:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "")
+        local matches, seen = {}, {}
+        if frame.tab == "Verification" and query ~= "" and search:HasFocus() then
+            for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+                local displayName = iRC:FormatPlayerName(member.name)
+                local key = iRC:NormalizeName(member.name)
+                local position = displayName:lower():find(query, 1, true)
+                if position and key ~= "" and not seen[key] then
+                    seen[key] = true
+                    matches[#matches + 1] = { member = member, starts = position == 1, name = displayName }
+                end
+            end
+            table.sort(matches, function(a, b)
+                if a.starts ~= b.starts then return a.starts end
+                return a.name:lower() < b.name:lower()
+            end)
+        end
+        frame.verificationFirstSuggestion = matches[1] and matches[1].member or nil
+        for index, button in ipairs(frame.verificationSuggestionButtons) do
+            local match = matches[index]
+            button.member = match and match.member or nil
+            button:SetShown(match ~= nil)
+            if match then
+                local member = match.member
+                button.text:SetText(match.name .. "  |cFF888888" .. tostring(member.rankName or "Guild member") .. "|r")
+            end
+        end
+        local visible = math.min(5, #matches)
+        frame.verificationSuggestions:SetHeight(math.max(1, 10 + visible * 23))
+        frame.verificationSuggestions:SetShown(visible > 0)
+    end
+    frame.UpdateVerificationSuggestions = updateVerificationSuggestions
+
+    for index = 1, 5 do
+        local button = CreateFrame("Button", nil, frame.verificationSuggestions)
+        button:SetPoint("TOPLEFT", frame.verificationSuggestions, "TOPLEFT", 5, -5 - (index - 1) * 23)
+        button:SetPoint("TOPRIGHT", frame.verificationSuggestions, "TOPRIGHT", -5, -5 - (index - 1) * 23)
+        button:SetHeight(23)
+        button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.text:SetPoint("LEFT", button, "LEFT", 6, 0)
+        button.text:SetPoint("RIGHT", button, "RIGHT", -6, 0)
+        button.text:SetJustifyH("LEFT")
+        button.text:SetWordWrap(false)
+        button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+        button.highlight:SetAllPoints()
+        button.highlight:SetColorTexture(1, 0.58, 0.09, 0.18)
+        button:SetScript("OnClick", function(self) selectVerificationSuggestion(self.member) end)
+        frame.verificationSuggestionButtons[index] = button
+    end
+    frame.verificationSuggestions:Hide()
+    frame.verificationSearch:SetScript("OnTextChanged", function(self)
+        self.hint:SetShown(self:GetText() == "")
+        updateVerificationSuggestions()
+        if not self.settingSelection and frame.tab == "Verification" then Dashboard:Refresh() end
+    end)
+    frame.verificationSearch:SetScript("OnEditFocusGained", updateVerificationSuggestions)
+    frame.verificationSearch:SetScript("OnEditFocusLost", function()
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0.1, function()
+                if not frame.verificationSearch:HasFocus() then frame.verificationSuggestions:Hide() end
+            end)
+        else
+            frame.verificationSuggestions:Hide()
+        end
+    end)
+    frame.verificationSearch:SetScript("OnEnterPressed", function(self)
+        if frame.verificationFirstSuggestion then selectVerificationSuggestion(frame.verificationFirstSuggestion)
+        else self:ClearFocus() end
+    end)
+    frame.verificationSearch:SetScript("OnTabPressed", function(self)
+        if frame.verificationFirstSuggestion then selectVerificationSuggestion(frame.verificationFirstSuggestion)
+        else self:ClearFocus() end
+    end)
+    frame.verificationSearch:SetScript("OnEscapePressed", function(self)
+        frame.verificationSuggestions:Hide()
+        self:ClearFocus()
+    end)
     frame.summaryCards = {}
     for index = 1, 5 do
         local card = makeSummaryCard(main)
@@ -595,7 +697,7 @@ local function setHeaders(frame, values, sortKeys, defaultKey, columnX, columnWi
     else
         frame.content:SetWidth(722)
     end
-    headerY = headerY or -156
+    headerY = headerY or (frame.embedded and -172 or -156)
     frame.content.columnX, frame.content.columnWidth = columnX, columnWidth
     frame.scroll:ClearAllPoints()
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 14, headerY - 20)
@@ -644,7 +746,8 @@ local function setFilters(frame, choices)
             local five = #choices == 5
             button:SetSize(five and 130 or 160, 27)
             button:ClearAllPoints()
-            button:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (five and 136 or 166), -124)
+            button:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (five and 136 or 166),
+                frame.embedded and -140 or -124)
             local active = choice.id == selected
             button.text:SetText(choice.label)
             button.activeGlow:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], active and 0.18 or 0)
@@ -747,7 +850,8 @@ local function setSummaryCards(frame, cards)
         local five = #cards == 5
         card:SetSize(five and 135 or 172, 46)
         card:ClearAllPoints()
-        card:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (five and 141 or 178), -66)
+        card:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (five and 141 or 178),
+            frame.embedded and -82 or -66)
         card.label:SetText(item.label or "")
         card.value:SetText(item.value or "")
         local color = item.color or ORANGE
@@ -928,19 +1032,47 @@ function Dashboard:Refresh()
         frame.tab = canViewIncidents and "Incidents" or "Verification"
     end
     frame.verificationSearch:SetShown(frame.tab == "Verification")
-    local visibleTabIndex = 0
+    if frame.tab == "Verification" then
+        if frame.UpdateVerificationSuggestions then frame.UpdateVerificationSuggestions() end
+    else
+        frame.verificationSuggestions:Hide()
+    end
+    local visibleTabIndex, embeddedTabX = 0, 15
     for _, tab in ipairs(frame.tabOrder or {}) do
         if tab:IsShown() then
             visibleTabIndex = visibleTabIndex + 1
             tab:ClearAllPoints()
-            tab:SetPoint("TOPLEFT", tab.adminOnly and 24 or 14, -((visibleTabIndex - 1) * 36 + 43))
+            tab.label:ClearAllPoints()
+            tab.label:SetText(tab.displayLabel or tab.tabName)
+            if frame.embedded then
+                tab:SetSize(112, 26)
+                tab:SetPoint("TOPLEFT", frame.main, "TOPLEFT", embeddedTabX, -47)
+                embeddedTabX = embeddedTabX + tab:GetWidth() + 8
+                tab.label:SetPoint("CENTER")
+            else
+                tab:SetSize(tab.adminOnly and 156 or 166, 34)
+                tab:SetPoint("TOPLEFT", frame.sidebar, "TOPLEFT", tab.adminOnly and 24 or 14,
+                    -((visibleTabIndex - 1) * 36 + 43))
+                tab.label:SetPoint("LEFT", 10, 0)
+                tab.label:SetText((tab.adminOnly and "- " or "") .. (tab.displayLabel or tab.tabName))
+            end
         end
     end
     frame.status:SetText(connection and (iRC:IsGuildConnectionActive() and (iRC.Colors.Green .. "Connected: " .. iRC.Colors.Reset .. connection.guildName) or (iRC.Colors.Yellow .. iRC:Text("DASHBOARD_STATUS_INACTIVE") .. " " .. iRC.Colors.Reset .. connection.guildName)) or (iRC.Colors.Red .. "No guild connection" .. iRC.Colors.Reset))
     for name, tab in pairs(frame.tabs) do
         local active = name == frame.tab
-        tab:SetBackdropColor(active and 0.24 or 0.08, active and 0.16 or 0.06, active and 0.04 or 0.04, 0.96)
-        tab.label:SetTextColor(unpack(active and ORANGE or GRAY))
+        if frame.embedded then
+            tab:SetBackdropColor(active and 0.18 or 0.055, active and 0.09 or 0.045,
+                active and 0.025 or 0.035, 0.96)
+            tab:SetBackdropBorderColor(active and ORANGE[1] or 0.28,
+                active and ORANGE[2] or 0.23, active and ORANGE[3] or 0.16, active and 1 or 0.9)
+            tab.label:SetTextColor(active and 1 or 0.78, active and 0.82 or 0.72,
+                active and 0.36 or 0.62)
+        else
+            tab:SetBackdropColor(active and 0.24 or 0.08, active and 0.16 or 0.06,
+                active and 0.04 or 0.04, 0.96)
+            tab.label:SetTextColor(unpack(active and ORANGE or GRAY))
+        end
     end
     local count = 0
     if frame.tab == "Overview" then
@@ -1263,6 +1395,8 @@ function Dashboard:Open()
     if iRC.CloseWindowsExcept then iRC:CloseWindowsExcept(frame) end
     iRC:RefreshGuildRoster()
     self:Refresh()
+    frame.sidebar:Show()
+    frame.main:Show()
     frame:Show()
     self:RequestStalePresenceIfShown()
     return true
@@ -1278,10 +1412,17 @@ function Dashboard:ShowEmbedded(parent, overlayParent, tabName)
     elseif not sameHost or (frame.tab ~= "Verification" and frame.tab ~= "Incidents") then
         frame.tab = "Verification"
     end
+    frame.sidebar:Hide()
     frame.main:SetParent(parent)
     frame.main:ClearAllPoints()
     frame.main:SetAllPoints(parent)
     frame.main:SetFrameLevel(parent:GetFrameLevel() + 2)
+    for _, tab in ipairs(frame.tabOrder or {}) do tab:SetParent(frame.main) end
+    frame.refreshButton:SetParent(frame.main)
+    frame.refreshButton:ClearAllPoints()
+    frame.refreshButton:SetSize(150, 26)
+    frame.refreshButton:SetPoint("TOPRIGHT", frame.main, "TOPRIGHT", -16, -47)
+    frame.verificationSuggestions:SetFrameLevel(frame.main:GetFrameLevel() + 30)
     frame.memberMenu:SetParent(overlayParent or parent)
     frame.memberReport:SetParent(overlayParent or parent)
     local overlayLevel = (overlayParent or parent):GetFrameLevel() + 50
@@ -1296,11 +1437,22 @@ end
 
 function Dashboard:HideEmbedded()
     if not self.frame or not self.embedded then return end
+    local frame = self.frame
     self.embedded = nil
-    self.frame.embedded = nil
-    self.frame.main:Hide()
-    self.frame.memberMenu:Hide()
-    self.frame.memberReport:Hide()
+    frame.embedded = nil
+    for _, tab in ipairs(frame.tabOrder or {}) do tab:SetParent(frame.sidebar) end
+    frame.refreshButton:SetParent(frame.sidebar)
+    frame.refreshButton:ClearAllPoints()
+    frame.refreshButton:SetSize(166, 27)
+    frame.refreshButton:SetPoint("BOTTOM", frame.sidebar, "BOTTOM", 0, 16)
+    frame.sidebar:Hide()
+    frame.main:Hide()
+    frame.main:SetParent(frame)
+    frame.main:ClearAllPoints()
+    frame.main:SetPoint("TOPLEFT", frame.sidebar, "TOPRIGHT", 12, 0)
+    frame.main:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -15, 16)
+    frame.memberMenu:Hide()
+    frame.memberReport:Hide()
 end
 
 function Dashboard:Toggle()

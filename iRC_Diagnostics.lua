@@ -73,8 +73,8 @@ captureFrame:SetScript("OnEvent", function(_, event, ...)
             Append("IRC_RECEIVE", "<secret>")
             return
         end
-        if prefix == iRC.Prefix or prefix == "iRCGridV1" or prefix == "iRCIconV1"
-            or prefix == "iRCGFRoster" then
+        if prefix == iRC.Prefix or prefix == "iRCGridV1" or prefix == "iRCLayerV1"
+            or prefix == "iRCAdminV1" or prefix == "iRCIconV1" or prefix == "iRCGFRoster" then
             Append("IRC_RECEIVE", prefix, type(message) == "string" and (message:match("^([A-Z][A-Z0-9_]*)") or "other") or "?",
                 type(message) == "string" and #message or 0, distribution, sender)
         end

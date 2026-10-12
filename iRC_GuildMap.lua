@@ -6,6 +6,7 @@ local GuildMap = { positions = {}, pins = {}, pool = {} }
 iRC.GuildMap = GuildMap
 
 local POSITION_VERSION = "1"
+local LAYER_WIRE_VERSION = tostring(iRC.LayerWireVersion or "6")
 local POSITION_LIFETIME = 90
 local POSITION_UPDATE_INTERVAL = 5
 local POSITION_HEARTBEAT = 20
@@ -688,7 +689,7 @@ end
 
 function GuildMap:ReceiveLayerAssignment(parts, sender)
     local candidate = pendingLocalLayer
-    if not candidate or type(parts) ~= "table" or tostring(parts[2] or "") ~= "1" then return false end
+    if not candidate or type(parts) ~= "table" or tostring(parts[2] or "") ~= LAYER_WIRE_VERSION then return false end
     local zoneUID, serverId = tonumber(parts[3]), tonumber(parts[4])
     local instanceId, mapId, number = tonumber(parts[5]), tonumber(parts[6]), tonumber(parts[7])
     local routeId = tostring(parts[8] or "")
@@ -823,7 +824,7 @@ end
 
 function GuildMap:ReceiveLayerState(parts, sender)
     if iRC:GetSettings().showLayerPanel == false then return false end
-    if type(parts) ~= "table" or tostring(parts[2] or "") ~= "1" then return false end
+    if type(parts) ~= "table" or tostring(parts[2] or "") ~= LAYER_WIRE_VERSION then return false end
     local zoneUID = tonumber(parts[3])
     local serverId = tonumber(parts[4])
     local instanceId = tonumber(parts[5])
@@ -865,7 +866,7 @@ function GuildMap:ReceiveLayerState(parts, sender)
     if pendingLocalLayer and pendingLocalLayer.zoneUID == zoneUID
         and pendingLocalLayer.serverId == serverId and pendingLocalLayer.instanceId == instanceId
         and pendingLocalLayer.mapId == mapId then
-        self:ReceiveLayerAssignment({ "LAYER_ASSIGN", "1", tostring(zoneUID), tostring(serverId),
+        self:ReceiveLayerAssignment({ "LAYER_ASSIGN", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
             tostring(instanceId), tostring(mapId), tostring(reportedNumber), layerSwapId }, sender)
     else
         rememberLayerNumber(zoneUID, serverId, instanceId, mapId, reportedNumber, nil, true)
@@ -997,7 +998,7 @@ end
 
 function GuildMap:ReceiveLayerTransition(parts, sender)
     if iRC:GetSettings().showLayerPanel == false or type(parts) ~= "table"
-        or tostring(parts[2] or "") ~= "1" then return false end
+        or tostring(parts[2] or "") ~= LAYER_WIRE_VERSION then return false end
     local mapId = tonumber(parts[3])
     local senderKey = iRC:NormalizeName(sender)
     if not mapId or mapId <= 0 or mapId ~= math.floor(mapId) or senderKey == "" then return false end

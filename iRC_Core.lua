@@ -21,6 +21,11 @@ iRC.DisplayName = "iRC"
 iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 -- Dedicated iRC prefix for guild connection traffic.
 iRC.Prefix = "iRCConnV1"
+-- Independent versions for the public cross-guild transports. Third-party
+-- LayerSwap packets and the separate guild-map position schema are independent.
+iRC.GridWireVersion = "6"
+iRC.LayerWireVersion = "6"
+iRC.AdminWireVersion = "6"
 -- Testing-only controls accept exact character names and an explicit trailing
 -- wildcard for a shared first name.
 iRC.TestAdminNames = {
@@ -436,6 +441,8 @@ local INCOMING_PREFIX_POLICIES = {
     [iRC.Prefix] = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     iRCGFRoster = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     iRCGridV1 = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
+    iRCLayerV1 = { distributions = { WHISPER = true, CHANNEL = true } },
+    iRCAdminV1 = { distributions = { WHISPER = true, CHANNEL = true } },
     iRCIconV1 = { distributions = { WHISPER = true } },
     LayerSwap = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
 }
@@ -456,17 +463,16 @@ local INCOMING_SCOPE_KINDS = {
     ["guild-map"] = { MAP_POS = true },
     ["chat-icons"] = { ICON_REQ = true, ICON_STATUS = true },
     ["race-grid"] = {
-        ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true, CACHE_DATA = true,
-        CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
-        GUILD_DESC = true, GUILD_REPORT = true, LAYER_ASSIGN = true, LAYER_REQUEST = true,
-        LAYER_STATE = true, LAYER_TRANSITION = true,
+        CACHE_DATA = true, CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
+        GUILD_DESC = true, GUILD_REPORT = true, GUILD_REPORT_ACK = true,
     },
     ["race-grid-channel"] = {
-        ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true, CACHE_DATA = true,
-        CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
-        GUILD_DESC = true, GUILD_REPORT = true, LAYER_ASSIGN = true, LAYER_REQUEST = true,
-        LAYER_STATE = true, LAYER_TRANSITION = true,
+        GUILD_CLASS_BREAKDOWN = true, GUILD_DESC = true, GUILD_REPORT = true,
     },
+    ["race-layer"] = { LAYER_ASSIGN = true, LAYER_REQUEST = true, LAYER_STATE = true, LAYER_TRANSITION = true },
+    ["race-layer-channel"] = { LAYER_STATE = true },
+    ["race-admin"] = { ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true },
+    ["race-admin-channel"] = { ADMIN_PRESENCE_REQUEST = true },
 }
 
 local function incomingTrafficPolicy(kind)
@@ -539,7 +545,10 @@ end
 local trafficBuckets = { incoming = {}, outgoing = {} }
 local trafficTypeBuckets = {}
 local trafficFrame
-local monitoredPrefixes = { iRCConnV1 = true, iRCGridV1 = true, iRCIconV1 = true, iRCGFRoster = true }
+local monitoredPrefixes = {
+    iRCConnV1 = true, iRCGridV1 = true, iRCLayerV1 = true, iRCAdminV1 = true,
+    iRCIconV1 = true, iRCGFRoster = true,
+}
 
 function iRC:RecordTrafficBytes(direction, bytes, prefix, message)
     if not self.TrafficMonitorEnabled then return end
@@ -622,9 +631,11 @@ function iRC:SetTrafficMonitorEnabled(enabled)
                 if not iRC:IsSecretValue(message) and not iRC:IsSecretValue(sender)
                     and not iRC:IsSecretValue(channelName)
                     and type(message) == "string" and channelName == "iRCCommsV1"
-                    and message:sub(1, #"iRCGridV1:") == "iRCGridV1:"
                     and iRC:NormalizeName(sender) ~= iRC:NormalizeName(iRC:GetPlayerName()) then
-                    iRC:RecordTrafficBytes("in", #message, "iRCGridV1", "CHANNEL")
+                    local publicPrefix = message:match("^(iRC[%w]+):")
+                    if monitoredPrefixes[publicPrefix] then
+                        iRC:RecordTrafficBytes("in", #message, publicPrefix, "CHANNEL")
+                    end
                 end
             end
         end)

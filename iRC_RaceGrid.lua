@@ -5,9 +5,45 @@ if not iRC then return end
 local RaceGrid = {}
 iRC.RaceGrid = RaceGrid
 
-local PREFIX = "iRCGridV1"
+local GRID_PREFIX = "iRCGridV1"
+local LAYER_PREFIX = "iRCLayerV1"
+local ADMIN_PREFIX = "iRCAdminV1"
 local CHANNEL_NAME = "iRCCommsV1"
-local WIRE_VERSION = "6"
+local WIRE_VERSION = tostring(iRC.GridWireVersion or "6")
+local LAYER_WIRE_VERSION = tostring(iRC.LayerWireVersion or "6")
+local ADMIN_WIRE_VERSION = tostring(iRC.AdminWireVersion or "6")
+local PACKET_PROTOCOLS = {
+    GUILD_REPORT = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    GUILD_DESC = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    GUILD_CLASS_BREAKDOWN = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    GUILD_REPORT_ACK = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    CACHE_REQUEST = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    CACHE_OFFER = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    CACHE_GET = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    CACHE_DATA = { prefix = GRID_PREFIX, version = WIRE_VERSION },
+    ADMIN_PRESENCE_REQUEST = { prefix = ADMIN_PREFIX, version = ADMIN_WIRE_VERSION },
+    ADMIN_PRESENCE_RESPONSE = { prefix = ADMIN_PREFIX, version = ADMIN_WIRE_VERSION },
+    LAYER_STATE = { prefix = LAYER_PREFIX, version = LAYER_WIRE_VERSION },
+    LAYER_REQUEST = { prefix = LAYER_PREFIX, version = LAYER_WIRE_VERSION },
+    LAYER_ASSIGN = { prefix = LAYER_PREFIX, version = LAYER_WIRE_VERSION },
+    LAYER_TRANSITION = { prefix = LAYER_PREFIX, version = LAYER_WIRE_VERSION },
+}
+local PREFIX_SCOPES = {
+    [GRID_PREFIX] = "race-grid",
+    [LAYER_PREFIX] = "race-layer",
+    [ADMIN_PREFIX] = "race-admin",
+}
+
+local function validatePacketProtocol(prefix, message, sender, distribution)
+    local packetKind, packetVersion = tostring(message or ""):match("^([A-Z][A-Z0-9_]*)\t([^\t]*)")
+    local protocol = PACKET_PROTOCOLS[packetKind]
+    if not protocol then return true end
+    if prefix == protocol.prefix and packetVersion == protocol.version then return true end
+    iRC:DebugMsg(string.format("Ignored %s from %s via %s/%s: protocol %s, expected %s/%s.",
+        tostring(packetKind), tostring(sender), tostring(distribution), tostring(prefix),
+        tostring(packetVersion or "missing"), protocol.prefix, protocol.version), 3)
+    return false
+end
 local REPORT_SCHEMA = 5
 local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
@@ -22,8 +58,11 @@ local MAX_CHANNEL_PAYLOAD = 1024
 local MAX_CACHE_PARTS = 16
 local MAX_CACHE_PACKAGES = 32
 local CHANNEL_PACKAGE_DEDUP_WINDOW = 60
+local PUBLIC_REPORT_RECEIPT_WAIT = 5
+local PUBLIC_REPORT_RECEIPT_LIFETIME = 15
 local cacheUpdatingUntil = 0
 local lastCacheOpenRequestAt
+local publicReportReceipts = {}
 local channelJoinReady = false
 local channelJoinStartedAt = 0
 local channelJoinGeneration = 0
@@ -77,7 +116,7 @@ local function send(prefix, message, distribution, target)
         local single = prefix .. ":" .. hex
         if #single <= 255 then
             local called = pcall(SendChatMessage, single, "CHANNEL", nil, id)
-            if called then iRC:RecordTrafficBytes("out", #single, PREFIX, "CHANNEL") end
+            if called then iRC:RecordTrafficBytes("out", #single, prefix, "CHANNEL") end
             if called and message:match("^GUILD_REPORT") then iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_SENDING", 1, 1), 3) end
             return called
         end
@@ -90,7 +129,7 @@ local function send(prefix, message, distribution, target)
             local wire = table.concat({ prefix, "C", messageId, part, total, chunk }, ":")
             local called = pcall(SendChatMessage, wire, "CHANNEL", nil, id)
             if not called then return false end
-            iRC:RecordTrafficBytes("out", #wire, PREFIX, "CHANNEL")
+            iRC:RecordTrafficBytes("out", #wire, prefix, "CHANNEL")
             iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_SENDING", part, total), 3)
         end
         return true
@@ -107,6 +146,30 @@ end
 
 local function fullNameKey(name)
     return iRC:NormalizeName(name)
+end
+
+local function publicReportReceiptKey(timestamp, guid)
+    timestamp = tonumber(timestamp)
+    guid = tostring(guid or "")
+    if not timestamp or timestamp <= 0 or guid == "" or #guid > 80 then return nil end
+    return tostring(math.floor(timestamp)) .. SEP .. guid
+end
+
+local function trackPublicReportReceipts(report)
+    local key = publicReportReceiptKey(report and report.timestamp, report and report.guid)
+    if not key then return end
+    local receipt = { startedAt = GetTime(), receivers = {} }
+    publicReportReceipts[key] = receipt
+    if not (C_Timer and C_Timer.After) then return end
+    C_Timer.After(PUBLIC_REPORT_RECEIPT_WAIT, function()
+        if publicReportReceipts[key] ~= receipt then return end
+        local count = 0
+        for _ in pairs(receipt.receivers) do count = count + 1 end
+        iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIPTS", count), 3)
+    end)
+    C_Timer.After(PUBLIC_REPORT_RECEIPT_LIFETIME, function()
+        if publicReportReceipts[key] == receipt then publicReportReceipts[key] = nil end
+    end)
 end
 
 local ownGuildRoster, ownGuildKey, ownGuildSenders = nil, nil, {}
@@ -256,14 +319,14 @@ local function cleanIncomingChunks(now)
     end
 end
 
-local function decodeChannelWire(message, sender)
-    local direct = message:match("^" .. PREFIX .. ":([0-9a-fA-F]+)$")
+local function decodeChannelWire(prefix, message, sender)
+    local direct = message:match("^" .. prefix .. ":([0-9a-fA-F]+)$")
     if direct then
         local decoded = hexToBytes(direct)
         if not decoded then return nil end
         local now = GetTime()
         cleanIncomingChunks(now)
-        local payloadKey = fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
+        local payloadKey = prefix .. ":" .. fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
         if completedChannelPackages[payloadKey] then
             iRC:DebugMsg("Ignored replayed guild report package from " .. tostring(sender) .. ".", 3)
             return nil
@@ -272,11 +335,11 @@ local function decodeChannelWire(message, sender)
         if decoded and decoded:match("^GUILD_REPORT") then iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_RECEIVING", 1, 1, sender), 3) end
         return decoded
     end
-    local messageId, part, total, chunk = message:match("^" .. PREFIX .. ":C:([0-9a-fA-F]+):(%d+):(%d+):([0-9a-fA-F]+)$")
+    local messageId, part, total, chunk = message:match("^" .. prefix .. ":C:([0-9a-fA-F]+):(%d+):(%d+):([0-9a-fA-F]+)$")
     part, total = tonumber(part), tonumber(total)
     if not messageId or not part or not total or total < 2 or total > 8 or part < 1 or part > total then return nil end
     cleanIncomingChunks(GetTime())
-    local key = fullNameKey(sender) .. ":" .. messageId
+    local key = prefix .. ":" .. fullNameKey(sender) .. ":" .. messageId
     if completedChannelPackages[key] then return nil end
     local entry = incomingChunks[key]
     if not entry or entry.total ~= total or GetTime() - entry.startedAt > 15 then
@@ -290,7 +353,7 @@ local function decodeChannelWire(message, sender)
     local decoded = hexToBytes(table.concat(entry.parts))
     if not decoded then return nil end
     local now = GetTime()
-    local payloadKey = fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
+    local payloadKey = prefix .. ":" .. fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
     completedChannelPackages[key] = now
     if completedChannelPackages[payloadKey] then
         iRC:DebugMsg("Ignored replayed guild report package from " .. tostring(sender) .. ".", 3)
@@ -309,10 +372,39 @@ end
 -- Session-only roster used by the test-admin diagnostics page. The server's
 -- channel roster is authoritative for who is online; version replies merely
 -- enrich those rows and never add an offline character to the displayed list.
-local adminPresence = { users = {}, versions = {}, requestedAt = 0, requestId = nil }
+local ADMIN_PROBE_RETRY_DELAY = 15
+local ADMIN_PROBE_RESPONSE_LIFETIME = 300
+local ADMIN_PROBE_REQUEST_LIMIT = 16
+local adminPresence = {
+    users = {}, versions = {}, requestedAt = 0, requestedMonoAt = 0,
+    requestId = nil, requestIds = {},
+}
 local adminProbeBySender = {}
 
-local function rememberAdminVersion(name, version, guildName)
+local function rememberAdminRequestId(requestId)
+    local now = GetTime and GetTime() or 0
+    local count, oldestId, oldestAt = 0, nil, math.huge
+    for id, requestedAt in pairs(adminPresence.requestIds) do
+        if now - requestedAt > ADMIN_PROBE_RESPONSE_LIFETIME then
+            adminPresence.requestIds[id] = nil
+        else
+            count = count + 1
+            if requestedAt < oldestAt then oldestId, oldestAt = id, requestedAt end
+        end
+    end
+    if count >= ADMIN_PROBE_REQUEST_LIMIT and oldestId then adminPresence.requestIds[oldestId] = nil end
+    adminPresence.requestIds[requestId] = now
+end
+
+local function isRecentAdminRequestId(requestId)
+    local requestedAt = adminPresence.requestIds[tostring(requestId or "")]
+    local now = GetTime and GetTime() or 0
+    if type(requestedAt) ~= "number" then return false end
+    local age = now - requestedAt
+    return age <= ADMIN_PROBE_RESPONSE_LIFETIME, math.max(0, age)
+end
+
+local function rememberAdminVersion(name, version, guildName, confirmedProbe)
     local key = fullNameKey(name)
     if key == "" then return end
     version = tostring(version or ""):gsub("[%c%s]", "")
@@ -322,7 +414,7 @@ local function rememberAdminVersion(name, version, guildName)
         guildName = tostring(guildName or ""):gsub("[%c]", " "):sub(1, 80),
         seenAt = time(),
     }
-    if adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10 then
+    if confirmedProbe or (adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10) then
         adminPresence.users[key] = name
     end
 end
@@ -430,8 +522,18 @@ function RaceGrid:RequestAdminOnlineUsers()
     self:EnsureChannel()
     local channelId = getChannelId()
     if not channelId then return false end
+    local now = GetTime and GetTime() or 0
+    if adminPresence.requestId and now - (adminPresence.requestedMonoAt or 0) < ADMIN_PROBE_RETRY_DELAY then
+        refreshAdminChannelRoster()
+        iRC:DebugMsg(string.format("Admin probe %s is still waiting for delayed replies; no duplicate request sent.",
+            tostring(adminPresence.requestId)), 3)
+        return true
+    end
+    local prefixReady = registerPrefix(ADMIN_PREFIX)
     adminPresence.requestedAt = time()
+    adminPresence.requestedMonoAt = now
     adminPresence.requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
+    rememberAdminRequestId(adminPresence.requestId)
     adminPresence.users = {}
     adminPresence.displayIndex = nil
     if ListChannelByName then
@@ -440,8 +542,12 @@ function RaceGrid:RequestAdminOnlineUsers()
         pcall(SlashCmdList.CHATLIST, CHANNEL_NAME)
     end
     refreshAdminChannelRoster()
-    send(PREFIX, table.concat({ "ADMIN_PRESENCE_REQUEST", WIRE_VERSION, adminPresence.requestId,
-        tostring(iRC:GetPlayerName() or "") }, SEP), "CHANNEL", CHANNEL_NAME)
+    local requestMessage = table.concat({ "ADMIN_PRESENCE_REQUEST", ADMIN_WIRE_VERSION,
+        adminPresence.requestId, tostring(iRC:GetPlayerName() or "") }, SEP)
+    local publicSent = send(ADMIN_PREFIX, requestMessage, "CHANNEL", CHANNEL_NAME)
+    iRC:DebugMsg(string.format("Admin probe %s sent (protocol %s): prefix=%s, channel=%d, public call=%s.",
+        adminPresence.requestId, ADMIN_WIRE_VERSION,
+        tostring(prefixReady == true), channelId, tostring(publicSent == true)), 3)
     if C_Timer and C_Timer.After then
         C_Timer.After(0.5, refreshAdminChannelRoster)
         C_Timer.After(1.5, refreshAdminChannelRoster)
@@ -555,12 +661,12 @@ function RaceGrid:BroadcastLayerState(layer)
     -- Each observed raw ID is enough for peers to build the same sorted map;
     -- omitting the full registry also keeps the addon payload below 255 bytes.
     local payload = table.concat({
-        "LAYER_STATE", "1", tostring(zoneUID), tostring(serverId), tostring(instanceId),
+        "LAYER_STATE", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId), tostring(instanceId),
         tostring(mapId), tostring(number), "", layerSwapId,
     }, SEP)
     local sent
     for _, name in ipairs(getChannelMemberNames()) do
-        if send(PREFIX, payload, "WHISPER", name) then sent = true end
+        if send(LAYER_PREFIX, payload, "WHISPER", name) then sent = true end
     end
     return sent == true
 end
@@ -576,11 +682,11 @@ function RaceGrid:RequestLayerAssignment(layer)
         or routeId ~= tostring(serverId) .. "-" .. tostring(zoneUID) then return false end
     self:EnsureChannel()
     if not getChannelId() then return false end
-    local payload = table.concat({ "LAYER_REQUEST", "1", tostring(zoneUID), tostring(serverId),
+    local payload = table.concat({ "LAYER_REQUEST", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
         tostring(instanceId), tostring(mapId), routeId }, SEP)
     local sent
     for _, name in ipairs(getChannelMemberNames()) do
-        if send(PREFIX, payload, "WHISPER", name) then sent = true end
+        if send(LAYER_PREFIX, payload, "WHISPER", name) then sent = true end
     end
     return sent == true
 end
@@ -588,10 +694,10 @@ end
 function RaceGrid:BroadcastLayerTransition(mapId)
     mapId = math.floor(tonumber(mapId) or 0)
     if mapId <= 0 or iRC:GetSettings().showLayerPanel == false or not self:IsLayerChannelReady() then return false end
-    local payload = table.concat({ "LAYER_TRANSITION", "1", tostring(mapId) }, SEP)
+    local payload = table.concat({ "LAYER_TRANSITION", LAYER_WIRE_VERSION, tostring(mapId) }, SEP)
     local sent
     for _, name in ipairs(getChannelMemberNames()) do
-        if send(PREFIX, payload, "WHISPER", name) then sent = true end
+        if send(LAYER_PREFIX, payload, "WHISPER", name) then sent = true end
     end
     return sent == true
 end
@@ -916,10 +1022,11 @@ function RaceGrid:BroadcastReport(fromClick)
     -- Public custom-channel sends require a hardware event on Classic. Startup
     -- and ticker refreshes update the local cache only and are not failures.
     if fromClick ~= true then return false end
-    if not send(PREFIX, payload, "CHANNEL", CHANNEL_NAME) then
+    if not send(GRID_PREFIX, payload, "CHANNEL", CHANNEL_NAME) then
         iRC:DebugMsg(iRC:Text("RACEGRID_REPORT_SEND_FAILED", report.guildName, #payload), 1)
         return false
     end
+    trackPublicReportReceipts(report)
     if combinedPayload then
         iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
             report.activeMembers, report.activePlayers, report.members), 3)
@@ -929,7 +1036,7 @@ function RaceGrid:BroadcastReport(fromClick)
     local descriptionTimestamp = math.floor(tonumber(report.guildDescriptionTimestamp) or 0)
     local descriptionEditor = tostring(report.guildDescriptionEditedBy or ""):gsub("[%c]", ""):sub(1, 40)
     if descriptionTimestamp > 0 and descriptionEditor ~= "" then
-        send(PREFIX, table.concat({ "GUILD_DESC", WIRE_VERSION, tostring(descriptionTimestamp), descriptionEditor, description }, SEP), "CHANNEL", CHANNEL_NAME)
+        send(GRID_PREFIX, table.concat({ "GUILD_DESC", WIRE_VERSION, tostring(descriptionTimestamp), descriptionEditor, description }, SEP), "CHANNEL", CHANNEL_NAME)
     end
     local classBreakdownFields = { "GUILD_CLASS_BREAKDOWN", WIRE_VERSION, tostring(report.timestamp or 0),
         report.classBreakdownMode == "RANGE" and "RANGE" or report.classBreakdownMode == "MAX" and "MAX" or "ALL",
@@ -939,7 +1046,7 @@ function RaceGrid:BroadcastReport(fromClick)
     end
     classBreakdownFields[#classBreakdownFields + 1] = report.guildHomepageTag == "PVE" and "PVE"
         or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
-    send(PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
+    send(GRID_PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
         report.activeMembers, report.activePlayers, report.members), 3)
     return true
@@ -1282,7 +1389,7 @@ local function sendCacheOffers(requestId, requester)
                 offered.guilds[guildKey] = {
                     payload = payload, timestamp = reportTimestamp, checksum = checksum, cacheHop = cacheHop,
                 }
-                if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, reportTimestamp, checksum, cacheHop }, SEP), "GUILD") then
+                if send(GRID_PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, reportTimestamp, checksum, cacheHop }, SEP), "GUILD") then
                     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
                 end
             end
@@ -1306,7 +1413,7 @@ local function requestBestCacheOffers(requestId)
         if shouldRequest then
             request.selected[guildKey] = offer
             requested = requested + 1
-            send(PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName,
+            send(GRID_PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName,
                 offer.timestamp, offer.checksum }, SEP), "WHISPER", offer.sender)
             iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REQUEST_SENT", offer.guildName, offer.sender), 3)
         end
@@ -1323,7 +1430,7 @@ function RaceGrid:RequestGuildCache()
     cleanCacheState()
     local requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
     cacheRequests[requestId] = { startedAt = GetTime(), offers = {}, selected = {} }
-    if not send(PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId }, SEP), "GUILD") then
+    if not send(GRID_PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId }, SEP), "GUILD") then
         cacheRequests[requestId] = nil
         return false
     end
@@ -1404,7 +1511,7 @@ local function handleCacheMessage(parts, sender, distribution)
         if total < 1 or total > MAX_CACHE_PARTS then return true end
         for part = 1, total do
             local chunk = hex:sub((part - 1) * CACHE_CHUNK_SIZE + 1, part * CACHE_CHUNK_SIZE)
-            send(PREFIX, table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName, part, total, checksum, chunk }, SEP), "WHISPER", sender)
+            send(GRID_PREFIX, table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName, part, total, checksum, chunk }, SEP), "WHISPER", sender)
             iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_PACKAGE_SENT", part, total, guildName, sender), 3)
         end
         return true
@@ -1461,25 +1568,27 @@ local function handleCacheMessage(parts, sender, distribution)
 end
 
 handleMessage = function(prefix, message, sender, distribution, queued)
-    if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
+    if not PREFIX_SCOPES[prefix] or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
+    if not validatePacketProtocol(prefix, message, sender, distribution) then return end
     if (distribution == "CHANNEL" or distribution == "WHISPER")
         and message:match("^LAYER_") then
         local trusted = distribution == "CHANNEL" or isOwnGuildSender(sender) or RaceGrid:IsKnownChannelMember(sender)
         if not trusted or not iRC.GuildMap then return end
         local layerParts = split(message)
+        if tostring(layerParts[2] or "") ~= LAYER_WIRE_VERSION then return end
         if layerParts[1] == "LAYER_STATE" then
             iRC.GuildMap:ReceiveLayerState(layerParts, sender)
         elseif layerParts[1] == "LAYER_REQUEST" and distribution == "WHISPER" then
             local zoneUID, serverId = tonumber(layerParts[3]), tonumber(layerParts[4])
             local instanceId, mapId = tonumber(layerParts[5]), tonumber(layerParts[6])
             local routeId = tostring(layerParts[7] or "")
-            if tostring(layerParts[2] or "") == "1" and zoneUID and zoneUID > 0
+            if zoneUID and zoneUID > 0
                 and serverId and serverId >= 0 and instanceId and instanceId >= 0 and mapId and mapId > 0
                 and routeId == tostring(serverId) .. "-" .. tostring(zoneUID) then
                 local number = iRC.GuildMap:GetAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
                 if number then
-                    send(PREFIX, table.concat({ "LAYER_ASSIGN", "1", tostring(zoneUID), tostring(serverId),
+                    send(LAYER_PREFIX, table.concat({ "LAYER_ASSIGN", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
                         tostring(instanceId), tostring(mapId), tostring(number), routeId }, SEP), "WHISPER", sender)
                 end
             end
@@ -1512,6 +1621,20 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             end
         end
     end
+    if distribution == "WHISPER" and message:match("^GUILD_REPORT_ACK\t") then
+        local ackParts = split(message)
+        if ackParts[2] == WIRE_VERSION then
+            local key = publicReportReceiptKey(ackParts[3], ackParts[4])
+            local receipt = key and publicReportReceipts[key]
+            local senderKey = fullNameKey(sender)
+            local now = GetTime and GetTime() or 0
+            if receipt and senderKey ~= ""
+                and now - (receipt.startedAt or 0) <= PUBLIC_REPORT_RECEIPT_LIFETIME then
+                receipt.receivers[senderKey] = true
+            end
+        end
+        return
+    end
     if not queued and distribution == "CHANNEL" and message:match("^GUILD_DESC\t")
         and C_Timer and C_Timer.After then
         queueReportWork("public-description:" .. fullNameKey(sender), function()
@@ -1527,22 +1650,41 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     local parts = publicParts or split(message)
     if parts[1] == "ADMIN_PRESENCE_REQUEST" and distribution == "CHANNEL" then
         local requestId, requester = tostring(parts[3] or ""), tostring(parts[4] or "")
-        if parts[2] == WIRE_VERSION and requestId:match("^[0-9a-f]+$") and #requestId <= 24
+        local requestVersion = tostring(parts[2] or "")
+        iRC:DebugMsg(string.format("Admin probe request received from %s (protocol %s, request %s, via %s).",
+            tostring(sender), requestVersion, requestId, tostring(distribution)), 3)
+        if requestVersion == ADMIN_WIRE_VERSION
+            and requestId:match("^[0-9a-f]+$") and #requestId <= 24
             and iRC:NormalizeName(requester) == iRC:NormalizeName(sender) then
             local senderKey, now = fullNameKey(sender), GetTime and GetTime() or 0
             if not adminProbeBySender[senderKey] or now - adminProbeBySender[senderKey] >= 30 then
                 adminProbeBySender[senderKey] = now
                 local guildName = GetGuildInfo and GetGuildInfo("player") or ""
-                send(PREFIX, table.concat({ "ADMIN_PRESENCE_RESPONSE", WIRE_VERSION, requestId,
+                local responseSent = send(ADMIN_PREFIX, table.concat({ "ADMIN_PRESENCE_RESPONSE", requestVersion, requestId,
                     tostring(iRC.Version or "Unknown"), tostring(guildName or ""):gsub("[%c]", " "):sub(1, 80) }, SEP),
                     "WHISPER", sender)
+                iRC:DebugMsg(string.format("Admin probe response to %s for request %s: %s.",
+                    tostring(sender), requestId, responseSent and "sent" or "failed"), 3)
+            else
+                iRC:DebugMsg(string.format("Admin probe request %s from %s ignored by the response cooldown.",
+                    requestId, tostring(sender)), 3)
             end
+        else
+            iRC:DebugMsg(string.format("Admin probe request from %s rejected (protocol=%s, requester=%s).",
+                tostring(sender), requestVersion, requester), 3)
         end
         return
     elseif parts[1] == "ADMIN_PRESENCE_RESPONSE" and distribution == "WHISPER" then
-        if iRC:IsTestAdmin() and parts[2] == WIRE_VERSION
-            and tostring(parts[3] or "") == tostring(adminPresence.requestId or "") then
-            rememberAdminVersion(sender, parts[4], parts[5])
+        local recentRequest, responseAge = isRecentAdminRequestId(parts[3])
+        if iRC:IsTestAdmin() and tostring(parts[2] or "") == ADMIN_WIRE_VERSION
+            and recentRequest then
+            rememberAdminVersion(sender, parts[4], parts[5], true)
+            iRC:DebugMsg(string.format("Admin probe response accepted from %s: iRC %s, request %s, %.1fs delay.",
+                tostring(sender), tostring(parts[4] or "Unknown"), tostring(parts[3] or ""), responseAge or 0), 3)
+        elseif iRC:IsTestAdmin() then
+            iRC:DebugMsg(string.format("Admin probe response from %s rejected (protocol=%s, stale request=%s, latest=%s).",
+                tostring(sender), tostring(parts[2] or ""), tostring(parts[3] or ""),
+                tostring(adminPresence.requestId or "")), 3)
         end
         return
     end
@@ -1604,6 +1746,8 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     if distribution == "CHANNEL" then
         local ownGuildName = GetGuildInfo and GetGuildInfo("player")
         if ownGuildName and normalizeGuildName(report.guildName) == normalizeGuildName(ownGuildName) then return end
+        send(GRID_PREFIX, table.concat({ "GUILD_REPORT_ACK", WIRE_VERSION,
+            tostring(math.floor(report.timestamp)), tostring(report.guid) }, SEP), "WHISPER", sender)
     end
     iRC:CheckForNewVersion(report.addonVersion)
     storeIncomingReport(report)
@@ -1680,8 +1824,14 @@ end
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
-        registerPrefix(PREFIX)
+        local gridReady = registerPrefix(GRID_PREFIX)
+        local layerReady = registerPrefix(LAYER_PREFIX)
+        local adminReady = registerPrefix(ADMIN_PREFIX)
         registerPrefix("LayerSwap")
+        iRC:DebugMsg(string.format("Comms initialized: %s/%s=%s, %s/%s=%s, %s/%s=%s.",
+            GRID_PREFIX, WIRE_VERSION, tostring(gridReady == true),
+            LAYER_PREFIX, LAYER_WIRE_VERSION, tostring(layerReady == true),
+            ADMIN_PREFIX, ADMIN_WIRE_VERSION, tostring(adminReady == true)), 3)
     elseif event == "PLAYER_LOGIN" then
         channelJoinStartedAt = GetTime and GetTime() or 0
         if getChannelId() and LeaveChannelByName then
@@ -1730,8 +1880,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 and iRC.GuildMap then iRC.GuildMap:ReceiveLayerSwapMessage(message, sender, distribution) end
             return
         end
-        if prefix == PREFIX
-            and not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "race-grid") then return end
+        local scope = PREFIX_SCOPES[prefix]
+        if not scope then return end
+        if not validatePacketProtocol(prefix, message, sender, distribution) then return end
+        if not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, scope) then return end
         handleMessage(prefix, message, sender, distribution)
     elseif event == "CHAT_MSG_CHANNEL_LIST" or event == "CHAT_MSG_SYSTEM" then
         captureAdminChannelList(...)
@@ -1743,14 +1895,17 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if iRC:IsSecretValue(message) or iRC:IsSecretValue(sender)
             or iRC:IsSecretValue(channelName) then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
-        if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
-            if not iRC:AcceptIncomingAddonTraffic(PREFIX, message, "CHANNEL", sender, "race-grid-wire") then return end
-            local decoded = decodeChannelWire(message, sender)
+        local publicPrefix = type(message) == "string" and message:match("^(iRC[%w]+):") or nil
+        local scope = publicPrefix and PREFIX_SCOPES[publicPrefix] or nil
+        if channelName == CHANNEL_NAME and scope then
+            if not iRC:AcceptIncomingAddonTraffic(publicPrefix, message, "CHANNEL", sender, scope .. "-wire") then return end
+            local decoded = decodeChannelWire(publicPrefix, message, sender)
             -- Same-guild reports are already assembled locally. Admin
             -- presence probes still need to reach every channel member.
-            if decoded and iRC:AcceptIncomingAddonTraffic(PREFIX, decoded, "CHANNEL", sender, "race-grid-channel")
+            if decoded and validatePacketProtocol(publicPrefix, decoded, sender, "CHANNEL")
+                and iRC:AcceptIncomingAddonTraffic(publicPrefix, decoded, "CHANNEL", sender, scope .. "-channel")
                 and (not isOwnGuildSender(sender) or not decoded:match("^GUILD_")) then
-                handleMessage(PREFIX, decoded, sender, "CHANNEL")
+                handleMessage(publicPrefix, decoded, sender, "CHANNEL")
             end
         end
     end
