@@ -23,6 +23,7 @@ local initializedGuildLogStores = setmetatable({}, { __mode = "k" })
 local shownLinkRequests = {}
 local lastLinkRelayAt = 0
 local knownGuildKicks = {}
+local knownGuildRankChanges = {}
 local SYNCED_EVENT_TYPES = {
     JOIN = true, REJOIN = true, LEAVE = true, KICK = true, PROMOTE = true, DEMOTE = true,
     LEVEL = true, NAME = true, NOTE = true, OFFICER_NOTE = true, RETURN = true,
@@ -52,6 +53,80 @@ local function eventSemanticKey(eventType, name, text)
         :gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
         :gsub("%s+", " "):match("^%s*(.-)%s*$"):lower()
     return table.concat({ tostring(eventType or ""), iRC:NormalizeName(name), normalizedText }, "|")
+end
+
+local MEMBERSHIP_EVENT_STATE = {
+    JOIN = "IN", REJOIN = "IN",
+    LEAVE = "OUT", KICK = "OUT",
+}
+
+local function findDuplicateMembershipTransition(store, eventType, name, occurredAt)
+    local wantedState = MEMBERSHIP_EVENT_STATE[eventType]
+    if not wantedState then return nil, nil end
+    local wantedName, wantedAt = iRC:NormalizeName(name), tonumber(occurredAt) or 0
+    local previousIndex, previousRecord, nextIndex, nextRecord
+    for index, record in ipairs(store and store.guildLog or {}) do
+        if iRC:NormalizeName(record.name) == wantedName and MEMBERSHIP_EVENT_STATE[record.eventType] then
+            local recordAt = tonumber(record.occurredAt) or 0
+            if recordAt <= wantedAt then
+                previousIndex, previousRecord = index, record
+            elseif not nextRecord then
+                nextIndex, nextRecord = index, record
+                break
+            end
+        end
+    end
+    if previousRecord and MEMBERSHIP_EVENT_STATE[previousRecord.eventType] == wantedState then
+        return previousIndex, previousRecord
+    end
+    if nextRecord and MEMBERSHIP_EVENT_STATE[nextRecord.eventType] == wantedState then
+        return nextIndex, nextRecord
+    end
+    return nil, nil
+end
+
+local function enrichDuplicateMembershipRecord(existing, incoming)
+    if not existing or not incoming then return false end
+    local changed = false
+    local incomingText, existingText = tostring(incoming.text or ""), tostring(existing.text or "")
+    if MEMBERSHIP_EVENT_STATE[incoming.eventType] == "IN"
+        and incomingText:find(" Invited by ", 1, true)
+        and not existingText:find(" Invited by ", 1, true) then
+        existing.text = incomingText
+        changed = true
+    elseif incoming.eventType == "KICK" and existing.eventType ~= "KICK" then
+        existing.eventType, existing.text = "KICK", incomingText
+        changed = true
+    end
+    if incoming.classFile and incoming.classFile ~= "" and not existing.classFile then
+        existing.classFile = incoming.classFile
+        changed = true
+    end
+    return changed
+end
+
+local function rankTransitionTextKey(text)
+    return tostring(text or ""):gsub("%s+[Bb]y%s+.-%.$", ".")
+        :gsub("%s+", " "):match("^%s*(.-)%s*$"):lower()
+end
+
+local function findRecentRankTransition(store, eventType, name, text, occurredAt)
+    if eventType ~= "PROMOTE" and eventType ~= "DEMOTE" then return nil, nil end
+    local wantedName, wantedAt = iRC:NormalizeName(name), tonumber(occurredAt) or 0
+    local wantedText = rankTransitionTextKey(text)
+    for index = #(store and store.guildLog or {}), 1, -1 do
+        local existing = store.guildLog[index]
+        local existingAt = tonumber(existing and existing.occurredAt) or 0
+        if existingAt < wantedAt - GUILD_LOG_DUPLICATE_WINDOW then break end
+        if iRC:NormalizeName(existing.name) == wantedName
+            and (existing.eventType == "PROMOTE" or existing.eventType == "DEMOTE") then
+            if existing.eventType == eventType and rankTransitionTextKey(existing.text) == wantedText then
+                return index, existing
+            end
+            return nil, nil
+        end
+    end
+    return nil, nil
 end
 
 local function findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt)
@@ -114,7 +189,19 @@ local function guildStore(create)
             for _, record in ipairs(store.guildLog) do
                 record.id = record.id or eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
                 store.guildLogIds[record.id] = true
-                if not findRecentMatchingGuildLogEvent(cleanedStore, record.eventType, record.name,
+                local _, duplicateMembership = findDuplicateMembershipTransition(cleanedStore,
+                    record.eventType, record.name, record.occurredAt)
+                local _, duplicateRank = findRecentRankTransition(cleanedStore,
+                    record.eventType, record.name, record.text, record.occurredAt)
+                if duplicateMembership then
+                    enrichDuplicateMembershipRecord(duplicateMembership, record)
+                elseif duplicateRank then
+                    if tostring(record.text or ""):find(" by ", 1, true)
+                        and not tostring(duplicateRank.text or ""):find(" by ", 1, true) then
+                        duplicateRank.text = record.text
+                    end
+                    if record.classFile and not duplicateRank.classFile then duplicateRank.classFile = record.classFile end
+                elseif not findRecentMatchingGuildLogEvent(cleanedStore, record.eventType, record.name,
                     record.text, record.occurredAt) then
                     cleanedLog[#cleanedLog + 1] = record
                 end
@@ -407,6 +494,36 @@ local function addGuildLog(store, eventType, name, text, classFile)
     if not log then return end
     local occurredAt = time()
     if findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt) then return false end
+    local _, duplicateRank = findRecentRankTransition(store, eventType, name, text, occurredAt)
+    if duplicateRank then
+        local incomingHasOfficer = tostring(text or ""):find(" by ", 1, true) ~= nil
+        local existingHasOfficer = tostring(duplicateRank.text or ""):find(" by ", 1, true) ~= nil
+        if incomingHasOfficer and not existingHasOfficer then
+            local previousId = duplicateRank.id
+            duplicateRank.text = text
+            duplicateRank.id = eventFingerprint(duplicateRank.eventType, duplicateRank.name,
+                duplicateRank.text, duplicateRank.occurredAt)
+            if previousId then store.guildLogIds[previousId] = nil end
+            store.guildLogIds[duplicateRank.id] = true
+            if Identity.BroadcastGuildLog then Identity:BroadcastGuildLog(duplicateRank) end
+        end
+        return false
+    end
+    local _, duplicateMembership = findDuplicateMembershipTransition(store, eventType, name, occurredAt)
+    if duplicateMembership then
+        local changed = enrichDuplicateMembershipRecord(duplicateMembership, {
+            eventType = eventType, text = text, classFile = classFile,
+        })
+        if changed then
+            local previousId = duplicateMembership.id
+            duplicateMembership.id = eventFingerprint(duplicateMembership.eventType, duplicateMembership.name,
+                duplicateMembership.text, duplicateMembership.occurredAt)
+            if previousId then store.guildLogIds[previousId] = nil end
+            store.guildLogIds[duplicateMembership.id] = true
+            if Identity.BroadcastGuildLog then Identity:BroadcastGuildLog(duplicateMembership) end
+        end
+        return false
+    end
     local record = {
         occurredAt = occurredAt,
         eventType = eventType,
@@ -494,6 +611,36 @@ function Identity:RecordKnownGuildKick(name, officer)
             self:BroadcastGuildLog(record)
             if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
             knownGuildKicks[key] = nil
+            return true
+        end
+    end
+    return true
+end
+
+function Identity:RecordKnownGuildRankChange(name, action, officer)
+    action = tostring(action or ""):upper()
+    if action ~= "PROMOTE" and action ~= "DEMOTE" then return false end
+    local store, key = guildStore(false), characterKey(name)
+    officer = iRC:FormatPlayerName(officer or iRC:GetPlayerName())
+    if key == "" or characterKey(officer) == "" then return false end
+    knownGuildRankChanges[key] = { action = action, officer = officer, recordedAt = time() }
+    if not store then return true end
+    local now = time()
+    for index = #store.guildLog, 1, -1 do
+        local record = store.guildLog[index]
+        local occurredAt = tonumber(record and record.occurredAt) or 0
+        if occurredAt < now - GUILD_LOG_DUPLICATE_WINDOW then break end
+        if record.eventType == action and characterKey(record.name) == key then
+            if not tostring(record.text or ""):find(" by ", 1, true) then
+                local previousId = record.id
+                record.text = tostring(record.text or ""):gsub("%.$", "") .. " by " .. officer .. "."
+                record.id = eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
+                if previousId then store.guildLogIds[previousId] = nil end
+                store.guildLogIds[record.id] = true
+                self:BroadcastGuildLog(record)
+                if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+            end
+            knownGuildRankChanges[key] = nil
             return true
         end
     end
@@ -890,6 +1037,55 @@ function Identity:ReceiveSync(parts, sender)
         if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
         return false
     end
+    local _, duplicateRank = findRecentRankTransition(store, eventType, name, text, occurredAt)
+    if duplicateRank then
+        store.guildLogIds[id] = true
+        local incomingHasOfficer = text:find(" by ", 1, true) ~= nil
+        local existingHasOfficer = tostring(duplicateRank.text or ""):find(" by ", 1, true) ~= nil
+        local changed = false
+        if incomingHasOfficer and not existingHasOfficer then
+            duplicateRank.id, duplicateRank.text = id, text
+            changed = true
+        end
+        if classFile ~= "" and not duplicateRank.classFile then
+            duplicateRank.classFile = classFile
+            changed = true
+        end
+        if occurredAt < (tonumber(duplicateRank.occurredAt) or occurredAt) then
+            duplicateRank.occurredAt = math.floor(occurredAt)
+            table.sort(store.guildLog, function(a, b)
+                return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0)
+            end)
+            changed = true
+        end
+        if changed and iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        return false
+    end
+    -- A stale roster baseline on another officer can rediscover the same
+    -- member hours later. Membership events are transitions, so another JOIN
+    -- is not valid until a LEAVE/KICK has occurred (and vice versa).
+    local _, duplicateMembership = findDuplicateMembershipTransition(store, eventType, name, occurredAt)
+    if duplicateMembership then
+        store.guildLogIds[id] = true
+        local changed = enrichDuplicateMembershipRecord(duplicateMembership, {
+            eventType = eventType, text = text,
+            classFile = classFile ~= "" and classFile or nil,
+        })
+        if occurredAt < (tonumber(duplicateMembership.occurredAt) or occurredAt) then
+            duplicateMembership.occurredAt = math.floor(occurredAt)
+            table.sort(store.guildLog, function(a, b)
+                return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0)
+            end)
+            changed = true
+        end
+        if duplicateMembership.eventType == "KICK" then
+            local former = store.formerMembers[characterKey(name)]
+            local officer = tostring(duplicateMembership.text or ""):match(" removed from the guild by (.-)%.")
+            if former and officer then former.departureType = "Removed by " .. officer end
+        end
+        if changed and iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        return false
+    end
     -- Different clients can observe one roster change on different refreshes.
     -- Treat matching details within the observation window as one event even
     -- when their timestamp-based IDs differ.
@@ -1015,8 +1211,17 @@ function Identity:ScanRoster()
                 local promoted = (tonumber(member.rankIndex) or 99) < (tonumber(previous.rankIndex) or 99)
                 local oldRank = previous.rankName or ("rank " .. tostring(previous.rankIndex))
                 local newRank = member.rankName or ("rank " .. tostring(member.rankIndex))
+                local action = promoted and "PROMOTE" or "DEMOTE"
+                local knownRankChange = knownGuildRankChanges[key]
+                if knownRankChange and (knownRankChange.action ~= action
+                    or time() - (tonumber(knownRankChange.recordedAt) or 0) > GUILD_LOG_DUPLICATE_WINDOW) then
+                    knownGuildRankChanges[key], knownRankChange = nil, nil
+                end
+                local officerSuffix = knownRankChange and (" by " .. knownRankChange.officer) or ""
                 addGuildLog(store, promoted and "PROMOTE" or "DEMOTE", member.name,
-                    iRC:FormatPlayerName(member.name) .. " was " .. (promoted and "promoted" or "demoted") .. " from " .. oldRank .. " to " .. newRank .. ".", member.classFile)
+                    iRC:FormatPlayerName(member.name) .. " was " .. (promoted and "promoted" or "demoted")
+                        .. " from " .. oldRank .. " to " .. newRank .. officerSuffix .. ".", member.classFile)
+                if knownRankChange then knownGuildRankChanges[key] = nil end
                 history.rankHistory[#history.rankHistory + 1] = {
                     changedAt = time(), fromRank = oldRank, toRank = newRank,
                     fromRankIndex = previous.rankIndex, toRankIndex = member.rankIndex,
@@ -1106,7 +1311,36 @@ end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
-frame:SetScript("OnEvent", function(_, event)
+frame:RegisterEvent("CHAT_MSG_SYSTEM")
+frame:SetScript("OnEvent", function(_, event, message)
+    if event == "CHAT_MSG_SYSTEM" then
+        if iRC:IsSecretValue(message) then return end
+        local plain = tostring(message or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+            :gsub("|H.-|h(.-)|h", "%1")
+        local action, officer, member
+        member = plain:match("^You have promoted (.-) to .+%.$")
+        if member then
+            action, officer = "PROMOTE", iRC:GetPlayerName()
+        else
+            officer, member = plain:match("^(.+) has promoted (.-) to .+%.$")
+            if officer then action = "PROMOTE" end
+        end
+        if not member then
+            member = plain:match("^You have demoted (.-) to .+%.$")
+            if member then
+                action, officer = "DEMOTE", iRC:GetPlayerName()
+            else
+                officer, member = plain:match("^(.+) has demoted (.-) to .+%.$")
+                if officer then action = "DEMOTE" end
+            end
+        end
+        if action and member then
+            officer = tostring(officer or ""):gsub("^%[", ""):gsub("%]$", "")
+            member = tostring(member):gsub("^%[", ""):gsub("%]$", "")
+            Identity:RecordKnownGuildRankChange(member, action, officer)
+        end
+        return
+    end
     if not C_Timer or not C_Timer.After then return end
     C_Timer.After(event == "PLAYER_LOGIN" and 5 or 1, function()
         if event == "PLAYER_LOGIN" then

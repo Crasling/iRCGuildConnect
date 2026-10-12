@@ -2,6 +2,27 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.23 - Exports, Guild Log & Layer Detection
+--------------------------------------------------------------------------------
+[ADDED] Guild Members and Guild Overview provide copyable CSV reports for roster details, linked identities, activity, and distribution statistics
+[ADDED] Guild Log promotion and demotion entries identify the officer when reported by iRC rank management or WoW's guild system message
+[ADDED] Guild Map detects the local Forever layer from nearby target, mouseover, and nameplate NPC observations and uses iRCComms to keep its 1-99 layer assignment consistent between users
+[ADDED] A compact movable layer panel stays visible outside iRC independently of guild rules and can be disabled from Personal Settings
+[FIXED] Guild Verification shows Needs Attention whenever an active guild rule requires addon verification
+[FIXED] Opening iRC no longer prevents Enter from opening chat through custom keyboard handling or retained hidden-field focus
+[FIXED] Guild Log merges duplicate membership transitions and virtualizes long histories for smooth scrolling
+[FIXED] Guild Member and Member Management cards keep names, tags, activity, and grey detail text clearly separated and aligned
+[FIXED] Local layer detection rejects secret or malformed GUID values and reads the layer-specific zoneUID field used by Nova World Buffs
+[FIXED] Automatic layer sharing discovers users through iRCComms and sends addon whispers without calling the protected public-chat API
+[FIXED] Personal Settings keeps its scroll position when an option is enabled or disabled
+[FIXED] Resizing the layer panel keeps its opposite corner fixed instead of shifting the panel around its old anchor
+[CHANGED] Notification descriptions clarify that enabled messages remain inactive until their related guild rules are active
+[CHANGED] Guild Member and Member Management cards use consistent Main, Alt, Personal Bank, and Pending Alt presentation
+[CHANGED] Permission rank selectors use styled iRC dropdowns with clearer selected-rank and disabled states
+[CHANGED] Specific Member Access lists members with individual grants as clickable, class-colored entries with grant counts and permission tooltips
+[CHANGED] The movable layer panel uses larger text and includes a persistent bottom-right scale handle
+[CHANGED] Right-clicking the layer panel locks or unlocks it, and locking hides its resize handle
+
 v0.5.22 - Guild Member & Interface Improvements
 --------------------------------------------------------------------------------
 [ADDED] Member Management combines Inactive Members, Rank Management, and searchable Kick Specific tools, including optional linked Main, Alt, and Personal Bank removal

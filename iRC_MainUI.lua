@@ -8,6 +8,8 @@ local expandedGuildCards = {}
 local guildStatsFilter = "ALL"
 local collapsedFactionSections = {}
 local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
+local MEMBER_MANAGEMENT_ROW_HEIGHT = 44
+local MEMBER_MANAGEMENT_ROW_SPACING = 48
 
 -- A Self-Found journey that transitions at the level cap is ultimately a
 -- Guild-Found ruleset, so present and filter it consistently as Guild-Found.
@@ -55,6 +57,24 @@ local COLORS = {
     muted = iRC.ColorValues.Gray,
     parchment = iRC.ColorValues.Orange,
 }
+
+local function clearOwnedKeyboardFocus(root, hiddenOnly)
+    if not root or type(GetCurrentKeyBoardFocus) ~= "function" then return false end
+    local focus = GetCurrentKeyBoardFocus()
+    if not focus then return false end
+    local owner = focus
+    while owner do
+        if owner == root then
+            if not hiddenOnly or not focus.IsVisible or not focus:IsVisible() then
+                if focus.ClearFocus then focus:ClearFocus() end
+                return true
+            end
+            return false
+        end
+        owner = owner.GetParent and owner:GetParent() or nil
+    end
+    return false
+end
 
 local function infoSection(title, first)
     return (first and "" or "\n") .. iRC.Colors.Orange
@@ -161,15 +181,22 @@ local function makeMemberRow(parent, index)
     row.name:SetWidth(220)
     row.name:SetJustifyH("LEFT")
     row.onlineTag = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.onlineTag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
-    row.onlineTag:SetText("[Online]")
+    row.onlineTag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -7)
+    row.onlineTag:SetWidth(150)
+    row.onlineTag:SetJustifyH("RIGHT")
+    row.onlineTag:SetText("ONLINE")
     row.onlineTag:SetTextColor(0.30, 1, 0.35)
     row.tag = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.tag:SetPoint("LEFT", row.onlineTag, "RIGHT", 6, 0)
+    row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
     row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
     row.detail:SetJustifyH("LEFT")
+    row.identityDetail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.identityDetail:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -14, 7)
+    row.identityDetail:SetWidth(250)
+    row.identityDetail:SetJustifyH("RIGHT")
+    row.identityDetail:Hide()
     return row
 end
 
@@ -181,6 +208,7 @@ local function setMemberRowDensity(row, compact)
     if row.rankAccent then row.rankAccent:Hide() end
     if row.rankIdentity then row.rankIdentity:Hide() end
     if row.rankActions then row.rankActions:Hide() end
+    if row.identityDetail then row.identityDetail:Hide() end
     row:SetBackdropColor(0.10, 0.085, 0.07, 0.96)
     row:SetBackdropBorderColor(0.28, 0.25, 0.20, 1)
     row:SetHeight(compact and 40 or 44)
@@ -196,17 +224,17 @@ local function rankIdentityPresentation(name)
     if not iRC.Identity then return nil end
     local label = iRC.Identity:GetIdentityLabel(name)
     if not label then return nil end
-    if label == "Main" then return "MAIN", { 0.30, 1.00, 0.35 } end
+    if label == "Main" then return "Main", { 0.30, 1.00, 0.35 }, "Main character" end
     local mainName = iRC.Identity:GetMainCharacterName(name)
         or label:match("[Aa]lt of (.+)$") or "Unknown"
     mainName = iRC:FormatPlayerName(mainName)
     if label:find("Personal Bank Alt", 1, true) then
-        return "BANK ALT OF " .. mainName, { 0.40, 0.80, 1.00 }
+        return "Personal Bank", { 0.40, 0.80, 1.00 }, "Personal Bank Alt of " .. mainName
     end
     if label:find("Pending", 1, true) then
-        return "PENDING ALT OF " .. mainName, { 1.00, 0.72, 0.22 }
+        return "Pending Alt", { 1.00, 0.72, 0.22 }, "Pending Alt of " .. mainName
     end
-    return "ALT OF " .. mainName, { 0.72, 0.58, 1.00 }
+    return "Alt", { 0.70, 0.55, 1.00 }, "Alt of " .. mainName
 end
 
 local function prepareRankCard(row)
@@ -1775,6 +1803,9 @@ function UI:Create()
         if iRC.RecordConfirmedGuildRankChange then
             iRC:RecordConfirmedGuildRankChange(confirmedName, confirmedRank)
         end
+        if iRC.Identity and iRC.Identity.RecordKnownGuildRankChange then
+            iRC.Identity:RecordKnownGuildRankChange(confirmedName, rankQueue.action, iRC:GetPlayerName())
+        end
         rankQueue.waitingByKey[key] = nil
         rankQueue.changed = (rankQueue.changed or 0) + 1
         iRC:Print((rankQueue.action == "PROMOTE" and "Promoted " or "Demoted ")
@@ -2005,6 +2036,9 @@ function UI:Create()
         rankQueue.waitingByKey = {}
         for _, name in ipairs(rankQueue.waitingNames) do
             rankQueue.waitingByKey[iRC:NormalizeName(name)] = name
+            if iRC.Identity and iRC.Identity.RecordKnownGuildRankChange then
+                iRC.Identity:RecordKnownGuildRankChange(name, rankQueue.action, iRC:GetPlayerName())
+            end
         end
         rankQueue.body:SetText("Waiting for WoW to confirm " .. #rankQueue.waitingNames .. " rank changes...")
         rankQueue.apply:SetEnabled(false)
@@ -2326,7 +2360,9 @@ function UI:Create()
                         resetInactiveMemberView(frame)
                     end
                     frame.category = self.category
-                    if (self.category == "Guild Overview" or self.category == "Guild Rules") and frame.scroll then
+                    if (self.category == "Guild Overview" or self.category == "Guild Rules"
+                        or (self.category == "Personal Settings" and previousCategory ~= self.category))
+                        and frame.scroll then
                         frame.scroll:SetVerticalScroll(0)
                     end
                     if self.category == "Race Overview" then
@@ -2539,6 +2575,9 @@ function UI:Create()
     end)
     frame.guildOverviewAltToggle:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     frame.guildOverviewAltToggle:Hide()
+    frame.guildOverviewExport = makeIRCActionButton(main, 112, 25, "Export CSV", false)
+    frame.guildOverviewExport:SetPoint("RIGHT", frame.guildOverviewAltToggle, "LEFT", -8, 0)
+    frame.guildOverviewExport:Hide()
     frame.rulesViewToggle = CreateFrame("Button", nil, main, "BackdropTemplate")
     frame.rulesViewToggle:SetSize(150, 27)
     frame.rulesViewToggle:SetPoint("TOPRIGHT", main, "TOPRIGHT", -14, -9)
@@ -2597,6 +2636,9 @@ function UI:Create()
         end)
         frame.memberOnlineFilters[index] = button
     end
+    frame.memberExport = makeIRCActionButton(main, 126, 25, "Export CSV", false)
+    frame.memberExport:SetPoint("TOPRIGHT", main, "TOPRIGHT", -18, -47)
+    frame.memberExport:Hide()
 
     frame.guildStatsFilters = {}
     for index, filter in ipairs({
@@ -3226,7 +3268,11 @@ function UI:Create()
     content:SetHeight(1)
     scroll:SetScrollChild(content)
     scroll:HookScript("OnVerticalScroll", function()
-        if frame.category == "Guild Members" then UI:RenderMemberRows() end
+        if frame.category == "Guild Members" then
+            UI:RenderMemberRows()
+        elseif frame.category == "Guild Log" and UI.RenderGuildLogRows then
+            UI:RenderGuildLogRows()
+        end
     end)
     frame.scrollContent = content
     local professionReport = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -3273,6 +3319,175 @@ function UI:Create()
     professionReport:Hide()
     frame.professionReport = professionReport
     frame:RegisterModalPopup(professionReport)
+
+    local exportReport = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    exportReport:SetSize(700, 520)
+    exportReport:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    exportReport:SetClampedToScreen(true)
+    exportReport:SetMovable(true)
+    exportReport:EnableMouse(true)
+    exportReport:RegisterForDrag("LeftButton")
+    exportReport:SetScript("OnDragStart", exportReport.StartMoving)
+    exportReport:SetScript("OnDragStop", exportReport.StopMovingOrSizing)
+    createBackdrop(exportReport, { 0.025, 0.022, 0.018, 1 }, { 0.75, 0.48, 0.13, 1 })
+    exportReport.title = exportReport:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    exportReport.title:SetPoint("TOPLEFT", 18, -16)
+    exportReport.title:SetText("Guild Member CSV Export")
+    exportReport.title:SetTextColor(unpack(COLORS.gold))
+    exportReport.subtitle = exportReport:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    exportReport.subtitle:SetPoint("TOPLEFT", exportReport.title, "BOTTOMLEFT", 0, -7)
+    exportReport.subtitle:SetPoint("TOPRIGHT", exportReport, "TOPRIGHT", -46, -39)
+    exportReport.subtitle:SetJustifyH("LEFT")
+    exportReport.subtitle:SetTextColor(0.72, 0.72, 0.72)
+    local exportClose = CreateFrame("Button", nil, exportReport, "UIPanelCloseButton")
+    exportClose:SetPoint("TOPRIGHT", 3, 3)
+    exportClose:SetScript("OnClick", function() exportReport:Hide() end)
+    local exportDivider = exportReport:CreateTexture(nil, "ARTWORK")
+    exportDivider:SetPoint("TOPLEFT", exportReport, "TOPLEFT", 18, -67)
+    exportDivider:SetPoint("TOPRIGHT", exportReport, "TOPRIGHT", -18, -67)
+    exportDivider:SetHeight(1)
+    exportDivider:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.5)
+
+    local exportBox = CreateFrame("Frame", nil, exportReport, "BackdropTemplate")
+    exportBox:SetPoint("TOPLEFT", exportReport, "TOPLEFT", 18, -80)
+    exportBox:SetPoint("BOTTOMRIGHT", exportReport, "BOTTOMRIGHT", -18, 58)
+    createBackdrop(exportBox, { 0.012, 0.012, 0.012, 0.98 }, { 0.34, 0.28, 0.20, 0.95 })
+    local exportScroll = CreateFrame("ScrollFrame", nil, exportBox, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(exportScroll)
+    exportScroll:SetPoint("TOPLEFT", exportBox, "TOPLEFT", 9, -9)
+    exportScroll:SetPoint("BOTTOMRIGHT", exportBox, "BOTTOMRIGHT", -28, 9)
+    exportReport.output = CreateFrame("EditBox", nil, exportScroll)
+    exportReport.output:SetMultiLine(true)
+    exportReport.output:SetAutoFocus(false)
+    exportReport.output:SetFontObject("GameFontHighlightSmall")
+    exportReport.output:SetWidth(600)
+    exportReport.output:SetHeight(360)
+    exportReport.output:SetTextInsets(4, 4, 4, 4)
+    exportReport.output:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+        exportReport:Hide()
+    end)
+    exportReport.output:SetScript("OnTextChanged", function(self)
+        local lineCount = 1
+        for _ in tostring(self:GetText() or ""):gmatch("\n") do lineCount = lineCount + 1 end
+        self:SetHeight(math.max(360, lineCount * 14 + 20))
+        exportScroll:UpdateScrollChildRect()
+    end)
+    exportScroll:SetScrollChild(exportReport.output)
+
+    exportReport.copy = makeIRCActionButton(exportReport, 150, 28, "Select All", false)
+    exportReport.copy:SetPoint("BOTTOMRIGHT", exportReport, "BOTTOMRIGHT", -18, 17)
+    exportReport.copy:SetScript("OnClick", function()
+        exportReport.output:SetFocus()
+        exportReport.output:HighlightText()
+    end)
+    exportReport.hint = exportReport:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    exportReport.hint:SetPoint("RIGHT", exportReport.copy, "LEFT", -12, 0)
+    exportReport.hint:SetText("Select All, then press Ctrl+C to copy")
+
+    local function csvField(value)
+        local text = tostring(value == nil and "" or value)
+        if text:find('[,"\r\n]') then text = '"' .. text:gsub('"', '""') .. '"' end
+        return text
+    end
+    local function lastOnlineText(member)
+        if member.online then return "Online now", "0" end
+        local days = tonumber(member.lastOnlineDays)
+        if not days then return "Unknown", "" end
+        if days < (1 / 24) then return "Less than 1 hour ago", string.format("%.2f", days) end
+        if days < 1 then
+            return tostring(math.max(1, math.floor(days * 24 + 0.5))) .. " hours ago", string.format("%.2f", days)
+        end
+        return tostring(math.floor(days + 0.5)) .. " days ago", string.format("%.2f", days)
+    end
+    function exportReport:Generate()
+        self.title:SetText("Guild Member CSV Export")
+        local roster = {}
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do roster[#roster + 1] = member end
+        table.sort(roster, function(a, b)
+            return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name)
+        end)
+        local lines = {
+            "Name,Class,Level,Rank,Status,Last Online,Last Online Days,Identity,Main Character",
+        }
+        for _, member in ipairs(roster) do
+            local lastOnline, lastOnlineDays = lastOnlineText(member)
+            local identity = iRC.Identity and iRC.Identity:GetIdentityLabel(member.name) or ""
+            local mainName = iRC.Identity and iRC.Identity:GetMainCharacterName(member.name) or ""
+            if identity == "Main" then mainName = member.name end
+            lines[#lines + 1] = table.concat({
+                csvField(iRC:FormatPlayerName(member.name)),
+                csvField(member.className or member.classFile or "Unknown"),
+                csvField(member.level or ""),
+                csvField(member.rankName or "Unknown"),
+                csvField(member.online and "Online" or "Offline"),
+                csvField(lastOnline),
+                csvField(lastOnlineDays),
+                csvField(identity),
+                csvField(mainName ~= "" and iRC:FormatPlayerName(mainName) or ""),
+            }, ",")
+        end
+        self.output:SetText(table.concat(lines, "\n"))
+        self.output:SetCursorPosition(0)
+        self.output:HighlightText(0, 0)
+        exportScroll:SetVerticalScroll(0)
+        local guildName = GetGuildInfo and GetGuildInfo("player") or nil
+        self.subtitle:SetText(tostring(guildName or "Current guild") .. "  ·  " .. tostring(#roster)
+            .. " members  ·  Last-online times are approximate roster values")
+    end
+    function exportReport:GenerateOverview()
+        local data = frame.guildOverview and frame.guildOverview.exportData
+        if not data then return false end
+        self.title:SetText("Guild Overview CSV Export")
+        local lines = { "Guild,Section,Metric,Value,Total,Percent,Notes" }
+        local function add(section, metric, value, total, notes)
+            local numericValue, numericTotal = tonumber(value), tonumber(total)
+            local percent = numericValue and numericTotal and numericTotal > 0
+                and string.format("%.1f%%", numericValue / numericTotal * 100) or ""
+            lines[#lines + 1] = table.concat({
+                csvField(data.guildName), csvField(section), csvField(metric), csvField(value),
+                csvField(total), csvField(percent), csvField(notes),
+            }, ",")
+        end
+        add("Summary", "Guild Members", data.total, "", data.scope)
+        add("Summary", "Online Now", data.online, data.total,
+            data.onlineViaAlt > 0 and (tostring(data.onlineViaAlt) .. " online via alt") or "")
+        add("Summary", "Active This Month", data.active30, data.total, "")
+        add("Summary", "Needs Attention", data.attention, data.total, data.attentionNote)
+        add("Summary", "Guild Activity Score", data.vitality, 100, "Weighted from known last-online values")
+        add("Summary", "Online Using iRC", data.verifiedOnline, data.online, "")
+        add("Summary", "Inactive 30+ Days", data.inactive30, data.total, "")
+        for index, label in ipairs(data.levelLabels) do
+            add("Level Distribution", label, data.levelCounts[index] or 0, data.total, "")
+        end
+        for _, class in ipairs(data.classes) do
+            add("Class Distribution", class.label, class.total, data.total,
+                tostring(class.active) .. " active this month")
+        end
+        for index, label in ipairs(data.retentionLabels) do
+            add("Member Activity", label, data.retention[index] or 0, data.total, "")
+        end
+        self.output:SetText(table.concat(lines, "\n"))
+        self.output:SetCursorPosition(0)
+        self.output:HighlightText(0, 0)
+        exportScroll:SetVerticalScroll(0)
+        self.subtitle:SetText(data.guildName .. "  ·  " .. data.scope .. "  ·  Generated " .. data.generatedAt)
+        return true
+    end
+    exportReport:Hide()
+    frame.memberExportReport = exportReport
+    frame:RegisterModalPopup(exportReport)
+    frame.memberExport:SetScript("OnClick", function()
+        exportReport:Generate()
+        exportReport:Show()
+        exportReport:Raise()
+    end)
+    frame.guildOverviewExport:SetScript("OnClick", function()
+        if not exportReport:GenerateOverview() then return end
+        exportReport:Show()
+        exportReport:Raise()
+    end)
+
     local function showMemberProfile(profile)
         if not profile then return end
         local normalizedName = iRC:NormalizeName(profile.name)
@@ -3891,6 +4106,7 @@ function UI:Create()
     function frame:CloseModalPopups()
         rankMemberMenu:Hide()
         professionReport:Hide()
+        exportReport:Hide()
         guildReport:Hide()
         disableConfirm:Hide()
         assignAltPopup:Hide()
@@ -3899,30 +4115,10 @@ function UI:Create()
         if rankQueue.active then rankQueue:Cancel() else rankQueue:Hide() end
         self.modalShield:Hide()
         self.modalDragHandle:Hide()
+        self:RefreshModalShield()
     end
-    frame:EnableKeyboard(true)
-    if frame.SetPropagateKeyboardInput then frame:SetPropagateKeyboardInput(true) end
-    frame:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(false) end
-            if self.escapeHandled then return end
-            self.escapeHandled = true
-            if self.modalShield:IsShown() then
-                self:CloseModalPopups()
-            else
-                self:Hide()
-            end
-        elseif self.SetPropagateKeyboardInput then
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    frame:SetScript("OnKeyUp", function(self, key)
-        if key == "ESCAPE" then self.escapeHandled = nil end
-        if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(true) end
-    end)
     frame:HookScript("OnHide", function()
-        frame.escapeHandled = nil
-        if frame.SetPropagateKeyboardInput then frame:SetPropagateKeyboardInput(true) end
+        clearOwnedKeyboardFocus(frame, false)
         resetInactiveMemberView(frame)
         memberMenu:Hide()
         frame:CloseModalPopups()
@@ -3962,7 +4158,7 @@ local function ensurePersonalSettings(frame)
     if frame.personalSettings then return frame.personalSettings end
 
     local page = CreateFrame("Frame", nil, frame.scrollContent)
-    page:SetSize(675, 806)
+    page:SetSize(675, 856)
     page:SetPoint("TOPLEFT")
     page.controls = {}
 
@@ -4086,7 +4282,7 @@ local function ensurePersonalSettings(frame)
             iRCCharDB.hideAllChatIcons = value and true or false
         end)
 
-    local layoutCard = makeCard(412, 150, "Panel & Map Appearance")
+    local layoutCard = makeCard(412, 200, "Panel & Map Appearance")
     local pinLabel = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     pinLabel:SetPoint("TOPLEFT", 16, -39)
     pinLabel:SetText(iRC:Text("GUILD_MAP_PIN_SIZE"))
@@ -4149,6 +4345,13 @@ local function ensurePersonalSettings(frame)
     scaleSlider:HookScript("OnMouseUp", finishScaleSliderDrag)
     page.scaleSlider, page.scaleValue = scaleSlider, scaleValue
 
+    makeToggle(layoutCard, -104, iRC:Text("LAYER_PANEL_SHOW"), iRC:Text("LAYER_PANEL_SHOW_DESC"),
+        function() return iRC:GetSettings().showLayerPanel ~= false end,
+        function(value)
+            if iRC.GuildMap then iRC.GuildMap:SetLayerPanelShown(value)
+            else iRC:GetSettings().showLayerPanel = value and true or false end
+        end)
+
     local reset = makeIRCActionButton(layoutCard, 180, 27, iRC:Text("IRC_MAIN_WINDOW_RESET"), false)
     reset:SetPoint("BOTTOM", layoutCard, "BOTTOM", 0, 12)
     reset:SetScript("OnClick", function()
@@ -4157,7 +4360,7 @@ local function ensurePersonalSettings(frame)
         iRC:Print(iRC:Text("MAIN_WINDOW_RESET_DONE"))
     end)
 
-    local roleplayCard = makeCard(572, 234, "Character Speech")
+    local roleplayCard = makeCard(622, 234, "Character Speech")
     page.roleplayControls = {}
     local function addRoleplayToggle(y, label, description, settingKey, available)
         local button = makeToggle(roleplayCard, y, label, description,
@@ -4221,7 +4424,6 @@ local function updatePersonalSettings(frame)
     page.refreshing = nil
     page:Show()
     frame.scrollContent:SetHeight(page:GetHeight())
-    frame.scroll:SetVerticalScroll(0)
     frame.contentTitle:SetText("Personal Settings")
     frame.contentSubtitle:SetText("Your character identity, visibility, chat icons, map markers, panel appearance, and character speech.")
 end
@@ -4273,15 +4475,35 @@ function UI:RenderMemberRows()
         end
         row.name:SetText(iRC:FormatPlayerName(profile.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
-        row.onlineTag:SetShown(profile.online == true)
+        if profile.online == true then
+            row.onlineTag:SetText("ONLINE")
+            row.onlineTag:SetTextColor(0.30, 1, 0.35)
+        else
+            local days = tonumber(profile.lastOnlineDays)
+            row.onlineTag:SetText(days and ("OFFLINE  ·  " .. tostring(math.floor(days + 0.5)) .. "d") or "OFFLINE")
+            row.onlineTag:SetTextColor(0.58, 0.58, 0.58)
+        end
+        row.onlineTag:Show()
         row.tag:ClearAllPoints()
-        row.tag:SetPoint("LEFT", profile.online == true and row.onlineTag or row.name, "RIGHT", profile.online == true and 6 or 8, 0)
+        row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
         row.tag:SetText(memberTag and ("[" .. memberTag .. "]") or "")
         if tagColor then row.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
         row.tag:SetShown(memberTag ~= nil)
         row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
+        row.detail:ClearAllPoints()
+        row.detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 14, 5)
         row.detail:SetText((profile.race or "Unknown") .. " · " .. (profile.class or "Unknown") .. " · Level " .. (profile.level or 1))
-        if identityLabel then row.detail:SetText(row.detail:GetText() .. " | " .. identityLabel) end
+        row.identityDetail:ClearAllPoints()
+        row.identityDetail:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -14, 5)
+        if identityLabel then
+            row.detail:SetPoint("RIGHT", row.identityDetail, "LEFT", -14, 0)
+            row.identityDetail:SetText(identityLabel == "Main" and "Main character" or identityLabel)
+            row.identityDetail:SetTextColor(0.58, 0.58, 0.58)
+            row.identityDetail:Show()
+        else
+            row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
+            row.identityDetail:Hide()
+        end
         row.profileName = profile.name
         local professionData = profile.professionData
         local professionNames = {}
@@ -4517,11 +4739,159 @@ local function styleGuildLogDateMarker(marker, label, isToday)
     marker.rightLine:SetColorTexture(lineColor[1], lineColor[2], lineColor[3], isToday and 0.85 or 0.65)
 end
 
+local function renderGuildLogEventRow(frame, row, entry)
+    local record = entry.record
+    setMemberRowDensity(row, true)
+    row:SetHeight(34)
+    row:SetAlpha(1)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -entry.offset)
+    row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -entry.offset)
+
+    local timestamp = tonumber(record.occurredAt)
+    row.name:ClearAllPoints()
+    row.name:SetPoint("RIGHT", row, "RIGHT", -14, 0)
+    row.name:SetWidth(75)
+    row.name:SetJustifyH("RIGHT")
+    row.name:SetFontObject(GameFontDisableSmall)
+    row.name:SetText(timestamp and date("%H:%M", timestamp) or "Unknown time")
+    row.name:SetTextColor(0.55, 0.55, 0.55)
+
+    local classFile = record.classFile or (frame.guildLogClasses or {})[iRC:NormalizeName(record.name)]
+    local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+    row.onlineTag:Hide()
+    local eventType = tostring(record.eventType or "CHANGE")
+    local eventLabel = eventType:gsub("_", " ")
+    row.tag:ClearAllPoints()
+    row.tag:SetPoint("LEFT", row, "LEFT", 14, 0)
+    row.tag:SetText("[" .. eventLabel .. "]")
+    row.tag:SetTextColor(unpack(GUILD_LOG_COLORS[record.eventType] or COLORS.parchment))
+    row.tag:Show()
+
+    if not row.logTagButton then
+        local tagButton = CreateFrame("Button", nil, row)
+        tagButton:SetHeight(28)
+        tagButton:EnableMouse(true)
+        tagButton:RegisterForClicks("LeftButtonUp")
+        tagButton:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        tagButton:SetScript("OnClick", function(self)
+            if not self.searchText or self.searchText == "" then return end
+            frame.guildLogSearch:SetText(self.searchText)
+            frame.guildLogSearch:ClearFocus()
+            if frame.guildLogSearch.suggestions then frame.guildLogSearch.suggestions:Hide() end
+        end)
+        row.logTagButton = tagButton
+    end
+    row.logTagButton:ClearAllPoints()
+    row.logTagButton:SetPoint("LEFT", row.tag, "LEFT", -6, 0)
+    row.logTagButton:SetWidth(math.max(44, row.tag:GetStringWidth() + 12))
+    row.logTagButton.searchText = eventLabel
+    row.logTagButton:Show()
+
+    local eventText = record.text or "Guild roster changed."
+    local eventName = tostring(record.name or "")
+    local nameStart = eventName ~= "" and eventText:find(eventName, 1, true) or nil
+    if not row.logNameButton then
+        local nameButton = CreateFrame("Button", nil, row)
+        nameButton:SetHeight(28)
+        nameButton:RegisterForClicks("LeftButtonUp")
+        nameButton:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        nameButton.text = nameButton:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        nameButton.text:SetPoint("CENTER")
+        nameButton:SetScript("OnClick", function(self)
+            if not self.searchText or self.searchText == "" then return end
+            frame.guildLogSearch:SetText(self.searchText)
+            frame.guildLogSearch:ClearFocus()
+            frame.guildLogSearch.suggestions:Hide()
+        end)
+        row.logNameButton = nameButton
+        row.logSuffix = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.logSuffix:SetJustifyH("LEFT")
+        row.logSuffix:SetWordWrap(false)
+    end
+
+    row.detail:ClearAllPoints()
+    row.detail:SetPoint("LEFT", row.tag, "RIGHT", 10, 0)
+    row.detail:SetWordWrap(false)
+    if nameStart then
+        local nameEnd = nameStart + #eventName - 1
+        row.detail:SetText(eventText:sub(1, nameStart - 1))
+        row.detail:SetWidth(math.max(1, row.detail:GetStringWidth()))
+        row.logNameButton:ClearAllPoints()
+        row.logNameButton:SetPoint("LEFT", row.detail, "RIGHT", 0, 0)
+        row.logNameButton.text:SetText(eventName)
+        local nameColor = classColor or COLORS.gold
+        row.logNameButton.text:SetTextColor(nameColor.r or nameColor[1] or 1,
+            nameColor.g or nameColor[2] or 0.67, nameColor.b or nameColor[3] or 0.15)
+        row.logNameButton:SetWidth(math.max(8, row.logNameButton.text:GetStringWidth() + 4))
+        row.logNameButton.searchText = eventName
+        row.logNameButton:Show()
+        row.logSuffix:ClearAllPoints()
+        row.logSuffix:SetPoint("LEFT", row.logNameButton, "RIGHT", 0, 0)
+        row.logSuffix:SetPoint("RIGHT", row.name, "LEFT", -12, 0)
+        row.logSuffix:SetText(eventText:sub(nameEnd + 1))
+        row.logSuffix:Show()
+    else
+        row.detail:SetPoint("RIGHT", row.name, "LEFT", -12, 0)
+        row.detail:SetText(eventText)
+        row.logNameButton:Hide()
+        row.logSuffix:Hide()
+    end
+    row:SetScript("OnClick", nil)
+    row:SetScript("OnEnter", nil)
+    row:SetScript("OnLeave", nil)
+    row:EnableMouse(false)
+    row:Show()
+end
+
+function UI:RenderGuildLogRows()
+    local frame = self.frame
+    if not frame or frame.category ~= "Guild Log" then return end
+    local entries = frame.guildLogLayout or {}
+    frame.guildLogDateMarkers = frame.guildLogDateMarkers or {}
+    local scrollTop = frame.scroll:GetVerticalScroll() or 0
+    local scrollHeight = frame.scroll:GetHeight() or 0
+    if scrollHeight < 1 then scrollHeight = 480 end
+    local visibleTop = math.max(0, scrollTop - 40)
+    local visibleBottom = scrollTop + scrollHeight + 40
+    local rowSlot, markerSlot = 0, 0
+
+    for _, entry in ipairs(entries) do
+        if entry.offset > visibleBottom then break end
+        if entry.offset + entry.height >= visibleTop then
+            if entry.kind == "DATE" then
+                markerSlot = markerSlot + 1
+                local marker = frame.guildLogDateMarkers[markerSlot]
+                if not marker then
+                    marker = createGuildLogDateMarker(frame.scrollContent)
+                    frame.guildLogDateMarkers[markerSlot] = marker
+                end
+                marker:ClearAllPoints()
+                marker:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -entry.offset)
+                marker:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -entry.offset)
+                styleGuildLogDateMarker(marker, entry.label, entry.isToday)
+                marker:Show()
+            else
+                rowSlot = rowSlot + 1
+                local row = frame.memberRows[rowSlot]
+                if not row then
+                    row = makeMemberRow(frame.scrollContent, rowSlot)
+                    frame.memberRows[rowSlot] = row
+                end
+                renderGuildLogEventRow(frame, row, entry)
+            end
+        end
+    end
+    for slot = rowSlot + 1, #frame.memberRows do frame.memberRows[slot]:Hide() end
+    for slot = markerSlot + 1, #frame.guildLogDateMarkers do frame.guildLogDateMarkers[slot]:Hide() end
+end
+
 local function updateGuildLog(frame)
     if iRC.Identity then iRC.Identity:RequestGuildHistory() end
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     frame.racePodium:Hide()
+
     local records = iRC.Identity and iRC.Identity:GetGuildLog() or {}
     local query = frame.guildLogSearch and frame.guildLogSearch:GetText() or ""
     query = query:match("^%s*(.-)%s*$"):lower()
@@ -4530,159 +4900,54 @@ local function updateGuildLog(frame)
         for _, record in ipairs(records) do
             local eventType = tostring(record.eventType or "")
             local searchable = table.concat({
-                record.name or "",
-                eventType,
-                eventType:gsub("_", " "),
-                record.text or "",
+                record.name or "", eventType, eventType:gsub("_", " "), record.text or "",
             }, " "):lower()
             if searchable:find(query, 1, true) then filtered[#filtered + 1] = record end
         end
         records = filtered
     end
+
     local currentClasses = {}
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         currentClasses[iRC:NormalizeName(member.name)] = member.classFile
     end
+    frame.guildLogClasses = currentClasses
     frame.guildLogDateMarkers = frame.guildLogDateMarkers or {}
-    for _, marker in ipairs(frame.guildLogDateMarkers) do marker:Hide() end
+
     local todayKey = date("%Y-%m-%d")
     local previousDateKey
-    local markerCount = 0
     local yOffset = 0
-    local dateSections = {}
-    for index, record in ipairs(records) do
+    local layout, dateSections = {}, {}
+    for _, record in ipairs(records) do
         local timestamp = tonumber(record.occurredAt)
         local dateKey = timestamp and date("%Y-%m-%d", timestamp) or "unknown"
         if dateKey ~= previousDateKey then
-            markerCount = markerCount + 1
-            local marker = frame.guildLogDateMarkers[markerCount]
-            if not marker then
-                marker = createGuildLogDateMarker(frame.scrollContent)
-                frame.guildLogDateMarkers[markerCount] = marker
-            end
             local isToday = dateKey == todayKey
             local label = (isToday and "TODAY  -  " or "") .. formatGuildLogDate(timestamp)
-            marker:ClearAllPoints()
-            marker:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
-            marker:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -yOffset)
-            styleGuildLogDateMarker(marker, label, isToday)
-            marker:Show()
+            layout[#layout + 1] = {
+                kind = "DATE", offset = yOffset, height = 28, label = label, isToday = isToday,
+            }
             dateSections[#dateSections + 1] = { offset = yOffset, label = label, isToday = isToday }
             yOffset = yOffset + 32
             previousDateKey = dateKey
         end
-        local row = frame.memberRows[index]
-        if not row then
-            row = makeMemberRow(frame.scrollContent, index)
-            frame.memberRows[index] = row
-        end
-        setMemberRowDensity(row, true)
-        row:SetHeight(34)
-        row:SetAlpha(1)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -yOffset)
-        local occurredAt = timestamp and date("%H:%M", timestamp) or "Unknown time"
-        row.name:ClearAllPoints()
-        row.name:SetPoint("RIGHT", row, "RIGHT", -14, 0)
-        row.name:SetWidth(75)
-        row.name:SetJustifyH("RIGHT")
-        row.name:SetFontObject(GameFontDisableSmall)
-        row.name:SetText(occurredAt)
-        row.name:SetTextColor(0.55, 0.55, 0.55)
-        local classFile = record.classFile or currentClasses[iRC:NormalizeName(record.name)]
-        local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
-        row.onlineTag:Hide()
-        local eventType = tostring(record.eventType or "CHANGE")
-        local eventLabel = eventType:gsub("_", " ")
-        row.tag:ClearAllPoints()
-        row.tag:SetPoint("LEFT", row, "LEFT", 14, 0)
-        row.tag:SetText("[" .. eventLabel .. "]")
-        row.tag:SetTextColor(unpack(GUILD_LOG_COLORS[record.eventType] or COLORS.parchment))
-        row.tag:Show()
-        if not row.logTagButton then
-            local tagButton = CreateFrame("Button", nil, row)
-            tagButton:SetHeight(28)
-            tagButton:EnableMouse(true)
-            tagButton:RegisterForClicks("LeftButtonUp")
-            tagButton:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            tagButton:SetScript("OnClick", function(self)
-                if not self.searchText or self.searchText == "" then return end
-                frame.guildLogSearch:SetText(self.searchText)
-                frame.guildLogSearch:ClearFocus()
-                if frame.guildLogSearch.suggestions then frame.guildLogSearch.suggestions:Hide() end
-            end)
-            row.logTagButton = tagButton
-        end
-        row.logTagButton:ClearAllPoints()
-        row.logTagButton:SetPoint("LEFT", row.tag, "LEFT", -6, 0)
-        row.logTagButton:SetWidth(math.max(44, row.tag:GetStringWidth() + 12))
-        row.logTagButton.searchText = eventLabel
-        row.logTagButton:Show()
-        local eventText = record.text or "Guild roster changed."
-        local eventName = tostring(record.name or "")
-        local nameStart, nameEnd = eventName ~= "" and eventText:find(eventName, 1, true) or nil, nil
-        if not row.logNameButton then
-            local nameButton = CreateFrame("Button", nil, row)
-            nameButton:SetHeight(28)
-            nameButton:RegisterForClicks("LeftButtonUp")
-            nameButton:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            nameButton.text = nameButton:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            nameButton.text:SetPoint("CENTER")
-            nameButton:SetScript("OnClick", function(self)
-                if not self.searchText or self.searchText == "" then return end
-                frame.guildLogSearch:SetText(self.searchText)
-                frame.guildLogSearch:ClearFocus()
-                frame.guildLogSearch.suggestions:Hide()
-            end)
-            row.logNameButton = nameButton
-            row.logSuffix = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.logSuffix:SetJustifyH("LEFT")
-            row.logSuffix:SetWordWrap(false)
-        end
-        row.detail:ClearAllPoints()
-        row.detail:SetPoint("LEFT", row.tag, "RIGHT", 10, 0)
-        row.detail:SetWordWrap(false)
-        if nameStart then
-            nameEnd = nameStart + #eventName - 1
-            row.detail:SetText(eventText:sub(1, nameStart - 1))
-            row.detail:SetWidth(math.max(1, row.detail:GetStringWidth()))
-            row.logNameButton:ClearAllPoints()
-            row.logNameButton:SetPoint("LEFT", row.detail, "RIGHT", 0, 0)
-            row.logNameButton.text:SetText(eventName)
-            local nameColor = classColor or COLORS.gold
-            row.logNameButton.text:SetTextColor(nameColor.r or nameColor[1] or 1,
-                nameColor.g or nameColor[2] or 0.67, nameColor.b or nameColor[3] or 0.15)
-            row.logNameButton:SetWidth(math.max(8, row.logNameButton.text:GetStringWidth() + 4))
-            row.logNameButton.searchText = eventName
-            row.logNameButton:Show()
-            row.logSuffix:ClearAllPoints()
-            row.logSuffix:SetPoint("LEFT", row.logNameButton, "RIGHT", 0, 0)
-            row.logSuffix:SetPoint("RIGHT", row.name, "LEFT", -12, 0)
-            row.logSuffix:SetText(eventText:sub(nameEnd + 1))
-            row.logSuffix:Show()
-        else
-            row.detail:SetPoint("RIGHT", row.name, "LEFT", -12, 0)
-            row.detail:SetText(eventText)
-            row.logNameButton:Hide()
-            row.logSuffix:Hide()
-        end
-        row:SetScript("OnClick", nil)
-        row:SetScript("OnEnter", nil)
-        row:SetScript("OnLeave", nil)
-        row:EnableMouse(false)
-        row:Show()
+        layout[#layout + 1] = { kind = "EVENT", offset = yOffset, height = 34, record = record }
         yOffset = yOffset + 38
     end
-    for index = #records + 1, #frame.memberRows do frame.memberRows[index]:Hide() end
-    for index = markerCount + 1, #frame.guildLogDateMarkers do frame.guildLogDateMarkers[index]:Hide() end
-    frame.scrollContent:SetHeight(math.max(1, yOffset))
+
+    frame.guildLogLayout = layout
     frame.guildLogDateSections = dateSections
+    frame.scrollContent:SetHeight(math.max(1, yOffset))
+    local scrollHeight = frame.scroll:GetHeight() or 0
+    local maximumScroll = math.max(0, yOffset - scrollHeight)
+    if (frame.scroll:GetVerticalScroll() or 0) > maximumScroll then
+        frame.scroll:SetVerticalScroll(maximumScroll)
+    end
+    UI:RenderGuildLogRows()
+
     if not frame.guildLogStickyDate then
         local sticky = createGuildLogDateMarker(frame.scroll)
         sticky:SetFrameStrata("DIALOG")
-        -- Keep the pinned divider above every scrolling log row. The search
-        -- suggestions use FULLSCREEN_DIALOG so they still render above it.
         sticky:SetFrameLevel(100)
         sticky:EnableMouse(false)
         frame.guildLogStickyDate = sticky
@@ -4701,11 +4966,8 @@ local function updateGuildLog(frame)
             activeIndex = index
         end
         local active = sections[activeIndex]
-        local pushOffset = 0
         local nextSection = sections[activeIndex + 1]
-        if nextSection then
-            pushOffset = math.min(0, nextSection.offset - scrollOffset - 28)
-        end
+        local pushOffset = nextSection and math.min(0, nextSection.offset - scrollOffset - 28) or 0
         sticky:ClearAllPoints()
         sticky:SetPoint("TOPLEFT", self.scroll, "TOPLEFT", 0, pushOffset)
         sticky:SetPoint("TOPRIGHT", self.scroll, "TOPRIGHT", 0, pushOffset)
@@ -4763,31 +5025,49 @@ local function updateInactiveMembers(frame)
             frame.memberRows[index] = row
         end
         setMemberRowDensity(row, false)
+        prepareRankCard(row)
+        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 48))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 48))
-        row.name:SetFontObject(GameFontNormal)
-        row.name:SetText(iRC:FormatPlayerName(member.name) .. memberIdentityTag(member.name))
-        row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
+        row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
+        row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -6)
+        row.name:SetFontObject(GameFontHighlight)
+        row.name:SetText(iRC:FormatPlayerName(member.name))
+        row.name:SetWidth(math.min(270, row.name:GetStringWidth() + 3))
         local classColor = member.classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile]
         if classColor then row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
         else row.name:SetTextColor(unpack(COLORS.gold)) end
+        local accent = classColor and { classColor.r, classColor.g, classColor.b } or COLORS.gold
+        row.rankAccent:SetColorTexture(accent[1], accent[2], accent[3], 0.95)
+        local identityText, identityColor, identityDetail = rankIdentityPresentation(member.name)
+        row.rankIdentity:ClearAllPoints()
+        row.rankIdentity:SetPoint("LEFT", row.name, "RIGHT", 10, 0)
+        row.rankIdentity:SetPoint("RIGHT", row, "RIGHT", -170, 0)
+        row.rankIdentity:SetText(identityText and ("[" .. identityText .. "]") or "")
+        row.rankIdentity:SetTextColor(unpack(identityColor or COLORS.gray))
+        row.rankIdentity:SetShown(identityText ~= nil)
         row.onlineTag:Hide()
         local canRemove = type(ownRank) == "number" and type(member.rankIndex) == "number"
             and member.rankIndex > ownRank
         if canRemove then eligibleCount = eligibleCount + 1 end
         row.tag:ClearAllPoints()
-        row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
-        row.tag:SetText(canRemove and "[Remove...]" or "[Equal/higher rank]")
+        row.tag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -6)
+        row.tag:SetText(canRemove and "REMOVE..." or "EQUAL/HIGHER RANK")
         row.tag:SetTextColor(unpack(canRemove and COLORS.red or COLORS.gray))
         row.tag:Show()
         local selectedMember = member
         local days = math.floor(selectedMember.lastOnlineDays + 0.5)
-        local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(selectedMember.name)
-        local identityDetail = identityLabel and identityLabel ~= "Main" and (" · " .. identityLabel) or ""
-        row.detail:SetText("Offline for approximately " .. tostring(days) .. " days · "
-            .. tostring(selectedMember.rankName or "Unknown rank") .. " · Level " .. tostring(selectedMember.level or "?")
-            .. " " .. tostring(selectedMember.className or "") .. identityDetail)
+        row.detail:ClearAllPoints()
+        row.detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 18, 7)
+        row.detail:SetPoint("RIGHT", row, "RIGHT", -16, 0)
+        row.detail:SetText(tostring(days) .. " days offline  ·  "
+            .. tostring(selectedMember.rankName or "Unknown rank") .. "  ·  Level " .. tostring(selectedMember.level or "?")
+            .. " " .. tostring(selectedMember.className or "")
+            .. (identityDetail and ("  ·  " .. identityDetail) or ""))
+        row.rankActions:Hide()
         row:SetAlpha(canRemove and 1 or 0.58)
         row:SetScript("OnClick", canRemove and function(_, button)
             if button ~= "LeftButton" then return end
@@ -4804,7 +5084,7 @@ local function updateInactiveMembers(frame)
     if eligibleCount == 0 and iRC:IsTestAdmin() then
         eligibleCount = #getEligibleInactiveMembers(threshold, true, excludedRank, excludeAlts)
     end
-    frame.scrollContent:SetHeight(math.max(1, #members * 48))
+    frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
     frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
     local bulkEnabled = eligibleCount > 0 or iRC:IsTestAdmin()
     frame.inactiveRemoveAll:SetEnabled(bulkEnabled)
@@ -4870,28 +5150,27 @@ local function updateRankManagement(frame)
         if not row then row = makeMemberRow(frame.scrollContent, index); frame.memberRows[index] = row end
         setMemberRowDensity(row, false)
         prepareRankCard(row)
-        local cardSpacing = 64
-        row:SetHeight(58)
+        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * cardSpacing))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * cardSpacing))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
         row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
         row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
         row.name:ClearAllPoints()
-        row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -9)
+        row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -6)
         row.name:SetFontObject(GameFontHighlight)
         row.name:SetText(iRC:FormatPlayerName(member.name))
-        row.name:SetWidth(math.min(260, row.name:GetStringWidth() + 3))
+        row.name:SetWidth(math.min(270, row.name:GetStringWidth() + 3))
         local classColor = member.classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile]
         if isSelf then row.name:SetTextColor(unpack(COLORS.gray))
         elseif classColor then row.name:SetTextColor(classColor.r, classColor.g, classColor.b)
         else row.name:SetTextColor(unpack(COLORS.gold)) end
         local accentColor = classColor and { classColor.r, classColor.g, classColor.b } or COLORS.gold
         row.rankAccent:SetColorTexture(accentColor[1], accentColor[2], accentColor[3], isSelf and 0.45 or 0.95)
-        local identityText, identityColor = rankIdentityPresentation(member.name)
+        local identityText, identityColor, identityDetail = rankIdentityPresentation(member.name)
         row.rankIdentity:ClearAllPoints()
         row.rankIdentity:SetPoint("LEFT", row.name, "RIGHT", 10, 0)
-        row.rankIdentity:SetPoint("RIGHT", row, "RIGHT", -150, 0)
+        row.rankIdentity:SetPoint("RIGHT", row, "RIGHT", -170, 0)
         row.rankIdentity:SetText(identityText and ("[" .. identityText .. "]") or "")
         if identityColor then
             row.rankIdentity:SetTextColor(identityColor[1], identityColor[2], identityColor[3])
@@ -4899,7 +5178,7 @@ local function updateRankManagement(frame)
         row.rankIdentity:SetShown(identityText ~= nil)
         row.onlineTag:Hide()
         row.tag:ClearAllPoints()
-        row.tag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -9)
+        row.tag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -6)
         local previewOnly = not nativePromote and not nativeDemote and (previewPromote or previewDemote)
         local tagText = isSelf and "YOUR CHARACTER"
             or ((nativePromote or nativeDemote) and "MANAGE"
@@ -4908,11 +5187,14 @@ local function updateRankManagement(frame)
         row.tag:SetTextColor(unpack((canPromote or canDemote) and COLORS.green or COLORS.gray))
         row.tag:Show()
         row.detail:ClearAllPoints()
-        row.detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 18, 9)
+        row.detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 18, 7)
         row.detail:SetPoint("RIGHT", row.rankActions, "LEFT", -12, 0)
-        row.detail:SetText("Level " .. tostring(member.level or "?") .. " "
+        local activity = member.online and iRC.Colors.Green .. "Online" .. iRC.Colors.Reset
+            or (member.lastOnlineDays and (math.floor(member.lastOnlineDays + 0.5) .. " days offline") or "Offline")
+        row.detail:SetText(activity .. "  ·  Level " .. tostring(member.level or "?") .. " "
             .. tostring(member.className or "Unknown class") .. "  ·  "
-            .. tostring(member.rankName or "Unknown rank"))
+            .. tostring(member.rankName or "Unknown rank")
+            .. (identityDetail and ("  ·  " .. identityDetail) or ""))
         row.rankActions:SetText((canPromote and iRC.Colors.Green or iRC.Colors.Gray) .. "Promote"
             .. iRC.Colors.Reset .. "   " .. (canDemote and iRC.Colors.Green or iRC.Colors.Gray)
             .. "Demote" .. iRC.Colors.Reset)
@@ -4928,7 +5210,7 @@ local function updateRankManagement(frame)
         row:Show()
     end
     for index = #members + 1, #frame.memberRows do frame.memberRows[index]:SetAlpha(1); frame.memberRows[index]:Hide() end
-    frame.scrollContent:SetHeight(math.max(1, #members * 64))
+    frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
     frame.rankManagementControls.promote.text:SetText("Promote selected... (" .. promoteCount .. ")")
     frame.rankManagementControls.demote.text:SetText("Demote selected... (" .. demoteCount .. ")")
     frame.rankManagementControls.promote:SetEnabled(promoteCount > 0)
@@ -4975,14 +5257,14 @@ local function updateSpecificMemberRemoval(frame)
         if not row then row = makeMemberRow(frame.scrollContent, index); frame.memberRows[index] = row end
         setMemberRowDensity(row, false)
         prepareRankCard(row)
-        row:SetHeight(58)
+        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 64))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 64))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
         row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
         row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
         row.name:ClearAllPoints()
-        row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -9)
+        row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -6)
         row.name:SetFontObject(GameFontHighlight)
         row.name:SetText(iRC:FormatPlayerName(member.name))
         row.name:SetWidth(math.min(270, row.name:GetStringWidth() + 3))
@@ -4991,7 +5273,7 @@ local function updateSpecificMemberRemoval(frame)
         else row.name:SetTextColor(unpack(COLORS.gold)) end
         local accent = classColor and { classColor.r, classColor.g, classColor.b } or COLORS.gold
         row.rankAccent:SetColorTexture(accent[1], accent[2], accent[3], canRemove and 0.95 or 0.4)
-        local identityText, identityColor = rankIdentityPresentation(member.name)
+        local identityText, identityColor, identityDetail = rankIdentityPresentation(member.name)
         row.rankIdentity:ClearAllPoints()
         row.rankIdentity:SetPoint("LEFT", row.name, "RIGHT", 10, 0)
         row.rankIdentity:SetPoint("RIGHT", row, "RIGHT", -170, 0)
@@ -5000,7 +5282,7 @@ local function updateSpecificMemberRemoval(frame)
         row.rankIdentity:SetShown(identityText ~= nil)
         row.onlineTag:Hide()
         row.tag:ClearAllPoints()
-        row.tag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -9)
+        row.tag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -6)
         row.tag:SetText(canRemove and "REMOVE..." or "EQUAL/HIGHER RANK")
         row.tag:SetTextColor(unpack(canRemove and COLORS.red or COLORS.gray))
         row.tag:Show()
@@ -5009,8 +5291,9 @@ local function updateSpecificMemberRemoval(frame)
         row.detail:SetPoint("RIGHT", row, "RIGHT", -16, 0)
         local activity = member.online and iRC.Colors.Green .. "Online" .. iRC.Colors.Reset
             or (member.lastOnlineDays and (math.floor(member.lastOnlineDays + 0.5) .. " days offline") or "Offline")
-        row.detail:SetText(activity .. "  -  " .. tostring(member.rankName or "Unknown rank")
-            .. "  -  Level " .. tostring(member.level or "?") .. " " .. tostring(member.className or ""))
+        row.detail:SetText(activity .. "  ·  " .. tostring(member.rankName or "Unknown rank")
+            .. "  ·  Level " .. tostring(member.level or "?") .. " " .. tostring(member.className or "")
+            .. (identityDetail and ("  ·  " .. identityDetail) or ""))
         row.rankActions:Hide()
         row:SetAlpha(canRemove and 1 or 0.55)
         local selectedMember = member
@@ -5025,7 +5308,7 @@ local function updateSpecificMemberRemoval(frame)
         frame.memberRows[index]:SetAlpha(1)
         frame.memberRows[index]:Hide()
     end
-    frame.scrollContent:SetHeight(math.max(1, #members * 64))
+    frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
     frame.contentTitle:SetText("Kick Specific Member")
     if #members == 0 then
         frame.contentSubtitle:SetText(query ~= "" and "No guild members match this search."
@@ -5303,6 +5586,7 @@ updateGuildOverview = function(frame)
     for _, class in ipairs(GUILD_HEALTH_CLASS_ORDER) do
         maxClassTotal = math.max(maxClassTotal, classTotals[class] or 0)
     end
+    local exportClasses = {}
     for index, class in ipairs(GUILD_HEALTH_CLASS_ORDER) do
         local totalClass, activeClass = classTotals[class] or 0, classActive[class] or 0
         local rawColor = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class] or FALLBACK_CLASS_COLORS[class] or COLORS.gray
@@ -5312,6 +5596,7 @@ updateGuildOverview = function(frame)
         setGuildHealthBar(overview.classes.rows[index], label, totalClass, maxClassTotal, color,
             tostring(activeClass) .. " / " .. tostring(totalClass))
         overview.classes.rows[index].label:SetTextColor(color[1], color[2], color[3])
+        exportClasses[#exportClasses + 1] = { label = label, total = totalClass, active = activeClass }
     end
 
     overview.retention.subtitle:SetText("Last seen by the guild roster - "
@@ -5349,6 +5634,28 @@ updateGuildOverview = function(frame)
     overview.vitality.activity:SetText("Active this month:  " .. tostring(active30) .. " / " .. tostring(recencyTotal))
     overview.vitality.coverage:SetText("Online using iRC:  " .. tostring(verifiedOnline) .. " / " .. tostring(online))
     overview.vitality.risk:SetText("Inactive 30+ days:  " .. tostring(retention[4] + retention[5]))
+
+    local connection = iRC:GetConnection()
+    overview.exportData = {
+        guildName = tostring(connection and connection.guildName
+            or (GetGuildInfo and GetGuildInfo("player")) or "Current guild"),
+        generatedAt = date and date("%Y-%m-%d %H:%M") or "now",
+        scope = excludeAlts and "Linked characters count as one player" or "All characters counted",
+        total = total,
+        online = online,
+        onlineViaAlt = onlineViaAlt,
+        active30 = active30,
+        attention = attention,
+        attentionNote = responseRequired and "Inactive or missing iRC" or "Inactive-member review",
+        vitality = vitality,
+        verifiedOnline = verifiedOnline,
+        inactive30 = retention[4] + retention[5],
+        levelLabels = levelLabels,
+        levelCounts = levelCounts,
+        classes = exportClasses,
+        retentionLabels = retentionLabels,
+        retention = retention,
+    }
 
     overview:Show()
     frame.scrollContent:SetHeight(462)
@@ -6147,6 +6454,8 @@ function UI:Refresh()
         and frame.scroll:GetVerticalScroll() or nil
     local preservedMemberScroll = frame.category == "Guild Members" and frame.scroll
         and frame.scroll:GetVerticalScroll() or nil
+    local preservedPersonalSettingsScroll = frame.category == "Personal Settings" and frame.scroll
+        and frame.scroll:GetVerticalScroll() or nil
     if frame.LayoutNavigation then frame.LayoutNavigation() end
     local managementPanelKey = MANAGEMENT_PANEL_KEYS[frame.category]
     local dashboardTab = DASHBOARD_PANEL_TABS[frame.category]
@@ -6171,7 +6480,11 @@ function UI:Refresh()
         iRC:HideManagementPanels()
         if iRC.ConnectionDashboard and iRC.ConnectionDashboard.HideEmbedded then iRC.ConnectionDashboard:HideEmbedded() end
     end
-    if frame.category ~= "Guild Members" then
+    if frame.category ~= "Guild Members" and frame.category ~= "Guild Overview" then
+        frame.professionReport:Hide()
+        frame.memberExportReport:Hide()
+        frame.memberMenu:Hide()
+    elseif frame.category ~= "Guild Members" then
         frame.professionReport:Hide()
         frame.memberMenu:Hide()
     end
@@ -6182,6 +6495,7 @@ function UI:Refresh()
     frame.raceRefresh:SetShown(not embeddedManagement and frame.category == "Race Overview")
     frame.guildOverviewRefresh:SetShown(not embeddedManagement and frame.category == "Guild Overview")
     frame.guildOverviewAltToggle:SetShown(not embeddedManagement and frame.category == "Guild Overview")
+    frame.guildOverviewExport:SetShown(not embeddedManagement and frame.category == "Guild Overview")
     local showRulesViewToggle = frame.category == "Guild Rules" and iRC:IsGuildMaster()
     frame.rulesViewToggle:SetShown(showRulesViewToggle)
     if showRulesViewToggle then
@@ -6193,6 +6507,7 @@ function UI:Refresh()
             frame.rulesViewAsMember and 1 or 0.9)
     end
     frame.memberProfessionSearch:SetShown(not embeddedManagement and frame.category == "Guild Members")
+    frame.memberExport:SetShown(not embeddedManagement and frame.category == "Guild Members")
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     for _, button in ipairs(frame.memberOnlineFilters or {}) do
         local shown = not embeddedManagement and frame.category == "Guild Members"
@@ -6340,6 +6655,17 @@ function UI:Refresh()
         restoreMemberScroll()
         if C_Timer and C_Timer.After then C_Timer.After(0, restoreMemberScroll) end
     end
+    if preservedPersonalSettingsScroll ~= nil and frame.category == "Personal Settings" and frame.scroll then
+        local function restorePersonalSettingsScroll()
+            if frame.category ~= "Personal Settings" then return end
+            local maximum = math.max(0, frame.scrollContent:GetHeight() - frame.scroll:GetHeight())
+            frame.scroll:SetVerticalScroll(math.max(0,
+                math.min(maximum, preservedPersonalSettingsScroll)))
+        end
+        restorePersonalSettingsScroll()
+        if C_Timer and C_Timer.After then C_Timer.After(0, restorePersonalSettingsScroll) end
+    end
+    clearOwnedKeyboardFocus(frame, true)
 end
 
 function UI:OpenCategory(category)
@@ -6423,6 +6749,7 @@ function UI:Open(subjectName, requestCacheFromOpen, requestedCategory)
     self:Refresh()
     frame:Show()
     frame:Raise()
+    clearOwnedKeyboardFocus(frame, false)
     -- A normal panel launch should refresh shared leaderboard data even when
     -- the user's preferred opening page is elsewhere in the panel.
     if requestCacheFromOpen and iRC.RaceGrid then

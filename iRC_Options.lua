@@ -399,6 +399,14 @@ local function CreateCompactManagementToggle(parent, label, description, yOffset
     return row, yOffset - rowHeight - 7
 end
 
+local managementDropdowns = {}
+
+local function CloseManagementDropdowns(except)
+    for _, control in ipairs(managementDropdowns) do
+        if control ~= except and control.menu then control.menu:Hide() end
+    end
+end
+
 local function CreateCompactManagementDropdown(frameName, parent, label, yOffset, getValue, setValue, getOptions,
     getOptionLabel, getAccessNames)
     local rowHeight = getAccessNames and 108 or 54
@@ -463,13 +471,48 @@ local function CreateCompactManagementDropdown(frameName, parent, label, yOffset
         row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     end
 
-    local dropdown = CreateFrame("Frame", frameName, row, "UIDropDownMenuTemplate")
-    if getAccessNames then dropdown:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, -5)
-    else dropdown:SetPoint("RIGHT", row, "RIGHT", -4, -1) end
-    UIDropDownMenu_SetWidth(dropdown, 205)
-    UIDropDownMenu_JustifyText(dropdown, "LEFT")
-    dropdown.Refresh = function()
-        UIDropDownMenu_SetText(dropdown, getOptionLabel(getValue()))
+    local dropdown = CreateFrame("Button", frameName, row, "BackdropTemplate")
+    dropdown:SetSize(220, 30)
+    if getAccessNames then dropdown:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -10)
+    else dropdown:SetPoint("RIGHT", row, "RIGHT", -14, 0) end
+    dropdown:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 9,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    dropdown:SetBackdropColor(0.035, 0.030, 0.022, 0.99)
+    dropdown:SetBackdropBorderColor(0.62, 0.39, 0.10, 1)
+    dropdown:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    dropdown.text = dropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    dropdown.text:SetPoint("LEFT", dropdown, "LEFT", 11, 0)
+    dropdown.text:SetPoint("RIGHT", dropdown, "RIGHT", -30, 0)
+    dropdown.text:SetJustifyH("LEFT")
+    dropdown.text:SetWordWrap(false)
+    dropdown.arrow = dropdown:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    dropdown.arrow:SetPoint("RIGHT", dropdown, "RIGHT", -10, 0)
+    dropdown.arrow:SetText("v")
+    dropdown.arrow:SetTextColor(1, 0.72, 0.12)
+
+    dropdown.menu = CreateFrame("Frame", frameName .. "Menu", UIParent, "BackdropTemplate")
+    dropdown.menu:SetWidth(220)
+    dropdown.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    dropdown.menu:SetClampedToScreen(true)
+    dropdown.menu:SetToplevel(true)
+    dropdown.menu:EnableMouse(true)
+    dropdown.menu:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    dropdown.menu:SetBackdropColor(0.018, 0.016, 0.012, 0.995)
+    dropdown.menu:SetBackdropBorderColor(0.78, 0.48, 0.12, 1)
+    dropdown.menu.buttons = {}
+    dropdown.menu:Hide()
+
+    function dropdown:Refresh()
+        self.text:SetText(getOptionLabel(getValue()))
         if row.access then
             local names = getAccessNames() or {}
             local shown = {}
@@ -481,22 +524,88 @@ local function CreateCompactManagementDropdown(frameName, parent, label, yOffset
             row.accessTooltipNames = names
         end
     end
-    UIDropDownMenu_Initialize(dropdown, function(_, level)
-        if level ~= 1 then return end
-        for _, value in ipairs(getOptions()) do
+
+    function dropdown:RefreshMenu()
+        local options = getOptions() or {}
+        local currentValue = getValue()
+        for index, value in ipairs(options) do
             local selectedValue = value
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = getOptionLabel(selectedValue)
-            info.value = selectedValue
-            info.checked = selectedValue == getValue()
-            info.func = function()
-                setValue(selectedValue)
-                dropdown:Refresh()
-                CloseDropDownMenus()
+            local button = self.menu.buttons[index]
+            if not button then
+                button = CreateFrame("Button", nil, self.menu, "BackdropTemplate")
+                button:SetHeight(25)
+                button:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
+                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                button.text:SetPoint("LEFT", button, "LEFT", 10, 0)
+                button.text:SetPoint("RIGHT", button, "RIGHT", -10, 0)
+                button.text:SetJustifyH("LEFT")
+                button.check = button:CreateTexture(nil, "ARTWORK")
+                button.check:SetWidth(3)
+                button.check:SetPoint("TOPLEFT", button, "TOPLEFT", 2, -3)
+                button.check:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 2, 3)
+                button.check:SetColorTexture(0.25, 1, 0.35, 1)
+                button:SetScript("OnEnter", function(menuButton)
+                    menuButton:SetBackdropColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.16)
+                end)
+                button:SetScript("OnLeave", function(menuButton)
+                    menuButton:SetBackdropColor(0, 0, 0, menuButton.selected and 0.30 or 0)
+                end)
+                self.menu.buttons[index] = button
             end
-            UIDropDownMenu_AddButton(info, level)
+            button:ClearAllPoints()
+            button:SetPoint("TOPLEFT", self.menu, "TOPLEFT", 5, -5 - ((index - 1) * 25))
+            button:SetPoint("TOPRIGHT", self.menu, "TOPRIGHT", -5, -5 - ((index - 1) * 25))
+            button.value = selectedValue
+            button.selected = selectedValue == currentValue
+            button.text:SetText(getOptionLabel(selectedValue))
+            button.text:SetTextColor(button.selected and 0.35 or 0.92,
+                button.selected and 1 or 0.92, button.selected and 0.42 or 0.92)
+            button.check:SetShown(button.selected)
+            button:SetBackdropColor(0, 0, 0, button.selected and 0.30 or 0)
+            button:SetScript("OnClick", function()
+                setValue(selectedValue)
+                self:Refresh()
+                self.menu:Hide()
+            end)
+            button:Show()
         end
+        for index = #options + 1, #self.menu.buttons do self.menu.buttons[index]:Hide() end
+        self.menu:SetHeight(math.max(12, (#options * 25) + 10))
+    end
+
+    dropdown:SetScript("OnClick", function(self)
+        if not self:IsEnabled() then return end
+        if self.menu:IsShown() then
+            self.menu:Hide()
+            return
+        end
+        CloseManagementDropdowns(self)
+        self:RefreshMenu()
+        self.menu:ClearAllPoints()
+        local bottom = self:GetBottom() or 0
+        local menuHeight = self.menu:GetHeight() or 0
+        if bottom > menuHeight + 12 then
+            self.menu:SetPoint("TOPRIGHT", self, "BOTTOMRIGHT", 0, -2)
+        else
+            self.menu:SetPoint("BOTTOMRIGHT", self, "TOPRIGHT", 0, 2)
+        end
+        self.menu:Show()
     end)
+    dropdown:SetScript("OnEnable", function(self)
+        self.text:SetTextColor(1, 1, 1)
+        self.arrow:SetTextColor(1, 0.72, 0.12)
+        self:SetBackdropColor(0.035, 0.030, 0.022, 0.99)
+        self:SetBackdropBorderColor(0.62, 0.39, 0.10, 1)
+    end)
+    dropdown:SetScript("OnDisable", function(self)
+        self.menu:Hide()
+        self.text:SetTextColor(0.48, 0.48, 0.48)
+        self.arrow:SetTextColor(0.48, 0.42, 0.32)
+        self:SetBackdropColor(0.025, 0.023, 0.020, 0.92)
+        self:SetBackdropBorderColor(0.25, 0.22, 0.18, 0.80)
+    end)
+    dropdown:HookScript("OnHide", function(self) self.menu:Hide() end)
+    managementDropdowns[#managementDropdowns + 1] = dropdown
     dropdown:Refresh()
     dropdown.managementRow = row
     return dropdown, yOffset - rowHeight - 7
@@ -1044,6 +1153,13 @@ minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", 
         if iRC.Minimap then iRC.Minimap:UpdateVisibility() end
     end)
 _, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
+local layerPanelCheck
+layerPanelCheck, y = CreateSettingsCheckbox(generalContent, L.LAYER_PANEL_SHOW, L.LAYER_PANEL_SHOW_DESC, y,
+    function() return iRC:GetSettings().showLayerPanel ~= false end,
+    function(value)
+        if iRC.GuildMap then iRC.GuildMap:SetLayerPanelShown(value)
+        else iRC:GetSettings().showLayerPanel = value and true or false end
+    end)
 local pinSizeLabel = generalContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 pinSizeLabel:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y)
 pinSizeLabel:SetText(L.GUILD_MAP_PIN_SIZE)
@@ -2337,9 +2453,45 @@ do
     local memberCard, memberY = CreateManagementSettingsCard(guildPermissionsContent,
         "Specific member access",
         "Search the current roster and grant selected tools regardless of guild rank. These switches show individual grants only; rank access still applies separately.", permissionPageY)
-    local configuredText
-    configuredText, memberY = CreateInfoText(memberCard, "", memberY - 2, "GameFontDisableSmall")
-    configuredText:SetTextColor(0.78, 0.72, 0.62)
+    local selectPermissionMember
+    local grantsLabel = memberCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    grantsLabel:SetPoint("TOPLEFT", memberCard, "TOPLEFT", 18, memberY - 2)
+    grantsLabel:SetText("Members with special grants")
+    grantsLabel:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+    local configuredText = memberCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    configuredText:SetPoint("TOPRIGHT", memberCard, "TOPRIGHT", -20, memberY - 2)
+    configuredText:SetJustifyH("RIGHT")
+
+    local grantsBox = CreateFrame("Frame", nil, memberCard, "BackdropTemplate")
+    grantsBox:SetPoint("TOPLEFT", memberCard, "TOPLEFT", 18, memberY - 20)
+    grantsBox:SetPoint("TOPRIGHT", memberCard, "TOPRIGHT", -18, memberY - 20)
+    grantsBox:SetHeight(66)
+    grantsBox:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 9,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    grantsBox:SetBackdropColor(0.025, 0.022, 0.018, 0.98)
+    grantsBox:SetBackdropBorderColor(0.34, 0.28, 0.20, 0.95)
+    local grantsScroll = CreateFrame("ScrollFrame", nil, grantsBox, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(grantsScroll)
+    grantsScroll:SetPoint("TOPLEFT", grantsBox, "TOPLEFT", 7, -6)
+    grantsScroll:SetPoint("BOTTOMRIGHT", grantsBox, "BOTTOMRIGHT", -24, 6)
+    local grantsContent = CreateFrame("Frame", nil, grantsScroll)
+    grantsContent:SetSize(482, 1)
+    grantsScroll:SetScrollChild(grantsContent)
+    grantsBox:EnableMouseWheel(true)
+    grantsBox:SetScript("OnMouseWheel", function(_, delta)
+        local maximum = math.max(0, grantsContent:GetHeight() - grantsScroll:GetHeight())
+        grantsScroll:SetVerticalScroll(math.max(0,
+            math.min(maximum, grantsScroll:GetVerticalScroll() - delta * 26)))
+    end)
+    local grantsEmpty = grantsContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    grantsEmpty:SetPoint("TOPLEFT", grantsContent, "TOPLEFT", 8, -8)
+    grantsEmpty:SetText("No individual member grants are configured.")
+    local grantButtons = {}
+    memberY = memberY - 94
 
     local searchLabel = memberCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     searchLabel:SetPoint("TOPLEFT", memberCard, "TOPLEFT", 18, memberY)
@@ -2368,7 +2520,7 @@ do
     suggestions:Hide()
     local suggestionButtons = {}
 
-    local function selectPermissionMember(name)
+    selectPermissionMember = function(name)
         local fullName = iRC:ResolveGuildMemberFullName(name)
         if not fullName then return false end
         selectedPermissionMember = fullName
@@ -2462,10 +2614,84 @@ do
         selectedText:SetText(selectedPermissionMember
             and (iRC.Colors.Green .. "Editing " .. iRC:FormatPlayerName(selectedPermissionMember) .. iRC.Colors.Reset)
             or (iRC.Colors.Gray .. "Choose a roster member" .. iRC.Colors.Reset))
-        local configuredCount = #iRC:GetGuildMemberPermissionEntries()
+        local configuredEntries = iRC:GetGuildMemberPermissionEntries()
+        local configuredCount = #configuredEntries
         configuredText:SetText(configuredCount > 0
-            and ("Individual grants configured for " .. configuredCount .. (configuredCount == 1 and " member." or " members."))
-            or "No individual member grants are configured.")
+            and (tostring(configuredCount) .. (configuredCount == 1 and " member" or " members") .. " · Click to edit")
+            or "None configured")
+        local classColors = {}
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            classColors[iRC:NormalizeName(member.name)] = member.classFile
+        end
+        for index, entry in ipairs(configuredEntries) do
+            local button = grantButtons[index]
+            if not button then
+                button = CreateFrame("Button", nil, grantsContent, "BackdropTemplate")
+                button:SetSize(238, 24)
+                button:SetBackdrop({
+                    bgFile = "Interface\\BUTTONS\\WHITE8X8",
+                    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                    edgeSize = 8,
+                    insets = { left = 2, right = 2, top = 2, bottom = 2 },
+                })
+                button.name = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                button.name:SetPoint("LEFT", button, "LEFT", 9, 0)
+                button.name:SetPoint("RIGHT", button, "RIGHT", -72, 0)
+                button.name:SetJustifyH("LEFT")
+                button.count = button:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                button.count:SetPoint("RIGHT", button, "RIGHT", -8, 0)
+                button.count:SetJustifyH("RIGHT")
+                button:SetScript("OnClick", function(self)
+                    if self.memberName then selectPermissionMember(self.memberName) end
+                end)
+                button:SetScript("OnEnter", function(self)
+                    self:SetBackdropColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.14)
+                    if not GameTooltip then return end
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetText(iRC:FormatPlayerName(self.memberName or ""))
+                    GameTooltip:AddLine("Individual grants", 1, 0.72, 0.12)
+                    for _, grantedLabel in ipairs(self.grantedLabels or {}) do
+                        GameTooltip:AddLine("• " .. grantedLabel, 0.82, 0.82, 0.82)
+                    end
+                    GameTooltip:AddLine(" ")
+                    GameTooltip:AddLine("Click to review or change these grants.", 0.38, 1, 0.48, true)
+                    GameTooltip:Show()
+                end)
+                button:SetScript("OnLeave", function(self)
+                    self:SetBackdropColor(self.selected and 0.04 or 0.055,
+                        self.selected and 0.15 or 0.045, self.selected and 0.06 or 0.035, 0.98)
+                    if GameTooltip then GameTooltip:Hide() end
+                end)
+                grantButtons[index] = button
+            end
+            local column, rowIndex = (index - 1) % 2, math.floor((index - 1) / 2)
+            button:ClearAllPoints()
+            button:SetPoint("TOPLEFT", grantsContent, "TOPLEFT", column * 244, -(rowIndex * 27))
+            button.memberName = entry.name
+            button.selected = selectedPermissionMember
+                and iRC:NormalizeName(selectedPermissionMember) == iRC:NormalizeName(entry.name) or false
+            button.name:SetText(iRC:FormatPlayerName(entry.name))
+            local classFile = classColors[iRC:NormalizeName(entry.name)]
+            local classColor = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+            if classColor then button.name:SetTextColor(classColor.r, classColor.g, classColor.b)
+            else button.name:SetTextColor(1, 0.72, 0.12) end
+            button.count:SetText(tostring(entry.count) .. (entry.count == 1 and " grant" or " grants"))
+            button.grantedLabels = {}
+            for _, permission in ipairs(iRC.PermissionOrder) do
+                if entry.permissions and entry.permissions[permission] == true then
+                    button.grantedLabels[#button.grantedLabels + 1] = permissionLabels[permission]
+                end
+            end
+            button:SetBackdropColor(button.selected and 0.04 or 0.055,
+                button.selected and 0.15 or 0.045, button.selected and 0.06 or 0.035, 0.98)
+            button:SetBackdropBorderColor(button.selected and 0.20 or 0.34,
+                button.selected and 0.78 or 0.28, button.selected and 0.32 or 0.20, 1)
+            button:Show()
+        end
+        for index = configuredCount + 1, #grantButtons do grantButtons[index]:Hide() end
+        grantsEmpty:SetShown(configuredCount == 0)
+        grantsContent:SetHeight(math.max(1, math.ceil(configuredCount / 2) * 27))
+        grantsScroll:UpdateScrollChildRect()
         for _, control in pairs(namedPermissionChecks) do
             control:Refresh()
             control:SetEnabled(canEdit)
@@ -2740,6 +2966,7 @@ local function RefreshGeneralNotificationAndAdminOptions()
         end
     end
     minimapCheck:Refresh()
+    layerPanelCheck:Refresh()
     newMemberWelcomeCheck:Refresh()
     local notificationsEnabled = iRC:HasGuildPermission("notifications") and iRC:IsGuildConnectionActive()
     newMemberWelcomeCheck:SetEnabled(notificationsEnabled)
@@ -2758,7 +2985,7 @@ local function RefreshGeneralNotificationAndAdminOptions()
     for permission, dropdown in pairs(rankPermissionDropdowns) do
         dropdown:Refresh()
         local canEdit = permission == "guildMasterRank" and nativeGuildMaster or (permission ~= "guildMasterRank" and guildMaster)
-        if canEdit then UIDropDownMenu_EnableDropDown(dropdown) else UIDropDownMenu_DisableDropDown(dropdown) end
+        dropdown:SetEnabled(canEdit and true or false)
         if dropdown.managementRow then dropdown.managementRow:SetAlpha(canEdit and 1 or 0.48) end
     end
     if refreshMemberPermissionControls then refreshMemberPermissionControls() end

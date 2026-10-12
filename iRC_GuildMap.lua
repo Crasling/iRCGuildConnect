@@ -12,13 +12,364 @@ local POSITION_HEARTBEAT = 20
 local DEFAULT_PIN_SIZE = 12
 local CLUSTER_MINIMUM_DISTANCE = 18
 local MAX_CLUSTER_TOOLTIP_MEMBERS = 5
+local LOCAL_LAYER_LIFETIME = 300
+local LAYER_PANEL_WIDTH = 126
+local LAYER_PANEL_HEIGHT = 42
 local initialized, mapInitialized, mapInitializationArmed, mapInitializationPending, positionSendPending
 local mapTicker
+local layerPanelTicker
 local pinMenu
 local mapControls
+local layerPanel
 local lastSentMapId, lastSentXWire, lastSentYWire, lastPositionSentAt
 local lastDisplayedMapId
 local lastGroupedMembers = {}
+local localLayer
+local knownLayerIds = {}
+local layerUsers = {}
+local lastLayerBroadcastSignature
+local lastLayerBroadcastAt = 0
+
+local function parseWorldLayerGuid(guid)
+    if iRC:IsSecretValue(guid) or type(guid) ~= "string" or guid == "" then return nil end
+    local unitType, _, serverId, instanceId, zoneUID = strsplit("-", guid)
+    -- Player-controlled pets can retain an owner-specific GUID context and are
+    -- not reliable evidence of the shard occupied by the player.
+    if unitType ~= "Creature" and unitType ~= "Vehicle" then return nil end
+    serverId, instanceId, zoneUID = tonumber(serverId), tonumber(instanceId), tonumber(zoneUID)
+    if not serverId or not instanceId or not zoneUID or zoneUID <= 0 then return nil end
+    return zoneUID, serverId, instanceId, unitType
+end
+
+local function currentPlayerMapId()
+    if not C_Map or type(C_Map.GetBestMapForUnit) ~= "function" then return nil end
+    local mapId = C_Map.GetBestMapForUnit("player")
+    if iRC:IsSecretValue(mapId) or type(mapId) ~= "number" then return nil end
+    return mapId
+end
+
+local function getLayerNumber(zoneUID, serverId, instanceId)
+    local scope = tostring(serverId or 0) .. ":" .. tostring(instanceId or 0)
+    local ids = knownLayerIds[scope]
+    if not ids then
+        ids = {}
+        knownLayerIds[scope] = ids
+    end
+    ids[zoneUID] = true
+    local sorted = {}
+    for knownId in pairs(ids) do sorted[#sorted + 1] = knownId end
+    table.sort(sorted)
+    for index, knownId in ipairs(sorted) do
+        if knownId == zoneUID then return math.max(1, math.min(99, index)) end
+    end
+    return 1
+end
+
+function GuildMap:GetLayerRegistryWire(serverId, instanceId)
+    local ids = knownLayerIds[tostring(serverId or 0) .. ":" .. tostring(instanceId or 0)] or {}
+    local sorted = {}
+    for zoneUID in pairs(ids) do sorted[#sorted + 1] = zoneUID end
+    table.sort(sorted)
+    local wire = {}
+    for index = 1, math.min(99, #sorted) do wire[index] = tostring(sorted[index]) end
+    return table.concat(wire, ",")
+end
+
+function GuildMap:BroadcastLocalLayer(force)
+    local layer = self:GetLocalLayer()
+    if not layer or iRC:GetSettings().showLayerPanel == false
+        or not iRC.RaceGrid or not iRC.RaceGrid.BroadcastLayerState then return false end
+    if (InCombatLockdown and InCombatLockdown())
+        or (UnitAffectingCombat and UnitAffectingCombat("player")) then return false end
+    local registry = self:GetLayerRegistryWire(layer.serverId, layer.instanceId)
+    local signature = tostring(layer.serverId) .. ":" .. tostring(layer.instanceId) .. ":"
+        .. tostring(layer.zoneUID) .. ":" .. registry
+    local now = GetTime and GetTime() or 0
+    if not force and signature == lastLayerBroadcastSignature
+        and now - lastLayerBroadcastAt < 60 then return false end
+    layer.registryWire = registry
+    if not iRC.RaceGrid:BroadcastLayerState(layer) then return false end
+    lastLayerBroadcastSignature = signature
+    lastLayerBroadcastAt = now
+    return true
+end
+
+local function saveLayerPanelPosition()
+    if not layerPanel then return end
+    local point, _, relativePoint, x, y = layerPanel:GetPoint(1)
+    local settings = iRC:GetSettings()
+    settings.layerPanelPoint = point or "TOP"
+    settings.layerPanelRelativePoint = relativePoint or point or "TOP"
+    settings.layerPanelX = math.floor((tonumber(x) or 0) + 0.5)
+    settings.layerPanelY = math.floor((tonumber(y) or -90) + 0.5)
+end
+
+local function initializeLayerPanel()
+    if layerPanel then return end
+    local settings = iRC:GetSettings()
+    layerPanel = CreateFrame("Frame", "iRCLocalLayerPanel", UIParent, "BackdropTemplate")
+    layerPanel:SetSize(LAYER_PANEL_WIDTH, LAYER_PANEL_HEIGHT)
+    layerPanel:SetScale(1)
+    layerPanel:SetFrameStrata("MEDIUM")
+    layerPanel:SetFrameLevel(60)
+    layerPanel:SetClampedToScreen(true)
+    layerPanel:SetMovable(true)
+    layerPanel:EnableMouse(true)
+    layerPanel:RegisterForDrag("LeftButton")
+    layerPanel:SetBackdrop({
+        bgFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    layerPanel:SetBackdropColor(0.018, 0.016, 0.012, 0.94)
+    layerPanel:SetBackdropBorderColor(0.78, 0.48, 0.12, 1)
+    layerPanel.title = layerPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    layerPanel.title:SetPoint("LEFT", layerPanel, "LEFT", 12, 0)
+    layerPanel.title:SetText("LAYER")
+    layerPanel.title:SetTextColor(1, 0.67, 0.15)
+    local titleFont = GameFontNormal and GameFontNormal:GetFont()
+    if titleFont then layerPanel.title:SetFont(titleFont, 14, "OUTLINE") end
+    layerPanel.value = layerPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    layerPanel.value:SetPoint("RIGHT", layerPanel, "RIGHT", -17, 0)
+    layerPanel.value:SetText("--")
+    layerPanel.value:SetTextColor(0.72, 0.72, 0.72)
+    local valueFont = GameFontNormalLarge and GameFontNormalLarge:GetFont()
+    if valueFont then layerPanel.value:SetFont(valueFont, 25, "OUTLINE") end
+
+    local resize
+    local function applyPanelScale(scale)
+        scale = math.max(0.75, math.min(2.5, tonumber(scale) or 1))
+        layerPanel.displayScale = scale
+        layerPanel:SetSize(LAYER_PANEL_WIDTH * scale, LAYER_PANEL_HEIGHT * scale)
+        layerPanel.title:ClearAllPoints()
+        layerPanel.title:SetPoint("LEFT", layerPanel, "LEFT", 12 * scale, 0)
+        if titleFont then layerPanel.title:SetFont(titleFont, 14 * scale, "OUTLINE") end
+        layerPanel.value:ClearAllPoints()
+        layerPanel.value:SetPoint("RIGHT", layerPanel, "RIGHT", -17 * scale, 0)
+        if valueFont then layerPanel.value:SetFont(valueFont, 25 * scale, "OUTLINE") end
+        if resize then
+            resize:SetSize(18 * scale, 18 * scale)
+            resize:ClearAllPoints()
+            resize:SetPoint("BOTTOMRIGHT", layerPanel, "BOTTOMRIGHT", -2 * scale, 2 * scale)
+        end
+    end
+
+    resize = CreateFrame("Button", nil, layerPanel)
+    resize:SetSize(18, 18)
+    resize:SetPoint("BOTTOMRIGHT", layerPanel, "BOTTOMRIGHT", -2, 2)
+    resize:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resize:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    resize:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    resize:SetScript("OnMouseDown", function(self, button)
+        if button ~= "LeftButton" or settings.layerPanelLocked == true then return end
+        -- Resizing around TOPLEFT keeps the opposite corner stationary. The
+        -- frame itself stays at scale 1 so WoW cannot scale its anchor offsets.
+        local left, top = layerPanel:GetLeft(), layerPanel:GetTop()
+        if left and top then
+            layerPanel:ClearAllPoints()
+            layerPanel:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+        end
+        local x, y = GetCursorPosition()
+        self.dragging, self.startX, self.startY = true, x, y
+        self.startScale = layerPanel.displayScale or 1
+    end)
+    resize:SetScript("OnUpdate", function(self)
+        if not self.dragging then return end
+        local x, y = GetCursorPosition()
+        local parentScale = UIParent:GetEffectiveScale() or 1
+        local deltaX = (x - self.startX) / parentScale
+        local deltaY = (self.startY - y) / parentScale
+        local scaleDelta = (deltaX * LAYER_PANEL_WIDTH + deltaY * LAYER_PANEL_HEIGHT)
+            / (LAYER_PANEL_WIDTH * LAYER_PANEL_WIDTH + LAYER_PANEL_HEIGHT * LAYER_PANEL_HEIGHT)
+        applyPanelScale(self.startScale + scaleDelta)
+    end)
+    resize:SetScript("OnMouseUp", function(self)
+        if not self.dragging then return end
+        self.dragging = nil
+        settings.layerPanelScale = math.floor((layerPanel.displayScale or 1) * 20 + 0.5) / 20
+        applyPanelScale(settings.layerPanelScale)
+        saveLayerPanelPosition()
+    end)
+    applyPanelScale(settings.layerPanelScale)
+    layerPanel.resizeHandle = resize
+    local function updateLockState()
+        local locked = settings.layerPanelLocked == true
+        resize:SetShown(not locked)
+        if locked then resize.dragging = nil end
+    end
+    layerPanel:SetScript("OnDragStart", function(self)
+        if settings.layerPanelLocked ~= true then self:StartMoving() end
+    end)
+    layerPanel:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        saveLayerPanelPosition()
+    end)
+    layerPanel:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("iRC Current Layer")
+        local layer = GuildMap:GetLocalLayer()
+        if layer then
+            GameTooltip:AddLine("Layer " .. tostring(layer.number), 0.30, 1, 0.35)
+            GameTooltip:AddLine("Raw zone ID: " .. tostring(layer.zoneUID), 0.68, 0.68, 0.68)
+            GameTooltip:AddLine("Detected from " .. tostring(layer.source or "nearby NPC") .. ".", 0.68, 0.68, 0.68)
+        else
+            GameTooltip:AddLine("Waiting for a nearby NPC observation.", 0.72, 0.72, 0.72, true)
+        end
+        GameTooltip:AddLine(" ")
+        if settings.layerPanelLocked == true then
+            GameTooltip:AddLine("Panel locked. Right-click to unlock it.", 1, 0.82, 0.35, true)
+        else
+            GameTooltip:AddLine("Drag the panel to move it or drag the corner to resize it.", 1, 0.82, 0.35, true)
+            GameTooltip:AddLine("Right-click to lock the panel.", 1, 0.82, 0.35, true)
+        end
+        GameTooltip:AddLine("Visibility is controlled in Personal Settings.", 0.72, 0.72, 0.72, true)
+        GameTooltip:Show()
+    end)
+    layerPanel:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    layerPanel:SetScript("OnMouseUp", function(_, button)
+        if button ~= "RightButton" then return end
+        settings.layerPanelLocked = settings.layerPanelLocked ~= true
+        updateLockState()
+        iRC:Print(settings.layerPanelLocked and "Layer panel locked." or "Layer panel unlocked.")
+        if GameTooltip then GameTooltip:Hide() end
+    end)
+    updateLockState()
+    layerPanel:ClearAllPoints()
+    layerPanel:SetPoint(settings.layerPanelPoint or "TOP", UIParent,
+        settings.layerPanelRelativePoint or settings.layerPanelPoint or "TOP",
+        tonumber(settings.layerPanelX) or 0, tonumber(settings.layerPanelY) or -90)
+end
+
+function GuildMap:GetLocalLayer()
+    if not localLayer then return nil end
+    local now = GetTime and GetTime() or 0
+    if now - (localLayer.seenAt or 0) > LOCAL_LAYER_LIFETIME then
+        localLayer = nil
+        return nil
+    end
+    local mapId = currentPlayerMapId()
+    if mapId and localLayer.mapId ~= mapId then return nil end
+    return localLayer
+end
+
+function GuildMap:UpdateLocalLayerDisplay()
+    local layer = self:GetLocalLayer()
+    if mapControls and mapControls.layerLabel then
+        if layer then
+            mapControls.layerLabel:SetText("Layer " .. tostring(layer.number) .. "  |cff888888(ID "
+                .. tostring(layer.zoneUID) .. ", " .. tostring(layer.source or "observed") .. ")|r")
+            mapControls.layerLabel:SetTextColor(0.30, 1, 0.35, 1)
+        else
+            mapControls.layerLabel:SetText("Current layer: waiting for a nearby NPC")
+            mapControls.layerLabel:SetTextColor(0.72, 0.72, 0.72, 1)
+        end
+    end
+    if layerPanel then
+        layerPanel.value:SetText(layer and tostring(layer.number) or "--")
+        layerPanel.value:SetTextColor(layer and 0.30 or 0.72, layer and 1 or 0.72,
+            layer and 0.35 or 0.72)
+        layerPanel:SetShown(iRC:GetSettings().showLayerPanel ~= false)
+    end
+end
+
+function GuildMap:ObserveLocalLayer(unit, source)
+    if type(unit) ~= "string" or not UnitGUID then return false end
+    if iRC:GetSettings().showLayerPanel == false then return false end
+    if iRC.IsForeverClient and not iRC:IsForeverClient() then return false end
+    local guid = UnitGUID(unit)
+    local zoneUID, serverId, instanceId, unitType = parseWorldLayerGuid(guid)
+    if not zoneUID then return false end
+    local mapId = currentPlayerMapId()
+    if not mapId then return false end
+    local changed = not localLayer or localLayer.zoneUID ~= zoneUID
+        or localLayer.serverId ~= serverId or localLayer.instanceId ~= instanceId
+        or localLayer.mapId ~= mapId
+    localLayer = {
+        zoneUID = zoneUID,
+        number = getLayerNumber(zoneUID, serverId, instanceId),
+        serverId = serverId,
+        instanceId = instanceId,
+        unitType = unitType,
+        mapId = mapId,
+        source = source or unit,
+        seenAt = GetTime and GetTime() or 0,
+    }
+    if changed then
+        iRC:DebugMsg("Local layer detected: zoneUID=" .. tostring(zoneUID)
+            .. ", map=" .. tostring(mapId) .. ", source=" .. tostring(localLayer.source), 3)
+        self:BroadcastLocalLayer(true)
+    end
+    self:UpdateLocalLayerDisplay()
+    return true
+end
+
+function GuildMap:ClearLocalLayer()
+    localLayer = nil
+    self:UpdateLocalLayerDisplay()
+end
+
+function GuildMap:SetLayerPanelShown(enabledValue)
+    iRC:GetSettings().showLayerPanel = enabledValue and true or false
+    initializeLayerPanel()
+    if enabledValue then
+        self:ObserveLocalLayer("target", "target")
+        self:ObserveLocalLayer("mouseover", "mouseover")
+    end
+    self:UpdateLocalLayerDisplay()
+end
+
+function GuildMap:ReceiveLayerState(parts, sender)
+    if iRC:GetSettings().showLayerPanel == false then return false end
+    if type(parts) ~= "table" or tostring(parts[2] or "") ~= "1" then return false end
+    local zoneUID = tonumber(parts[3])
+    local serverId = tonumber(parts[4])
+    local instanceId = tonumber(parts[5])
+    local mapId = tonumber(parts[6])
+    if not zoneUID or zoneUID <= 0 or not serverId or serverId < 0
+        or not instanceId or instanceId < 0 or not mapId or mapId <= 0 then return false end
+    local scope = tostring(serverId) .. ":" .. tostring(instanceId)
+    local ids = knownLayerIds[scope]
+    if not ids then ids = {}; knownLayerIds[scope] = ids end
+    local registryChanged = ids[zoneUID] ~= true
+    ids[zoneUID] = true
+    for rawId in tostring(parts[8] or ""):gmatch("%d+") do
+        local knownId = tonumber(rawId)
+        if knownId and knownId > 0 and not ids[knownId] then
+            ids[knownId] = true
+            registryChanged = true
+        end
+    end
+    local number = getLayerNumber(zoneUID, serverId, instanceId)
+    local senderKey = iRC:NormalizeName(sender)
+    if senderKey ~= "" then
+        layerUsers[senderKey] = {
+            name = sender, zoneUID = zoneUID, number = number,
+            serverId = serverId, instanceId = instanceId, mapId = mapId,
+            seenAt = GetTime and GetTime() or 0,
+        }
+    end
+    if localLayer and localLayer.serverId == serverId and localLayer.instanceId == instanceId then
+        localLayer.number = getLayerNumber(localLayer.zoneUID, serverId, instanceId)
+        self:UpdateLocalLayerDisplay()
+        if registryChanged and C_Timer and C_Timer.After then
+            C_Timer.After(1 + math.random() * 2, function() GuildMap:BroadcastLocalLayer(false) end)
+        end
+    end
+    return true
+end
+
+function GuildMap:GetUserLayer(name)
+    local entry = layerUsers[iRC:NormalizeName(name)]
+    if not entry then return nil end
+    local now = GetTime and GetTime() or 0
+    if now - (entry.seenAt or 0) > LOCAL_LAYER_LIFETIME then
+        layerUsers[iRC:NormalizeName(name)] = nil
+        return nil
+    end
+    return entry
+end
 
 local function hidePinMenu()
     if pinMenu then pinMenu:Hide() end
@@ -448,7 +799,7 @@ local function initializeMap()
     -- building its own children without addon-owned controls being attached to
     -- it. Keep iRC's settings in an independent overlay anchored to the map.
     mapControls = CreateFrame("Frame", "iRCGuildMapControls", UIParent)
-    mapControls:SetSize(230, 52)
+    mapControls:SetSize(280, 70)
     mapControls:SetPoint("TOPRIGHT", WorldMapFrame.ScrollContainer, "TOPRIGHT", -12, -12)
     mapControls:SetFrameStrata("FULLSCREEN_DIALOG")
     mapControls:SetFrameLevel((WorldMapFrame:GetFrameLevel() or 0) + 30)
@@ -478,6 +829,12 @@ local function initializeMap()
         GuildMap:SetShown(self:GetChecked() and true or false)
         if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
     end)
+    mapControls.layerLabel = mapControls:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    mapControls.layerLabel:SetPoint("TOPRIGHT", showToggle, "BOTTOMRIGHT", 0, -3)
+    mapControls.layerLabel:SetWidth(270)
+    mapControls.layerLabel:SetJustifyH("RIGHT")
+    mapControls.layerLabel:SetWordWrap(false)
+    addLabelOutline(mapControls.layerLabel)
     local function updateToggle()
         local visible = enabled() and WorldMapFrame:IsShown()
         mapControls:SetShown(visible)
@@ -485,6 +842,7 @@ local function initializeMap()
         toggle:SetChecked(iRC:GetSettings().shareGuildMapPosition ~= false)
         showToggle:SetShown(visible)
         showToggle:SetChecked(iRC:GetSettings().showGuildMap ~= false)
+        GuildMap:UpdateLocalLayerDisplay()
     end
     GuildMap.UpdateToggle = updateToggle
     WorldMapFrame.ScrollContainer:HookScript("OnMouseWheel", function() GuildMap:UpdatePins(true) end)
@@ -497,9 +855,16 @@ local function initializeMap()
     end)
     WorldMapFrame:HookScript("OnShow", function()
         updateToggle()
-        -- Incoming positions update pins immediately. This slower ticker is
-        -- only needed to expire stale pins while the map remains open.
-        if not mapTicker and C_Timer and C_Timer.NewTicker then mapTicker = C_Timer.NewTicker(15, function() GuildMap:UpdatePins() end) end
+        GuildMap:ObserveLocalLayer("target", "target")
+        GuildMap:ObserveLocalLayer("mouseover", "mouseover")
+        -- Incoming positions update pins immediately. This slower ticker
+        -- expires stale pins and stale local layer observations while open.
+        if not mapTicker and C_Timer and C_Timer.NewTicker then
+            mapTicker = C_Timer.NewTicker(15, function()
+                GuildMap:UpdatePins()
+                GuildMap:UpdateLocalLayerDisplay()
+            end)
+        end
         lastDisplayedMapId = WorldMapFrame:GetMapID()
         GuildMap:UpdatePins(true)
         GuildMap:UpdatePins()
@@ -515,7 +880,14 @@ local function initializeMap()
     -- When initialization was deferred from the first OnShow, the normal
     -- OnShow hook above was not installed in time for that same opening.
     if WorldMapFrame:IsShown() then
-        if not mapTicker and C_Timer and C_Timer.NewTicker then mapTicker = C_Timer.NewTicker(15, function() GuildMap:UpdatePins() end) end
+        GuildMap:ObserveLocalLayer("target", "target")
+        GuildMap:ObserveLocalLayer("mouseover", "mouseover")
+        if not mapTicker and C_Timer and C_Timer.NewTicker then
+            mapTicker = C_Timer.NewTicker(15, function()
+                GuildMap:UpdatePins()
+                GuildMap:UpdateLocalLayerDisplay()
+            end)
+        end
         lastDisplayedMapId = WorldMapFrame:GetMapID()
         GuildMap:UpdatePins(true)
         GuildMap:UpdatePins()
@@ -566,25 +938,47 @@ end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
+frame:RegisterEvent("PLAYER_TARGET_CHANGED")
+frame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if initialized then return end
         initialized = true
+        initializeLayerPanel()
+        GuildMap:UpdateLocalLayerDisplay()
+        if not layerPanelTicker and C_Timer and C_Timer.NewTicker then
+            layerPanelTicker = C_Timer.NewTicker(15, function()
+                GuildMap:UpdateLocalLayerDisplay()
+                GuildMap:BroadcastLocalLayer(false)
+            end)
+        end
         if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_WorldMap") then armMapInitialization() end
         GuildMap:SchedulePosition(1.5, 0.5, true)
         scheduleNextPosition()
     elseif event == "ADDON_LOADED" then
         local loadedAddon = ...
         if loadedAddon == "Blizzard_WorldMap" then armMapInitialization() end
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        GuildMap:ClearLocalLayer()
     elseif event == "ZONE_CHANGED_NEW_AREA" then
+        GuildMap:ClearLocalLayer()
         -- If the map is open, swap to already cached locations immediately;
         -- the outgoing live-position update remains separately throttled.
         GuildMap:UpdatePins(true)
         GuildMap:SchedulePosition(0.5, 0, true)
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        GuildMap:ObserveLocalLayer("target", "target")
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        GuildMap:ObserveLocalLayer("mouseover", "mouseover")
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        local unit = ...
+        GuildMap:ObserveLocalLayer(unit, "nameplate")
     elseif event == "GROUP_ROSTER_UPDATE" then
         -- Remove newly grouped members immediately, even if the full map
         -- refresh is deferred by combat low-traffic mode.

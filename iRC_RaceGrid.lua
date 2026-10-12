@@ -494,6 +494,53 @@ function RaceGrid:IsEnabled()
     return true
 end
 
+local function getChannelMemberNames()
+    local getRosterInfo = getAdminRosterAPI()
+    local displayIndex = findAdminChannelDisplayIndex()
+    if not getRosterInfo or not displayIndex then return {} end
+
+    local ownKey = fullNameKey(iRC:GetPlayerName())
+    local seen, names = {}, {}
+    for index = 1, 500 do
+        local ok, name = pcall(getRosterInfo, displayIndex, index)
+        if not ok or iRC:IsSecretValue(name) then break end
+        if type(name) ~= "string" or name == "" then break end
+        local key = fullNameKey(name)
+        if key ~= "" and key ~= ownKey and not seen[key] then
+            seen[key] = true
+            names[#names + 1] = name
+        end
+    end
+    return names
+end
+
+function RaceGrid:BroadcastLayerState(layer)
+    if type(layer) ~= "table" or iRC:GetSettings().showLayerPanel == false then return false end
+    local zoneUID = math.floor(tonumber(layer.zoneUID) or 0)
+    local serverId = math.floor(tonumber(layer.serverId) or -1)
+    local instanceId = math.floor(tonumber(layer.instanceId) or -1)
+    local mapId = math.floor(tonumber(layer.mapId) or 0)
+    local number = math.max(1, math.min(99, math.floor(tonumber(layer.number) or 1)))
+    if zoneUID <= 0 or serverId < 0 or instanceId < 0 or mapId <= 0 then return false end
+    self:EnsureChannel()
+    if not getChannelId() then return false end
+
+    -- Public CHANNEL chat is protected on Forever and may only be sent from a
+    -- hardware event. Layer observations are automatic, so use the hidden
+    -- iRCComms channel roster for discovery and addon whispers for transport.
+    -- Each observed raw ID is enough for peers to build the same sorted map;
+    -- omitting the full registry also keeps the addon payload below 255 bytes.
+    local payload = table.concat({
+        "LAYER_STATE", "1", tostring(zoneUID), tostring(serverId), tostring(instanceId),
+        tostring(mapId), tostring(number), "",
+    }, SEP)
+    local sent
+    for _, name in ipairs(getChannelMemberNames()) do
+        if send(PREFIX, payload, "WHISPER", name) then sent = true end
+    end
+    return sent == true
+end
+
 function RaceGrid:EnsureChannel()
     if not self:IsEnabled() then return end
     -- Joining before Blizzard restores General/Trade makes the hidden addon
@@ -1346,6 +1393,11 @@ end
 handleMessage = function(prefix, message, sender, distribution, queued)
     if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
+    if (distribution == "CHANNEL" or distribution == "WHISPER")
+        and message:match("^LAYER_STATE\t") then
+        if iRC.GuildMap then iRC.GuildMap:ReceiveLayerState(split(message), sender) end
+        return
+    end
     if distribution == "CHANNEL" and isOwnGuildSender(sender) and message:match("^GUILD_") then return end
     if not queued and distribution == "WHISPER" and message:match("^CACHE_DATA\t")
         and C_Timer and C_Timer.After then

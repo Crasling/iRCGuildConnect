@@ -527,6 +527,13 @@ local DEFAULT_SETTINGS = {
     showGuildMap = true,
     guildMapPinSize = 12,
     shareGuildMapPosition = true,
+    showLayerPanel = true,
+    layerPanelPoint = "TOP",
+    layerPanelRelativePoint = "TOP",
+    layerPanelX = 0,
+    layerPanelY = -90,
+    layerPanelScale = 1,
+    layerPanelLocked = false,
 }
 local savedVariablesReady = false
 local startupSettings = {}

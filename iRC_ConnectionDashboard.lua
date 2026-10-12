@@ -979,6 +979,7 @@ function Dashboard:Refresh()
         local responseRequired = iRC:IsAddonResponseRequired(connection)
         local progressionMode = iRC:GetProgressionMode(rules)
         local progressionRulesActive = progressionMode ~= "NONE"
+        local attentionRelevant = responseRequired or progressionRulesActive
         if not progressionRulesActive then
             frame.memberReport:Hide()
             frame.memberMenu:Hide()
@@ -1006,7 +1007,7 @@ function Dashboard:Refresh()
             else attention = attention + 1 end
         end
         local cards
-        if progressionRulesActive then
+        if attentionRelevant then
             cards = { { label = "Verified", value = tostring(verified), color = GREEN } }
             if not responseRequired then
                 cards[#cards + 1] = {
@@ -1024,7 +1025,7 @@ function Dashboard:Refresh()
         end
         setSummaryCards(frame, cards)
         local filters
-        if progressionRulesActive then
+        if attentionRelevant then
             filters = { { id = "all", label = "All members" },
                 { id = "attention", label = "Needs attention", flash = attention > 0 },
                 { id = "verified", label = "Verified" } }
