@@ -3630,7 +3630,9 @@ function UI:Create()
         guildReport.subtitle:SetText("Leaderboard rank #" .. tostring(rank or "?") .. "   ·   "
             .. tostring(group.faction or "Unknown") .. "   ·   " .. tostring(tag or "Normal"))
         local lines = { infoSection("Guild summary", true) }
-        lines[#lines + 1] = infoLine("Guild race", RACE_LABELS[group.race] or group.race or "Unknown")
+        if group.rulesKnown and type(group.rules) == "table" and group.rules.raceLock == true then
+            lines[#lines + 1] = infoLine("Guild race", RACE_LABELS[group.race] or group.race or "Unknown")
+        end
         lines[#lines + 1] = infoLine("Members", group.members or 0)
         lines[#lines + 1] = infoLine("Active players", group.activePlayers or group.activeMembers or 0,
             iRC.Colors.Green)

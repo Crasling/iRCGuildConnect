@@ -4,7 +4,9 @@ iRC - Changelog
 
 v0.5.25 - Zone Layer Reliability
 --------------------------------------------------------------------------------
+[ADDED] WoW's SHARD_TRANSFER event marks the current layer as transitioning, triggers a fresh NPC vote, and reconciles conflicting layer labels through iRCComms
 [FIXED] Test Admin exposes Member Management previews only while the Make Me GM override is active
+[FIXED] Top Guild reports show a guild race only when that guild has Race-Locked enabled
 [FIXED] Local layer numbers are isolated per zone, and new identities query iRCComms before creating a Layer 1-99 assignment
 [FIXED] Layer detection uses a three-of-five nearby NPC majority, rejects outside-zone positions when available, and pauses safely during combat
 [FIXED] Guild map pins preserve reported member layers and retain recent reports across reloads while older clients await their next broadcast

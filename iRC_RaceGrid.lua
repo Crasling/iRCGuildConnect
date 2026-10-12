@@ -585,6 +585,17 @@ function RaceGrid:RequestLayerAssignment(layer)
     return sent == true
 end
 
+function RaceGrid:BroadcastLayerTransition(mapId)
+    mapId = math.floor(tonumber(mapId) or 0)
+    if mapId <= 0 or iRC:GetSettings().showLayerPanel == false or not self:IsLayerChannelReady() then return false end
+    local payload = table.concat({ "LAYER_TRANSITION", "1", tostring(mapId) }, SEP)
+    local sent
+    for _, name in ipairs(getChannelMemberNames()) do
+        if send(PREFIX, payload, "WHISPER", name) then sent = true end
+    end
+    return sent == true
+end
+
 function RaceGrid:EnsureChannel()
     if not self:IsEnabled() then return end
     -- Joining before Blizzard restores General/Trade makes the hidden addon
@@ -1469,6 +1480,8 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             end
         elseif layerParts[1] == "LAYER_ASSIGN" and distribution == "WHISPER" then
             iRC.GuildMap:ReceiveLayerAssignment(layerParts, sender)
+        elseif layerParts[1] == "LAYER_TRANSITION" and distribution == "WHISPER" then
+            iRC.GuildMap:ReceiveLayerTransition(layerParts, sender)
         end
         return
     end

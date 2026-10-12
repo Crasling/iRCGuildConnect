@@ -13,6 +13,7 @@ local DEFAULT_PIN_SIZE = 12
 local CLUSTER_MINIMUM_DISTANCE = 18
 local MAX_CLUSTER_TOOLTIP_MEMBERS = 5
 local LOCAL_LAYER_LIFETIME = 300
+local LAYER_TRANSITION_LIFETIME = 15
 local LAYER_ID_LIFETIME = 3600
 local MAX_LAYER_IDS = 99
 local LAYER_VOTE_WINDOW = 5
@@ -35,6 +36,8 @@ local lastDisplayedMapId
 local lastGroupedMembers = {}
 local localLayer
 local pendingLocalLayer
+local layerTransitioning = false
+local layerTransitionBroadcastPending = false
 local layerVotes, layerVotedGuids = {}, {}
 local knownLayerIds = {}
 local knownLayerNumbers = {}
@@ -81,7 +84,7 @@ local function parseWorldLayerGuid(guid)
     if iRC:IsSecretValue(guid) or type(guid) ~= "string" or guid == "" then return nil end
     local unitType, _, serverId, instanceId, zoneUID = strsplit("-", guid)
     -- Player-controlled pets can retain an owner-specific GUID context and are
-    -- not reliable evidence of the shard occupied by the player.
+    -- not reliable evidence of the world instance occupied by the player.
     if unitType ~= "Creature" and unitType ~= "Vehicle" then return nil end
     serverId, instanceId, zoneUID = tonumber(serverId), tonumber(instanceId), tonumber(zoneUID)
     if not serverId or not instanceId or not zoneUID or zoneUID <= 0 then return nil end
@@ -501,6 +504,8 @@ local function initializeLayerPanel()
                 or (pendingLocalLayer.waitingForChannel
                     and "Waiting to join iRCComms before assigning this zone's layer number."
                     or "Checking iRCComms for this zone's existing layer number."), 1, 0.82, 0.35, true)
+        elseif layerTransitioning then
+            GameTooltip:AddLine("Layer transfer detected. Waiting for fresh nearby NPC evidence.", 1, 0.82, 0.35, true)
         else
             GameTooltip:AddLine("Waiting to detect your current layer in this zone.", 0.72, 0.72, 0.72, true)
         end
@@ -556,15 +561,19 @@ function GuildMap:UpdateLocalLayerDisplay()
                     and "Current zone layer: waiting for iRCComms..."
                     or "Current zone layer: checking iRCComms..."))
             mapControls.layerLabel:SetTextColor(1, 0.82, 0.35, 1)
+        elseif layerTransitioning then
+            mapControls.layerLabel:SetText("Current zone layer: transitioning...")
+            mapControls.layerLabel:SetTextColor(1, 0.82, 0.35, 1)
         else
             mapControls.layerLabel:SetText("Current zone layer: waiting for nearby NPCs")
             mapControls.layerLabel:SetTextColor(0.72, 0.72, 0.72, 1)
         end
     end
     if layerPanel then
-        layerPanel.value:SetText(layer and tostring(layer.number) or (pendingLocalLayer and "..." or "--"))
-        layerPanel.value:SetTextColor(layer and 0.30 or (pendingLocalLayer and 1 or 0.72),
-            layer and 1 or (pendingLocalLayer and 0.82 or 0.72), layer and 0.35 or (pendingLocalLayer and 0.35 or 0.72))
+        local waiting = pendingLocalLayer or layerTransitioning
+        layerPanel.value:SetText(layer and tostring(layer.number) or (waiting and "..." or "--"))
+        layerPanel.value:SetTextColor(layer and 0.30 or (waiting and 1 or 0.72),
+            layer and 1 or (waiting and 0.82 or 0.72), layer and 0.35 or (waiting and 0.35 or 0.72))
         layerPanel:SetShown(iRC:GetSettings().showLayerPanel ~= false)
     end
 end
@@ -642,7 +651,7 @@ local function continueLocalLayerAssignment(token)
     end
     candidate.waitingForChannel = nil
     local knownNumber = getAssignedLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId)
-    if knownNumber then
+    if knownNumber and not candidate.forceQuery then
         rememberLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, knownNumber)
         candidate.replies, candidate.replyCount = { [knownNumber] = 1 }, 1
         return finalizeLocalLayerAssignment(token)
@@ -665,7 +674,13 @@ local function beginLocalLayerAssignment(candidate)
     end
     local token = {}
     candidate.token, candidate.replies, candidate.responders, candidate.replyCount = token, {}, {}, 0
+    if candidate.initialNumber then
+        candidate.replies[candidate.initialNumber] = 1
+        candidate.replyCount = 1
+    end
     pendingLocalLayer = candidate
+    layerTransitioning = false
+    layerTransitionBroadcastPending = false
     localLayer = nil
     GuildMap:UpdateLocalLayerDisplay()
     return continueLocalLayerAssignment(token)
@@ -778,11 +793,23 @@ function GuildMap:RefreshLocalLayerEvidence()
     return observed == true
 end
 
-function GuildMap:ClearLocalLayer()
+function GuildMap:ClearLocalLayer(transitioning)
     localLayer = nil
     pendingLocalLayer = nil
+    layerTransitioning = transitioning == true
+    if not layerTransitioning then layerTransitionBroadcastPending = false end
     layerVotes, layerVotedGuids = {}, {}
     self:UpdateLocalLayerDisplay()
+end
+
+local function broadcastLayerTransition()
+    if not layerTransitioning or not layerTransitionBroadcastPending or layerScanBlockedByCombat()
+        or not iRC.RaceGrid or not iRC.RaceGrid.BroadcastLayerTransition then return false end
+    if iRC.RaceGrid:BroadcastLayerTransition(currentPlayerMapId()) then
+        layerTransitionBroadcastPending = false
+        return true
+    end
+    return false
 end
 
 function GuildMap:SetLayerPanelShown(enabledValue)
@@ -822,6 +849,18 @@ function GuildMap:ReceiveLayerState(parts, sender)
             rememberLayerId(ids, knownId)
             registryChanged = true
         end
+    end
+    if localLayer and not pendingLocalLayer and localLayer.zoneUID == zoneUID
+        and localLayer.serverId == serverId and localLayer.instanceId == instanceId
+        and localLayer.mapId == mapId and localLayer.number ~= reportedNumber then
+        local previous = localLayer
+        beginLocalLayerAssignment({
+            zoneUID = previous.zoneUID, layerSwapId = previous.layerSwapId,
+            serverId = previous.serverId, instanceId = previous.instanceId,
+            unitType = previous.unitType, mapId = previous.mapId,
+            source = "iRCComms reconciliation", seenAt = previous.seenAt,
+            forceQuery = true, initialNumber = previous.number,
+        })
     end
     if pendingLocalLayer and pendingLocalLayer.zoneUID == zoneUID
         and pendingLocalLayer.serverId == serverId and pendingLocalLayer.instanceId == instanceId
@@ -945,12 +984,31 @@ function GuildMap:GetUserLayer(name)
     end
     if not entry then return nil end
     local now = GetTime and GetTime() or 0
+    if entry.transitioning and now >= (entry.transitioningUntil or 0) then
+        entry.transitioning, entry.transitioningUntil, entry.stale = nil, nil, true
+    end
     if now - (entry.seenAt or 0) > LOCAL_LAYER_LIFETIME then
         layerUsers[senderKey] = nil
         savedLayerUsers()[senderKey] = nil
         return nil
     end
     return entry
+end
+
+function GuildMap:ReceiveLayerTransition(parts, sender)
+    if iRC:GetSettings().showLayerPanel == false or type(parts) ~= "table"
+        or tostring(parts[2] or "") ~= "1" then return false end
+    local mapId = tonumber(parts[3])
+    local senderKey = iRC:NormalizeName(sender)
+    if not mapId or mapId <= 0 or mapId ~= math.floor(mapId) or senderKey == "" then return false end
+    local entry = self:GetUserLayer(sender) or { name = sender, mapId = mapId }
+    entry.name, entry.mapId = sender, mapId
+    entry.transitioning, entry.stale = true, nil
+    entry.transitioningUntil = (GetTime and GetTime() or 0) + LAYER_TRANSITION_LIFETIME
+    entry.seenAt = GetTime and GetTime() or 0
+    layerUsers[senderKey] = entry
+    self:UpdatePins(true)
+    return true
 end
 
 local function hidePinMenu()
@@ -1009,7 +1067,14 @@ local function addGuildMemberTooltip(tooltip, name, unit, member)
     end
     local layer = GuildMap:GetUserLayer(name)
     if layer and layer.mapId == currentPlayerMapId() then
-        tooltip:AddLine("Current zone layer: " .. tostring(layer.number), 0.30, 1, 0.35)
+        if layer.transitioning then
+            tooltip:AddLine("Current zone layer: transitioning...", 1, 0.82, 0.35)
+        elseif layer.stale then
+            tooltip:AddLine("Current zone layer: awaiting confirmation"
+                .. (layer.number and (" (last Layer " .. tostring(layer.number) .. ")") or ""), 0.72, 0.72, 0.72)
+        elseif layer.number then
+            tooltip:AddLine("Current zone layer: " .. tostring(layer.number), 0.30, 1, 0.35)
+        end
     end
 end
 
@@ -1130,7 +1195,7 @@ local function clearPin(name)
     if pinMenu and pinMenu:IsShown() and pinMenu.playerName == pin.playerName then hidePinMenu() end
     pin:Hide()
     pin.playerName, pin.classFile, pin.level = nil, nil, nil
-    pin.className, pin.layerNumber, pin.clusterMembers = nil, nil, nil
+    pin.className, pin.layerNumber, pin.layerStatus, pin.clusterMembers = nil, nil, nil, nil
     if pin.count then pin.count:Hide() end
     if pin.clusterDots then
         for _, dot in ipairs(pin.clusterDots) do
@@ -1206,7 +1271,8 @@ local function acquirePin(parent)
                     local member = self.clusterMembers[index]
                     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile or ""]
                     local details = "Level " .. tostring(member.level or 0) .. " " .. tostring(member.className or member.classFile or "Unknown")
-                    if member.layerNumber then details = details .. "  |  Layer " .. tostring(member.layerNumber) end
+                    if member.layerStatus then details = details .. "  |  " .. member.layerStatus
+                    elseif member.layerNumber then details = details .. "  |  Layer " .. tostring(member.layerNumber) end
                     if color then
                         GameTooltip:AddDoubleLine(iRC:FormatPlayerName(member.playerName or "Unknown"), details, color.r, color.g, color.b, 0.65, 0.65, 0.65)
                     else
@@ -1224,7 +1290,9 @@ local function acquirePin(parent)
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[self.classFile or ""]
             if color then GameTooltip:AddLine(shortName, color.r, color.g, color.b) else GameTooltip:AddLine(shortName) end
             GameTooltip:AddLine("Level " .. tostring(self.level or 0) .. " " .. tostring(self.className or self.classFile or "Unknown"), 0.65, 0.65, 0.65)
-            if self.layerNumber then
+            if self.layerStatus then
+                GameTooltip:AddLine("Current zone layer: " .. self.layerStatus, 1, 0.82, 0.35)
+            elseif self.layerNumber then
                 GameTooltip:AddLine("Current zone layer: " .. tostring(self.layerNumber), 0.30, 1, 0.35)
             end
             GameTooltip:Show()
@@ -1249,6 +1317,14 @@ local function memberDetails(name, position)
     local classFile = profile and profile.class or ""
     local layer = GuildMap:GetUserLayer(position.name or name)
     local layerNumber = layer and layer.mapId == position.mapId and layer.number or nil
+    local layerStatus
+    if layer and layer.mapId == position.mapId then
+        if layer.transitioning then layerStatus = "Transitioning..."
+        elseif layer.stale then
+            layerStatus = layer.number and ("Awaiting confirmation (last Layer " .. tostring(layer.number) .. ")")
+                or "Awaiting confirmation"
+        end
+    end
     return {
         key = name,
         playerName = position.name or name,
@@ -1256,6 +1332,7 @@ local function memberDetails(name, position)
         level = profile and profile.level or 0,
         className = classFile ~= "" and classFile:sub(1, 1) .. classFile:sub(2):lower() or "Unknown",
         layerNumber = layerNumber,
+        layerStatus = layerStatus,
     }
 end
 
@@ -1270,7 +1347,8 @@ local function configureSinglePin(pin, member, size)
     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile or ""]
     pin.center:SetVertexColor(color and color.r or 1, color and color.g or 1, color and color.b or 1, 1)
     pin.playerName, pin.classFile, pin.level = member.playerName, member.classFile, member.level
-    pin.className, pin.layerNumber, pin.clusterMembers = member.className, member.layerNumber, { member }
+    pin.className, pin.layerNumber, pin.layerStatus, pin.clusterMembers = member.className, member.layerNumber,
+        member.layerStatus, { member }
     pin.count:Hide()
     for _, dot in ipairs(pin.clusterDots) do
         dot.border:Hide()
@@ -1283,7 +1361,7 @@ local function configureClusterPin(pin, members, size)
     pin:SetSize(width, height)
     pin.border:Hide()
     pin.center:Hide()
-    pin.playerName, pin.classFile, pin.level, pin.className, pin.layerNumber = nil, nil, nil, nil, nil
+    pin.playerName, pin.classFile, pin.level, pin.className, pin.layerNumber, pin.layerStatus = nil, nil, nil, nil, nil, nil
     pin.clusterMembers = members
     local offsets = {
         { 0, math.floor(size * 0.28) },
@@ -1627,6 +1705,9 @@ frame:RegisterEvent("PLAYER_TARGET_CHANGED")
 frame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("SHARD_TRANSFER") then
+    frame:RegisterEvent("SHARD_TRANSFER")
+end
 frame:RegisterEvent("CHAT_MSG_ADDON")
 local function scheduleLayerEvidenceRefresh(delay)
     if not C_Timer or not C_Timer.After then
@@ -1643,6 +1724,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         GuildMap:UpdateLocalLayerDisplay()
         if not layerPanelTicker and C_Timer and C_Timer.NewTicker then
             layerPanelTicker = C_Timer.NewTicker(15, function()
+                broadcastLayerTransition()
                 if not GuildMap:GetLocalLayer() then GuildMap:RefreshLocalLayerEvidence() end
                 GuildMap:UpdateLocalLayerDisplay()
                 GuildMap:BroadcastLocalLayer(false)
@@ -1666,6 +1748,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- the outgoing live-position update remains separately throttled.
         GuildMap:UpdatePins(true)
         GuildMap:SchedulePosition(0.5, 0, true)
+    elseif event == "SHARD_TRANSFER" then
+        GuildMap:ClearLocalLayer(true)
+        layerTransitionBroadcastPending = true
+        broadcastLayerTransition()
+        scheduleLayerEvidenceRefresh(0.5)
+        scheduleLayerEvidenceRefresh(1.5)
+        scheduleLayerEvidenceRefresh(3)
     elseif event == "PLAYER_TARGET_CHANGED" then
         GuildMap:ObserveLocalLayer("target", "target")
     elseif event == "UPDATE_MOUSEOVER_UNIT" then
@@ -1674,6 +1763,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local unit = ...
         GuildMap:ObserveLocalLayer(unit, "nameplate")
     elseif event == "PLAYER_REGEN_ENABLED" then
+        broadcastLayerTransition()
         if pendingLocalLayer then
             local candidate = pendingLocalLayer
             candidate.waitingForCombat = nil
