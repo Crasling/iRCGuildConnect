@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.25 - Zone Layer Reliability
+--------------------------------------------------------------------------------
+[FIXED] Test Admin exposes Member Management previews only while the Make Me GM override is active
+[FIXED] Local layer numbers are isolated per zone, and new identities query iRCComms before creating a Layer 1-99 assignment
+[FIXED] Layer detection reacquires visible NPCs after reloads and zone changes, pauses during combat, and waits for iRCComms before assigning a number
+[FIXED] Guild map pins preserve reported member layers and retain recent reports across reloads while older clients await their next broadcast
+[CHANGED] The layer panel reports observed zone identities without implying that every lower layer number is currently known
+
 v0.5.24 - Layer Support & Communication Safety
 --------------------------------------------------------------------------------
 [ADDED] LayerSwap-compatible identities and recent same-zone cache data help keep iRC's numeric Layer 1-N assignments consistent without opening or controlling LayerSwap

@@ -501,6 +501,10 @@ function RaceGrid:IsEnabled()
     return true
 end
 
+function RaceGrid:IsLayerChannelReady()
+    return getChannelId() ~= nil
+end
+
 local function getChannelMemberNames()
     local getRosterInfo = getAdminRosterAPI()
     local displayIndex = findAdminChannelDisplayIndex()
@@ -554,6 +558,26 @@ function RaceGrid:BroadcastLayerState(layer)
         "LAYER_STATE", "1", tostring(zoneUID), tostring(serverId), tostring(instanceId),
         tostring(mapId), tostring(number), "", layerSwapId,
     }, SEP)
+    local sent
+    for _, name in ipairs(getChannelMemberNames()) do
+        if send(PREFIX, payload, "WHISPER", name) then sent = true end
+    end
+    return sent == true
+end
+
+function RaceGrid:RequestLayerAssignment(layer)
+    if type(layer) ~= "table" or iRC:GetSettings().showLayerPanel == false then return false end
+    local zoneUID = math.floor(tonumber(layer.zoneUID) or 0)
+    local serverId = math.floor(tonumber(layer.serverId) or -1)
+    local instanceId = math.floor(tonumber(layer.instanceId) or -1)
+    local mapId = math.floor(tonumber(layer.mapId) or 0)
+    local routeId = tostring(layer.layerSwapId or "")
+    if zoneUID <= 0 or serverId < 0 or instanceId < 0 or mapId <= 0
+        or routeId ~= tostring(serverId) .. "-" .. tostring(zoneUID) then return false end
+    self:EnsureChannel()
+    if not getChannelId() then return false end
+    local payload = table.concat({ "LAYER_REQUEST", "1", tostring(zoneUID), tostring(serverId),
+        tostring(instanceId), tostring(mapId), routeId }, SEP)
     local sent
     for _, name in ipairs(getChannelMemberNames()) do
         if send(PREFIX, payload, "WHISPER", name) then sent = true end
@@ -1424,9 +1448,28 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     if prefix ~= PREFIX or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     if (distribution == "CHANNEL" or distribution == "WHISPER")
-        and message:match("^LAYER_STATE\t") then
+        and message:match("^LAYER_") then
         local trusted = distribution == "CHANNEL" or isOwnGuildSender(sender) or RaceGrid:IsKnownChannelMember(sender)
-        if trusted and iRC.GuildMap then iRC.GuildMap:ReceiveLayerState(split(message), sender) end
+        if not trusted or not iRC.GuildMap then return end
+        local layerParts = split(message)
+        if layerParts[1] == "LAYER_STATE" then
+            iRC.GuildMap:ReceiveLayerState(layerParts, sender)
+        elseif layerParts[1] == "LAYER_REQUEST" and distribution == "WHISPER" then
+            local zoneUID, serverId = tonumber(layerParts[3]), tonumber(layerParts[4])
+            local instanceId, mapId = tonumber(layerParts[5]), tonumber(layerParts[6])
+            local routeId = tostring(layerParts[7] or "")
+            if tostring(layerParts[2] or "") == "1" and zoneUID and zoneUID > 0
+                and serverId and serverId >= 0 and instanceId and instanceId >= 0 and mapId and mapId > 0
+                and routeId == tostring(serverId) .. "-" .. tostring(zoneUID) then
+                local number = iRC.GuildMap:GetAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
+                if number then
+                    send(PREFIX, table.concat({ "LAYER_ASSIGN", "1", tostring(zoneUID), tostring(serverId),
+                        tostring(instanceId), tostring(mapId), tostring(number), routeId }, SEP), "WHISPER", sender)
+                end
+            end
+        elseif layerParts[1] == "LAYER_ASSIGN" and distribution == "WHISPER" then
+            iRC.GuildMap:ReceiveLayerAssignment(layerParts, sender)
+        end
         return
     end
     if distribution == "CHANNEL" and isOwnGuildSender(sender) and message:match("^GUILD_") then return end

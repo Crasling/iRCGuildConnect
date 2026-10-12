@@ -602,7 +602,7 @@ end
 local function isRankActionEligible(member, action, testAdminPreview)
     if not member or type(member.rankIndex) ~= "number"
         or iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName()) then return false end
-    if testAdminPreview == true and iRC:IsTestAdmin() then
+    if testAdminPreview == true and iRC:IsTestAdminGuildMaster() then
         return action == "PROMOTE" and member.rankIndex > 0
             or action == "DEMOTE" and member.rankIndex < getGuildRankCount() - 1
     end
@@ -630,7 +630,7 @@ local function getEligibleInactiveMembers(threshold, testAdminPreview, excludedR
     local members = {}
     local selfKey = iRC:NormalizeName(iRC:GetPlayerName())
     local ownRank = getNativeGuildRank()
-    local preview = testAdminPreview == true and iRC:IsTestAdmin()
+    local preview = testAdminPreview == true and iRC:IsTestAdminGuildMaster()
     if not preview and type(ownRank) ~= "number" then return members end
     for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
         if not member.online and tonumber(member.lastOnlineDays) and member.lastOnlineDays >= threshold
@@ -2392,12 +2392,12 @@ function UI:Create()
         end
     end
     frame.LayoutNavigation = function()
-        local testAdmin = iRC:IsTestAdmin()
+        local testAdminGuildMaster = iRC:IsTestAdminGuildMaster()
         local function hasNavigationPermission(item)
             if item.requiresGuild and not iRC:IsInGuildConnection() then return false end
             if item.guildMasterOnly then return iRC:IsGuildMaster() end
             if item.memberManagement then
-                return testAdmin or iRC:HasGuildPermission("memberRemoval")
+                return testAdminGuildMaster or iRC:HasGuildPermission("memberRemoval")
                     or iRC:HasGuildPermission("rankManagement")
             end
             if item.verificationManagement then
@@ -2825,8 +2825,8 @@ function UI:Create()
         frame.memberManagementTabs[index] = button
     end
     function frame:EnsureMemberManagementView()
-        local canRemove = iRC:IsTestAdmin() or iRC:HasGuildPermission("memberRemoval")
-        local canRank = iRC:IsTestAdmin() or iRC:HasGuildPermission("rankManagement")
+        local canRemove = iRC:IsTestAdminGuildMaster() or iRC:HasGuildPermission("memberRemoval")
+        local canRank = iRC:IsTestAdminGuildMaster() or iRC:HasGuildPermission("rankManagement")
         if self.memberManagementView == "RANK" and not canRank then
             self.memberManagementView = canRemove and "INACTIVE" or "RANK"
         elseif (self.memberManagementView == "INACTIVE" or self.memberManagementView == "KICK") and not canRemove then
@@ -3008,7 +3008,7 @@ function UI:Create()
         local excludeAlts = frame.inactiveExcludeAlts == true
         local eligible = getEligibleInactiveMembers(threshold, false, excludedRank, excludeAlts)
         local testPreview = false
-        if #eligible == 0 and iRC:IsTestAdmin() then
+        if #eligible == 0 and iRC:IsTestAdminGuildMaster() then
             eligible = getEligibleInactiveMembers(threshold, true, excludedRank, excludeAlts)
             testPreview = true
         end
@@ -3150,9 +3150,9 @@ function UI:Create()
             end
             return filtered
         end
-        local testPreview = iRC:IsTestAdmin() and not iRC:HasGuildPermission("rankManagement")
+        local testPreview = iRC:IsTestAdminGuildMaster() and not iRC:HasGuildPermission("rankManagement")
         local candidates = findCandidates(testPreview)
-        if #candidates == 0 and iRC:IsTestAdmin() and not testPreview then
+        if #candidates == 0 and iRC:IsTestAdminGuildMaster() and not testPreview then
             testPreview = true
             candidates = findCandidates(true)
         end
@@ -5081,12 +5081,12 @@ local function updateInactiveMembers(frame)
         frame.memberRows[index]:SetAlpha(1)
         frame.memberRows[index]:Hide()
     end
-    if eligibleCount == 0 and iRC:IsTestAdmin() then
+    if eligibleCount == 0 and iRC:IsTestAdminGuildMaster() then
         eligibleCount = #getEligibleInactiveMembers(threshold, true, excludedRank, excludeAlts)
     end
     frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
     frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
-    local bulkEnabled = eligibleCount > 0 or iRC:IsTestAdmin()
+    local bulkEnabled = eligibleCount > 0 or iRC:IsTestAdminGuildMaster()
     frame.inactiveRemoveAll:SetEnabled(bulkEnabled)
     frame.inactiveRemoveAll:SetAlpha(bulkEnabled and 1 or 0.42)
     frame.contentTitle:SetText("Inactive Member Management")
@@ -5139,9 +5139,9 @@ local function updateRankManagement(frame)
         local isSelf = iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName())
         local nativePromote = not isSelf and isRankActionEligible(member, "PROMOTE", false)
         local nativeDemote = not isSelf and isRankActionEligible(member, "DEMOTE", false)
-        local previewPromote = not isSelf and not nativePromote and iRC:IsTestAdmin()
+        local previewPromote = not isSelf and not nativePromote and iRC:IsTestAdminGuildMaster()
             and isRankActionEligible(member, "PROMOTE", true)
-        local previewDemote = not isSelf and not nativeDemote and iRC:IsTestAdmin()
+        local previewDemote = not isSelf and not nativeDemote and iRC:IsTestAdminGuildMaster()
             and isRankActionEligible(member, "DEMOTE", true)
         local canPromote, canDemote = nativePromote or previewPromote, nativeDemote or previewDemote
         if canPromote then promoteCount = promoteCount + 1 end
@@ -5604,7 +5604,7 @@ updateGuildOverview = function(frame)
     local retentionLabels = { "Seen this week", "Seen last week", "Seen this month", "Inactive 30-59 days", "Inactive 60+ days", "Activity unknown" }
     local retentionColors = { { 0.30, 0.85, 0.48 }, { 1, 0.67, 0.25 }, { 1, 0.47, 0.18 }, { 0.95, 0.25, 0.18 }, { 0.50, 0.18, 0.16 }, COLORS.gray }
     local retentionThresholds = { 0, 8, 14, 30, 60 }
-    local canReviewInactive = iRC:HasGuildPermission("memberRemoval") or iRC:IsTestAdmin()
+    local canReviewInactive = iRC:HasGuildPermission("memberRemoval") or iRC:IsTestAdminGuildMaster()
     for index, count in ipairs(retention) do
         local row = overview.retention.rows[index]
         setGuildHealthBar(row, retentionLabels[index], count, math.max(1, recencyTotal), retentionColors[index])
@@ -6691,7 +6691,7 @@ function UI:OpenCategory(category)
 end
 
 function UI:OpenInactiveMembers(days)
-    if not iRC:HasGuildPermission("memberRemoval") and not iRC:IsTestAdmin() then
+    if not iRC:HasGuildPermission("memberRemoval") and not iRC:IsTestAdminGuildMaster() then
         iRC:Print(iRC.Colors.Red .. "You do not have the delegated inactive-member management permission." .. iRC.Colors.Reset)
         return false
     end

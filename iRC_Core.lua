@@ -458,12 +458,12 @@ local INCOMING_SCOPE_KINDS = {
     ["race-grid"] = {
         ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true, CACHE_DATA = true,
         CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
-        GUILD_DESC = true, GUILD_REPORT = true, LAYER_STATE = true,
+        GUILD_DESC = true, GUILD_REPORT = true, LAYER_ASSIGN = true, LAYER_REQUEST = true, LAYER_STATE = true,
     },
     ["race-grid-channel"] = {
         ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true, CACHE_DATA = true,
         CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
-        GUILD_DESC = true, GUILD_REPORT = true, LAYER_STATE = true,
+        GUILD_DESC = true, GUILD_REPORT = true, LAYER_ASSIGN = true, LAYER_REQUEST = true, LAYER_STATE = true,
     },
 }
 
