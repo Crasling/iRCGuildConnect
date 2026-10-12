@@ -16,6 +16,7 @@ local LOCAL_LAYER_LIFETIME = 300
 local LAYER_ID_LIFETIME = 3600
 local MAX_LAYER_IDS = 99
 local LAYER_VOTE_WINDOW = 5
+local LAYER_VOTE_MAJORITY = 3
 local LAYER_ASSIGNMENT_WAIT = 1.5
 local LAYERSWAP_DEDUP_WINDOW = 2
 local LAYERSWAP_BURST_WINDOW = 10
@@ -99,9 +100,10 @@ local function safeUnitGuid(unit)
     return guid
 end
 
-local function currentPlayerMapId()
+local function zoneMapIdForUnit(unit)
     if not C_Map or type(C_Map.GetBestMapForUnit) ~= "function" then return nil end
-    local ok, mapId = pcall(C_Map.GetBestMapForUnit, "player")
+    if type(unit) ~= "string" or unit == "" then return nil end
+    local ok, mapId = pcall(C_Map.GetBestMapForUnit, unit)
     if not ok or iRC:IsSecretValue(mapId) or type(mapId) ~= "number" or mapId <= 0 then return nil end
     local zoneMapType = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
     if type(C_Map.GetMapInfo) == "function" then
@@ -117,6 +119,46 @@ local function currentPlayerMapId()
         end
     end
     return mapId
+end
+
+local function currentPlayerMapId()
+    return zoneMapIdForUnit("player")
+end
+
+local function unitBelongsToZoneMap(unit, mapId)
+    local unitMapId = zoneMapIdForUnit(unit)
+    if unitMapId then return unitMapId == mapId end
+    if not UnitPosition or not CreateVector2D or not C_Map
+        or type(C_Map.GetPlayerMapPosition) ~= "function"
+        or type(C_Map.GetWorldPosFromMapPos) ~= "function"
+        or type(C_Map.GetMapPosFromWorldPos) ~= "function" then return nil end
+
+    local playerMapOK, playerMapPosition = pcall(C_Map.GetPlayerMapPosition, mapId, "player")
+    if not playerMapOK or iRC:IsSecretValue(playerMapPosition) or not playerMapPosition then return nil end
+    local worldOK, continentId, playerWorld = pcall(C_Map.GetWorldPosFromMapPos, mapId, playerMapPosition)
+    if not worldOK or iRC:HasSecretValues(continentId, playerWorld) or not continentId or not playerWorld then return nil end
+    local playerWorldOK, worldX, worldY = pcall(function() return playerWorld:GetXY() end)
+    local playerOK, playerA, playerB, _, playerInstance = pcall(UnitPosition, "player")
+    local unitOK, unitA, unitB, _, unitInstance = pcall(UnitPosition, unit)
+    if not playerWorldOK or not playerOK or not unitOK
+        or iRC:HasSecretValues(worldX, worldY, playerA, playerB, playerInstance, unitA, unitB, unitInstance)
+        or type(worldX) ~= "number" or type(worldY) ~= "number"
+        or type(playerA) ~= "number" or type(playerB) ~= "number"
+        or type(unitA) ~= "number" or type(unitB) ~= "number"
+        or type(playerInstance) ~= "number" or type(unitInstance) ~= "number"
+        or playerInstance ~= unitInstance then return nil end
+
+    -- UnitPosition's axes vary between client branches. Match them against
+    -- the player's known world-map position before converting the NPC.
+    local directError = math.abs(playerA - worldX) + math.abs(playerB - worldY)
+    local swappedError = math.abs(playerB - worldX) + math.abs(playerA - worldY)
+    local npcWorld = directError <= swappedError and CreateVector2D(unitA, unitB)
+        or CreateVector2D(unitB, unitA)
+    local convertedOK, _, npcMapPosition = pcall(C_Map.GetMapPosFromWorldPos, continentId, npcWorld, mapId)
+    if not convertedOK or iRC:IsSecretValue(npcMapPosition) or not npcMapPosition then return nil end
+    local positionOK, x, y = pcall(function() return npcMapPosition:GetXY() end)
+    if not positionOK or iRC:HasSecretValues(x, y) or type(x) ~= "number" or type(y) ~= "number" then return nil end
+    return x >= 0 and x <= 1 and y >= 0 and y <= 1
 end
 
 local function getLayerSwapId(serverId, zoneUID)
@@ -665,6 +707,7 @@ function GuildMap:ObserveLocalLayer(unit, source)
     if not zoneUID then return false end
     local mapId = currentPlayerMapId()
     if not mapId then return false end
+    if unitBelongsToZoneMap(unit, mapId) == false then return false end
     importLayerSwapZoneData(mapId)
     mergeLayerSwapZoneIds(mapId, serverId, instanceId)
 
@@ -685,7 +728,7 @@ function GuildMap:ObserveLocalLayer(unit, source)
     for _, observedId in ipairs(layerVotes) do
         if observedId == routeId then confirmations = confirmations + 1 end
     end
-    local required = localLayer and 3 or 2
+    local required = LAYER_VOTE_MAJORITY
     if localLayer and localLayer.layerSwapId == routeId then
         localLayer.seenAt = GetTime and GetTime() or 0
         localLayer.number = getLayerNumber(zoneUID, serverId, instanceId, mapId)
