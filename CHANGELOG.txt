@@ -2,14 +2,21 @@
 iRC - Changelog
 ================================================================================
 
-v0.5.25 - Zone Layer Reliability
+v0.5.25 - Layer Reliability, Profession Links & Sharing
 --------------------------------------------------------------------------------
+[ADDED] Guild profession links can import visible skill and recipe data for members without iRC; confirmed iRC users continue to use live profession syncing
+[ADDED] Online Guild Member cards show a green iRC badge after a confirmed live addon response
 [ADDED] WoW's SHARD_TRANSFER event marks the current layer as transitioning, triggers a fresh NPC vote, and reconciles conflicting layer labels through iRCComms
 [FIXED] Test Admin exposes Member Management previews only while the Make Me GM override is active
 [FIXED] Top Guild reports show a guild race only when that guild has Race-Locked enabled
+[FIXED] Member popups respect Guild Log permission and use a client-safe rank-history separator
+[FIXED] Guild Member cards keep long profession lists inside compact, consistently spaced rows
+[FIXED] Conflicting level-up reports prefer the most precise destination and span gaps from the last confirmed level
+[FIXED] Guild Leaderboard senders retain advertised cache payloads regardless of Forever's unreliable send return value
+[CHANGED] Guild Leaderboard and layer communication use protocol 6 between v0.5.25 clients; saved reports remain available to share after upgrading
 [FIXED] Local layer numbers are isolated per zone, and new identities query iRCComms before creating a Layer 1-99 assignment
 [FIXED] Layer detection uses a three-of-five nearby NPC majority, rejects outside-zone positions when available, and pauses safely during combat
-[FIXED] Guild map pins preserve reported member layers and retain recent reports across reloads while older clients await their next broadcast
+[FIXED] Guild map pins preserve reported member layers and retain recent reports across reloads
 [CHANGED] The layer panel reports observed zone identities without implying that every lower layer number is currently known
 
 v0.5.24 - Layer Support & Communication Safety

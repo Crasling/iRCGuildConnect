@@ -8,6 +8,8 @@ local expandedGuildCards = {}
 local guildStatsFilter = "ALL"
 local collapsedFactionSections = {}
 local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
+local GUILD_MEMBER_ROW_HEIGHT = 52
+local GUILD_MEMBER_ROW_SPACING = 56
 local MEMBER_MANAGEMENT_ROW_HEIGHT = 44
 local MEMBER_MANAGEMENT_ROW_SPACING = 48
 
@@ -3545,7 +3547,7 @@ function UI:Create()
             for index = #rankHistory, math.max(1, #rankHistory - 7), -1 do
                 local change = rankHistory[index]
                 lines[#lines + 1] = iRC.Colors.Gray .. date("%Y-%m-%d %H:%M", change.changedAt)
-                    .. iRC.Colors.Reset .. "   " .. tostring(change.fromRank) .. "  →  " .. tostring(change.toRank)
+                    .. iRC.Colors.Reset .. "   " .. tostring(change.fromRank) .. "  to  " .. tostring(change.toRank)
             end
         end
         lines[#lines + 1] = infoSection("Professions")
@@ -3557,20 +3559,32 @@ function UI:Create()
         end
         if #professionLines > 0 then
             for _, profession in ipairs(professionLines) do lines[#lines + 1] = "• " .. profession end
+            if profile.professionData and type(profile.professionData.linkSources) == "table"
+                and next(profile.professionData.linkSources) then
+                local latest
+                for _, importedAt in pairs(profile.professionData.linkSources) do
+                    latest = math.max(tonumber(latest) or 0, tonumber(importedAt) or 0)
+                end
+                lines[#lines + 1] = iRC.Colors.Gray .. "Imported from a profession link"
+                    .. (latest and latest > 0 and (" · " .. date("%Y-%m-%d %H:%M", latest)) or "")
+                    .. iRC.Colors.Reset
+            end
         else
             lines[#lines + 1] = iRC.Colors.Gray .. "No profession data received." .. iRC.Colors.Reset
         end
-        local activity = iRC.Identity and iRC.Identity:GetMemberActivity(profile.name, 8) or {}
-        lines[#lines + 1] = infoSection("Recent guild activity")
-        if #activity > 0 then
-            for _, record in ipairs(activity) do
-                lines[#lines + 1] = iRC.Colors.Gray .. date("%Y-%m-%d %H:%M", record.occurredAt)
-                    .. iRC.Colors.Reset .. "  " .. iRC.Colors.Orange .. "["
-                    .. tostring(record.eventType):gsub("_", " ") .. "]" .. iRC.Colors.Reset
-                    .. "  " .. tostring(record.text or "")
+        if iRC:HasGuildPermission("rosterHistory") then
+            local activity = iRC.Identity and iRC.Identity:GetMemberActivity(profile.name, 8) or {}
+            lines[#lines + 1] = infoSection("Recent guild activity")
+            if #activity > 0 then
+                for _, record in ipairs(activity) do
+                    lines[#lines + 1] = iRC.Colors.Gray .. date("%Y-%m-%d %H:%M", record.occurredAt)
+                        .. iRC.Colors.Reset .. "  " .. iRC.Colors.Orange .. "["
+                        .. tostring(record.eventType):gsub("_", " ") .. "]" .. iRC.Colors.Reset
+                        .. "  " .. tostring(record.text or "")
+                end
+            else
+                lines[#lines + 1] = iRC.Colors.Gray .. "No recorded guild activity." .. iRC.Colors.Reset
             end
-        else
-            lines[#lines + 1] = iRC.Colors.Gray .. "No recorded guild activity." .. iRC.Colors.Reset
         end
         professionReport.text:SetText(table.concat(lines, "\n"))
         professionReport.content:SetHeight(math.max(1, professionReport.text:GetStringHeight() + 12))
@@ -4440,10 +4454,11 @@ function UI:RenderMemberRows()
     local frame = self.frame
     if not frame or frame.category ~= "Guild Members" then return end
     local profiles = frame.memberData or {}
-    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / 48) + 1
+    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / GUILD_MEMBER_ROW_SPACING) + 1
     local scrollHeight = frame.scroll:GetHeight() or 0
     if scrollHeight < 1 then scrollHeight = 480 end
-    local visible = math.max(0, math.min(#profiles - first + 1, math.ceil(scrollHeight / 48) + 1))
+    local visible = math.max(0, math.min(#profiles - first + 1,
+        math.ceil(scrollHeight / GUILD_MEMBER_ROW_SPACING) + 1))
     for slot = 1, visible do
         local index, profile = first + slot - 1, profiles[first + slot - 1]
         local row = frame.memberRows[slot]
@@ -4452,10 +4467,13 @@ function UI:RenderMemberRows()
             frame.memberRows[slot] = row
         end
         setMemberRowDensity(row, false)
+        row:SetHeight(GUILD_MEMBER_ROW_HEIGHT)
         row:ClearAllPoints()
         row:SetAlpha(1)
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * 48))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * 48))
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0,
+            -((index - 1) * GUILD_MEMBER_ROW_SPACING))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0,
+            -((index - 1) * GUILD_MEMBER_ROW_SPACING))
         local memberTag, tagColor
         local identityLabel = iRC.Identity and iRC.Identity:GetIdentityLabel(profile.name)
         row.name:SetFontObject(GameFontHighlight)
@@ -4478,7 +4496,9 @@ function UI:RenderMemberRows()
         row.name:SetText(iRC:FormatPlayerName(profile.name))
         row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
         if profile.online == true then
-            row.onlineTag:SetText("ONLINE")
+            local hasLiveIRC = profile.verification
+                and iRC:IsLiveAddonState(profile.verification.state)
+            row.onlineTag:SetText(hasLiveIRC and "ONLINE  |  iRC" or "ONLINE")
             row.onlineTag:SetTextColor(0.30, 1, 0.35)
         else
             local days = tonumber(profile.lastOnlineDays)
@@ -4493,10 +4513,11 @@ function UI:RenderMemberRows()
         row.tag:SetShown(memberTag ~= nil)
         row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
         row.detail:ClearAllPoints()
-        row.detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 14, 5)
+        row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -3)
+        row.detail:SetWordWrap(true)
         row.detail:SetText((profile.race or "Unknown") .. " · " .. (profile.class or "Unknown") .. " · Level " .. (profile.level or 1))
         row.identityDetail:ClearAllPoints()
-        row.identityDetail:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -14, 5)
+        row.identityDetail:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -25)
         if identityLabel then
             row.detail:SetPoint("RIGHT", row.identityDetail, "LEFT", -14, 0)
             row.identityDetail:SetText(identityLabel == "Main" and "Main character" or identityLabel)
@@ -4631,7 +4652,7 @@ applyMemberSearch = function(frame)
         end
     end
     frame.memberData = profiles
-    frame.scrollContent:SetHeight(math.max(1, #profiles * 48))
+    frame.scrollContent:SetHeight(math.max(1, #profiles * GUILD_MEMBER_ROW_SPACING))
     frame.scroll:SetVerticalScroll(0)
     UI:RenderMemberRows()
 end

@@ -14,8 +14,23 @@ local byName, byID = {}, {}
 for _, entry in ipairs(ORDER) do byName[entry[2]:lower()], byID[entry[1]] = entry[1], entry[2] end
 local transfers = {}
 local lastSummaryWire, lastSummaryGuild, pendingUpdate, sentCachedRecipes
+local guildProfessionLinks, pendingLinkedImport = {}, nil
+local professionLinkHooked = false
+local professionDebugTimes = {}
+local linkedProfessionHandled = false
 local sharingReadyAt = 0
 local CHUNK_SIZE, MAX_CHUNKS = 165, 64
+local PROFESSION_LINK_LIFETIME = 3600
+
+local function professionDebug(key, message, level)
+    local now = GetTime and GetTime() or 0
+    if key then
+        local previous = professionDebugTimes[key]
+        if previous and now - previous < 2 then return end
+        professionDebugTimes[key] = now
+    end
+    iRC:DebugMsg("Profession link: " .. tostring(message), level or 3)
+end
 
 local function localData()
     iRCCharDB = iRCCharDB or {}
@@ -192,8 +207,254 @@ local function professionForRecipe(recipeID, recipeInfo)
     end
 end
 
+local function isLinkedTradeSkill()
+    local checker = C_TradeSkillUI and C_TradeSkillUI.IsTradeSkillLinked or _G.IsTradeSkillLinked
+    if type(checker) ~= "function" then return false end
+    local ok, linked = pcall(checker)
+    return ok and not iRC:IsSecretValue(linked) and linked == true
+end
+
+local function hasLiveIRCResponse(name)
+    if not (iRC.FindConnectionProfile and iRC.GetMemberVerification and iRC.IsLiveAddonState) then return false end
+    local profile = iRC:FindConnectionProfile(name)
+    local verification = iRC:GetMemberVerification(name, true, profile)
+    return verification and iRC:IsLiveAddonState(verification.state) or false
+end
+
+local function rememberGuildProfessionLinks(message, sender)
+    if iRC:IsSecretValue(message) or iRC:IsSecretValue(sender)
+        or not iRC:IsGuildMemberName(sender) then return end
+    local now, count = time(), 0
+    for link, record in pairs(guildProfessionLinks) do
+        if now - (tonumber(record.seenAt) or 0) > PROFESSION_LINK_LIFETIME then
+            guildProfessionLinks[link] = nil
+        else
+            count = count + 1
+        end
+    end
+    local found = 0
+    local useNativeSync = hasLiveIRCResponse(sender)
+    for link in tostring(message or ""):gmatch("|H(trade:[^|]+)|h") do
+        guildProfessionLinks[link] = {
+            sender = iRC:FormatPlayerName(sender), seenAt = now, useNativeSync = useNativeSync,
+        }
+        count = count + 1
+        found = found + 1
+    end
+    if found > 0 then
+        if useNativeSync then
+            professionDebug("chat-native:" .. iRC:NormalizeName(sender), "detected " .. found
+                .. " link(s) from " .. iRC:FormatPlayerName(sender)
+                .. ", who has a live iRC response; native profession sync remains authoritative.")
+        else
+            professionDebug("chat:" .. iRC:NormalizeName(sender), "detected " .. found
+                .. " guild profession link(s) from " .. iRC:FormatPlayerName(sender) .. ".")
+        end
+    end
+    if count > 100 then
+        local oldestLink, oldestAt
+        for link, record in pairs(guildProfessionLinks) do
+            local seenAt = tonumber(record.seenAt) or 0
+            if not oldestAt or seenAt < oldestAt then oldestLink, oldestAt = link, seenAt end
+        end
+        if oldestLink then guildProfessionLinks[oldestLink] = nil end
+    end
+end
+
+local function hookProfessionLinks()
+    if professionLinkHooked then return end
+    if type(hooksecurefunc) ~= "function" or type(SetItemRef) ~= "function" then
+        professionDebug("hook-missing", "cannot watch clicked links because SetItemRef hooking is unavailable.", 1)
+        return
+    end
+    professionLinkHooked = true
+    professionDebug("hooked", "click watcher enabled.")
+    hooksecurefunc("SetItemRef", function(link)
+        if iRC:IsSecretValue(link) or type(link) ~= "string" or not link:find("^trade:") then return end
+        local record = guildProfessionLinks[link]
+        if record and (record.useNativeSync or hasLiveIRCResponse(record.sender)) then
+            pendingLinkedImport = nil
+            linkedProfessionHandled = true
+            professionDebug(nil, "skipped link import for " .. iRC:FormatPlayerName(record.sender)
+                .. " because their live iRC profession sync is authoritative.")
+            return
+        end
+        if record and time() - (tonumber(record.seenAt) or 0) <= PROFESSION_LINK_LIFETIME
+            and iRC:IsGuildMemberName(record.sender) then
+            pendingLinkedImport = { sender = record.sender, openedAt = time(), link = link }
+            linkedProfessionHandled = false
+            professionDebug(nil, "clicked link matched guild member "
+                .. iRC:FormatPlayerName(record.sender) .. "; waiting for linked profession data.")
+        else
+            pendingLinkedImport = nil
+            linkedProfessionHandled = false
+            professionDebug(nil, "clicked trade link was not matched to a recent guild-chat link.", 2)
+        end
+    end)
+end
+
+local function guildMemberGUID(name)
+    local wanted = iRC:NormalizeName(name)
+    for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+        if iRC:NormalizeName(member.name) == wanted then return member.guid or "" end
+    end
+    return ""
+end
+
+local function linkedProfessionDetails()
+    local api = C_TradeSkillUI
+    if not api then return nil, nil, nil, "C_TradeSkillUI is unavailable" end
+
+    local infos = {}
+    for _, method in ipairs({ "GetBaseProfessionInfo", "GetChildProfessionInfo" }) do
+        if type(api[method]) == "function" then
+            local ok, info = pcall(api[method])
+            if ok and type(info) == "table" and not iRC:IsSecretValue(info) then
+                infos[#infos + 1] = info
+            end
+        end
+    end
+    for _, info in ipairs(infos) do
+        local id = knownProfessionID(info)
+        local rank = tonumber(info.skillLevel or info.skillRank or info.currentSkillLevel or info.rank)
+        local name = info.professionName or info.name
+        if id and rank and rank >= 0 and rank <= 1000 then return id, name, rank end
+    end
+
+    if type(api.GetTradeSkillLine) == "function" then
+        local ok, skillLineID, skillName, rank, _, _, parentSkillLineID, parentSkillName =
+            pcall(api.GetTradeSkillLine)
+        if ok and not iRC:IsSecretValue(skillLineID) and not iRC:IsSecretValue(skillName)
+            and not iRC:IsSecretValue(rank) and not iRC:IsSecretValue(parentSkillLineID)
+            and not iRC:IsSecretValue(parentSkillName) then
+            local id = knownProfessionID(parentSkillLineID) or knownProfessionID(skillLineID)
+                or byName[tostring(parentSkillName or skillName or ""):lower()]
+            rank = tonumber(rank)
+            if id and rank and rank >= 0 and rank <= 1000 then
+                return id, parentSkillName or skillName, rank
+            end
+        end
+    end
+
+    local details = {}
+    for _, info in ipairs(infos) do
+        details[#details + 1] = "id=" .. tostring(info.professionID or info.parentProfessionID or info.skillLineID)
+            .. ", name=" .. tostring(info.professionName or info.name)
+            .. ", rank=" .. tostring(info.skillLevel or info.skillRank or info.currentSkillLevel or info.rank)
+    end
+    return nil, nil, nil, #details > 0 and table.concat(details, " | ")
+        or "no supported profession metadata was returned"
+end
+
+function Professions:CollectLinkedProfession()
+    local pending = pendingLinkedImport
+    if not pending then
+        if linkedProfessionHandled then return false end
+        professionDebug("no-pending", "linked tab detected, but no recent guild profession-link click was recorded.", 2)
+        return false
+    end
+    if time() - (tonumber(pending.openedAt) or 0) > 30 then
+        professionDebug("expired", "the pending link for " .. iRC:FormatPlayerName(pending.sender)
+            .. " expired before profession data became available.", 2)
+        pendingLinkedImport = nil
+        return false
+    end
+    if not isLinkedTradeSkill() then
+        professionDebug("not-linked", "trade-skill event fired, but the open tab is not reported as linked.", 2)
+        return false
+    end
+    if not iRC:IsGuildMemberName(pending.sender) then
+        professionDebug("not-member", "the link owner is no longer found in the guild roster.", 2)
+        pendingLinkedImport = nil
+        return false
+    end
+    if not (C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs and C_TradeSkillUI.GetRecipeInfo) then
+        professionDebug("recipe-api", "recipe-list APIs are unavailable on this client.", 1)
+        return false
+    end
+    local professionID, skillName, rank, metadataError = linkedProfessionDetails()
+    if not professionID then
+        professionDebug("metadata", "could not identify the open profession (" .. tostring(metadataError) .. ").", 1)
+        return false
+    end
+    professionDebug("metadata-ok", "identified " .. tostring(skillName or byID[professionID] or professionID)
+        .. " at skill " .. tostring(rank) .. " for " .. iRC:FormatPlayerName(pending.sender) .. ".")
+
+    local recipes, seen = {}, {}
+    local ok, recipeIDs = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+    if not ok or iRC:IsSecretValue(recipeIDs) or type(recipeIDs) ~= "table" then
+        professionDebug("recipes-missing", "the linked tab returned no readable recipe-ID list.", 1)
+        return false
+    end
+    for _, recipeID in ipairs(recipeIDs) do
+        if not iRC:IsSecretValue(recipeID) then
+            local recipeInfo = C_TradeSkillUI.GetRecipeInfo(recipeID)
+            if recipeInfo and not iRC:IsSecretValue(recipeInfo)
+                and not iRC:IsSecretValue(recipeInfo.learned) and not iRC:IsSecretValue(recipeInfo.isHeader)
+                and recipeInfo.learned and not recipeInfo.isHeader then
+                local key = "S" .. tostring(recipeID)
+                if not seen[key] then
+                    seen[key] = true
+                    recipes[#recipes + 1] = key
+                    if #recipes >= 500 then break end
+                end
+            end
+        end
+    end
+    table.sort(recipes)
+    professionDebug("recipes-ok", "read " .. tostring(#recipeIDs) .. " recipe entries; "
+        .. tostring(#recipes) .. " are learned.")
+
+    local connection = iRC:GetConnection()
+    if not connection then
+        professionDebug("no-connection", "profession data is ready, but no guild data store is active.", 1)
+        return false
+    end
+    local key, now = iRC:NormalizeName(pending.sender), time()
+    local guid = guildMemberGUID(pending.sender)
+    connection.professionMembers = connection.professionMembers or {}
+    local member = connection.professionMembers[key]
+    if not member or (guid ~= "" and member.guid ~= "" and member.guid ~= guid) then
+        member = { guid = guid, skills = {}, recipes = {}, recipeUpdatedAt = {} }
+    end
+    member.guid = guid ~= "" and guid or member.guid or ""
+    member.skills, member.recipes = member.skills or {}, member.recipes or {}
+    member.recipeUpdatedAt, member.linkSources = member.recipeUpdatedAt or {}, member.linkSources or {}
+    member.skills[professionID] = math.floor(rank)
+    member.recipes[professionID] = recipes
+    member.recipeUpdatedAt[professionID] = now
+    member.linkSources[professionID] = now
+    member.updatedAt = math.max(tonumber(member.updatedAt) or 0, now)
+    connection.professionMembers[key] = member
+    pendingLinkedImport = nil
+    linkedProfessionHandled = true
+    professionDebug(nil, "saved " .. (byID[professionID] or tostring(skillName or professionID))
+        .. " for " .. iRC:FormatPlayerName(pending.sender) .. " with " .. tostring(#recipes) .. " recipes.")
+    if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(pending.sender) end
+    if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then
+        iRC.MainUI:RefreshIfShown()
+    end
+    iRC:Print("Imported " .. (byID[professionID] or tostring(skillName or "profession"))
+        .. " from " .. iRC:FormatPlayerName(pending.sender) .. "'s profession link.")
+    return true
+end
+
 function Professions:CollectOpenRecipes()
     if not (C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs and C_TradeSkillUI.GetRecipeInfo) then return end
+    -- A linked tab belongs to another player. Never merge it into the local
+    -- character snapshot or broadcast it as the current player's recipes.
+    if isLinkedTradeSkill() or (pendingLinkedImport
+        and time() - (tonumber(pendingLinkedImport.openedAt) or 0) <= 30) then
+        if isLinkedTradeSkill() then
+            self:CollectLinkedProfession()
+        else
+            professionDebug("pending-not-linked", "profession data event arrived for "
+                .. iRC:FormatPlayerName(pendingLinkedImport.sender)
+                .. ", but the client has not marked the tab as linked yet.", 2)
+        end
+        return
+    end
+    linkedProfessionHandled = false
     local grouped, seen = {}, {}
     for _, recipeID in ipairs(C_TradeSkillUI.GetAllRecipeIDs() or {}) do
         local recipeInfo = C_TradeSkillUI.GetRecipeInfo(recipeID)
@@ -269,6 +530,7 @@ function Professions:Receive(message, sender)
         local member = previous and previous.guid == guid and previous or { recipes = {}, recipeUpdatedAt = {} }
         member.guid, member.skills, member.updatedAt = guid, skills, stamp
         member.recipes, member.recipeUpdatedAt = member.recipes or {}, member.recipeUpdatedAt or {}
+        member.linkSources = nil
         member.fishingRodID = skills[356] and rodID > 0 and rodID or nil
         connection.professionMembers[key] = member
         if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(sender) end
@@ -309,6 +571,7 @@ function Professions:Receive(message, sender)
         end
         member.recipes[id] = recipes
         member.recipeUpdatedAt[id] = stamp
+        if member.linkSources then member.linkSources[id] = nil end
         connection.professionMembers[key] = member
         if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(sender) end
         if iRC.MainUI and iRC.MainUI.frame and iRC.MainUI.frame.category == "Guild Members" then iRC.MainUI:RefreshIfShown() end
@@ -351,12 +614,13 @@ end
 
 for _, event in ipairs({
     "PLAYER_LOGIN", "SKILL_LINES_CHANGED", "PLAYER_EQUIPMENT_CHANGED", "BAG_UPDATE_DELAYED",
-    "TRADE_SKILL_SHOW", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED",
+    "TRADE_SKILL_SHOW", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "CHAT_MSG_GUILD",
 }) do
     registerSupportedEvent(event)
 end
-eventFrame:SetScript("OnEvent", function(_, event)
+eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
+        hookProfessionLinks()
         Professions:CollectSkills()
         if C_Timer and C_Timer.After then
             -- Presence replies are time-sensitive. Start optional profession
@@ -375,6 +639,9 @@ eventFrame:SetScript("OnEvent", function(_, event)
         if pendingUpdate then return end
         pendingUpdate = true
         C_Timer.After(2, function() pendingUpdate = false; Professions:SendSummary(false) end)
+    elseif event == "CHAT_MSG_GUILD" then
+        local message, sender = ...
+        rememberGuildProfessionLinks(message, sender)
     elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_LIST_UPDATE" or event == "TRADE_SKILL_DATA_SOURCE_CHANGED" then
         if C_Timer and C_Timer.After then C_Timer.After(0.2, function() Professions:CollectOpenRecipes() end) end
     end

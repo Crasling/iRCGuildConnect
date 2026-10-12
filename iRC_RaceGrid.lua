@@ -7,7 +7,7 @@ iRC.RaceGrid = RaceGrid
 
 local PREFIX = "iRCGridV1"
 local CHANNEL_NAME = "iRCCommsV1"
-local WIRE_VERSION = "5"
+local WIRE_VERSION = "6"
 local REPORT_SCHEMA = 5
 local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
@@ -1271,14 +1271,18 @@ local function sendCacheOffers(requestId, requester)
                     or (best.timestamp == reportTimestamp and (best.cacheHop or 1) < cacheHop)
                     or (best.timestamp == reportTimestamp and (best.cacheHop or 1) == cacheHop
                         and fullNameKey(best.sender) < fullNameKey(iRC:GetPlayerName()))) then return end
+                -- Retain the payload before advertising it. Forever may deliver
+                -- SendAddonMessage successfully without a truthy return value;
+                -- tying retention to that value created offers that could not
+                -- answer the requester's subsequent CACHE_GET.
+                local offered = offeredCachePayloads[requestId]
+                    or { startedAt = GetTime(), requester = requester, guilds = {} }
+                offeredCachePayloads[requestId] = offered
+                offered.requester = requester
+                offered.guilds[guildKey] = {
+                    payload = payload, timestamp = reportTimestamp, checksum = checksum, cacheHop = cacheHop,
+                }
                 if send(PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, reportTimestamp, checksum, cacheHop }, SEP), "GUILD") then
-                    local offered = offeredCachePayloads[requestId]
-                        or { startedAt = GetTime(), requester = requester, guilds = {} }
-                    offeredCachePayloads[requestId] = offered
-                    offered.requester = requester
-                    offered.guilds[guildKey] = {
-                        payload = payload, timestamp = reportTimestamp, checksum = checksum, cacheHop = cacheHop,
-                    }
                     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
                 end
             end
@@ -1302,7 +1306,8 @@ local function requestBestCacheOffers(requestId)
         if shouldRequest then
             request.selected[guildKey] = offer
             requested = requested + 1
-            send(PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName, offer.timestamp, offer.checksum }, SEP), "WHISPER", offer.sender)
+            send(PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName,
+                offer.timestamp, offer.checksum }, SEP), "WHISPER", offer.sender)
             iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REQUEST_SENT", offer.guildName, offer.sender), 3)
         end
     end

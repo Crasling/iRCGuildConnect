@@ -74,6 +74,81 @@ local function findDuplicateLevelTransition(store, eventType, name, text)
     return nil, nil
 end
 
+local function parseLevelTransition(text)
+    local fromLevel, toLevel = tostring(text or ""):match(" changed from level (%d+) to level (%d+)%.")
+    return tonumber(fromLevel), tonumber(toLevel)
+end
+
+local function compactConflictingLevelTransitions(store)
+    local log = store and store.guildLog
+    if type(log) ~= "table" then return false end
+    local winners, parsed, changed = {}, {}, false
+    for _, record in ipairs(log) do
+        if record.eventType == "LEVEL" then
+            local fromLevel, toLevel = parseLevelTransition(record.text)
+            if fromLevel and toLevel and toLevel > fromLevel then
+                local memberKey = iRC:NormalizeName(record.name)
+                local targetKey = memberKey .. "|" .. tostring(toLevel)
+                local current = winners[targetKey]
+                parsed[record] = { memberKey = memberKey, fromLevel = fromLevel, toLevel = toLevel }
+                -- Several clients can report the same reached level from
+                -- different stale baselines. Keep the closest starting level;
+                -- unlike timestamp-based compaction this never removes a
+                -- distinct intermediate target such as level 27.
+                if not current or fromLevel > parsed[current].fromLevel
+                    or (fromLevel == parsed[current].fromLevel
+                        and (tonumber(record.occurredAt) or 0) < (tonumber(current.occurredAt) or 0)) then
+                    winners[targetKey] = record
+                end
+            end
+        end
+    end
+
+    local kept, progressions = {}, {}
+    for _, record in ipairs(log) do
+        local details = parsed[record]
+        if not details or winners[details.memberKey .. "|" .. tostring(details.toLevel)] == record then
+            kept[#kept + 1] = record
+            if details then
+                progressions[details.memberKey] = progressions[details.memberKey] or {}
+                progressions[details.memberKey][#progressions[details.memberKey] + 1] = record
+            end
+        else
+            changed = true
+        end
+    end
+    for _, records in pairs(progressions) do
+        table.sort(records, function(a, b)
+            local _, aTo = parseLevelTransition(a.text)
+            local _, bTo = parseLevelTransition(b.text)
+            return (aTo or 0) < (bTo or 0)
+        end)
+        local previousTarget
+        for _, record in ipairs(records) do
+            local fromLevel, toLevel = parseLevelTransition(record.text)
+            local adjustedFrom = fromLevel
+            if previousTarget and toLevel > previousTarget + 1 then
+                -- If level 26 is the last confirmed destination and the next
+                -- report reaches 29, represent the observed change as 26-29.
+                adjustedFrom = previousTarget
+            elseif previousTarget and fromLevel < previousTarget then
+                adjustedFrom = previousTarget
+            end
+            if adjustedFrom ~= fromLevel then
+                record.text = iRC:FormatPlayerName(record.name) .. " changed from level "
+                    .. tostring(adjustedFrom) .. " to level " .. tostring(toLevel) .. "."
+                changed = true
+            end
+            previousTarget = toLevel
+        end
+    end
+    if changed then
+        for index = #log, 1, -1 do log[index] = nil end
+        for index, record in ipairs(kept) do log[index] = record end
+    end
+    return changed
+end
+
 local MEMBERSHIP_EVENT_STATE = {
     JOIN = "IN", REJOIN = "IN",
     LEAVE = "OUT", KICK = "OUT",
@@ -230,6 +305,7 @@ local function guildStore(create)
                 end
             end
             store.guildLog = cleanedLog
+            compactConflictingLevelTransitions(store)
             initializedGuildLogStores[store] = true
         end
         store.memberHistory = type(store.memberHistory) == "table" and store.memberHistory or {}
@@ -558,6 +634,12 @@ local function addGuildLog(store, eventType, name, text, classFile)
     record.id = eventFingerprint(record.eventType, record.name, record.text, record.occurredAt)
     log[#log + 1] = record
     store.guildLogIds[record.id] = true
+    compactConflictingLevelTransitions(store)
+    local recordKept = false
+    for _, keptRecord in ipairs(log) do
+        if keptRecord == record then recordKept = true; break end
+    end
+    if not recordKept then return false end
     trimGuildLog(store)
     if Identity.BroadcastGuildLog then Identity:BroadcastGuildLog(record) end
     return true
@@ -1152,6 +1234,15 @@ function Identity:ReceiveSync(parts, sender)
     store.guildLog[#store.guildLog + 1] = record
     store.guildLogIds[id] = true
     table.sort(store.guildLog, function(a, b) return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0) end)
+    compactConflictingLevelTransitions(store)
+    local recordKept = false
+    for _, keptRecord in ipairs(store.guildLog) do
+        if keptRecord == record then recordKept = true; break end
+    end
+    if not recordKept then
+        if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        return false
+    end
     trimGuildLog(store)
     local key = characterKey(name)
     local history = store.memberHistory[key] or { firstSeenAt = occurredAt, rankHistory = {} }
