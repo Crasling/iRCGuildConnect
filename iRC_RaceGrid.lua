@@ -51,7 +51,13 @@ local function normalizeRaceToken(race)
 end
 
 local function registerPrefix(prefix)
-    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then return C_ChatInfo.RegisterAddonMessagePrefix(prefix) end
+    if not (C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix) then return false end
+    if C_ChatInfo.IsAddonMessagePrefixRegistered then
+        local checked, registered = pcall(C_ChatInfo.IsAddonMessagePrefixRegistered, prefix)
+        if checked and registered then return true end
+    end
+    local registered, result = pcall(C_ChatInfo.RegisterAddonMessagePrefix, prefix)
+    return registered and result ~= false
 end
 
 local function bytesToHex(value)
@@ -61,6 +67,7 @@ local function bytesToHex(value)
 end
 
 local function send(prefix, message, distribution, target)
+    if iRC.IsChatMessagingLocked and iRC:IsChatMessagingLocked() then return false end
     if distribution == "CHANNEL" then
         local id = GetChannelName and GetChannelName(target)
         if iRC:IsSecretValue(id) or type(id) ~= "number" or id <= 0
@@ -514,6 +521,17 @@ local function getChannelMemberNames()
     return names
 end
 
+local channelMemberKeys, channelMemberKeysAt = {}, -math.huge
+function RaceGrid:IsKnownChannelMember(name)
+    local now = GetTime and GetTime() or 0
+    if now - channelMemberKeysAt >= 5 then
+        local refreshed = {}
+        for _, memberName in ipairs(getChannelMemberNames()) do refreshed[fullNameKey(memberName)] = true end
+        channelMemberKeys, channelMemberKeysAt = refreshed, now
+    end
+    return channelMemberKeys[fullNameKey(name)] == true
+end
+
 function RaceGrid:BroadcastLayerState(layer)
     if type(layer) ~= "table" or iRC:GetSettings().showLayerPanel == false then return false end
     local zoneUID = math.floor(tonumber(layer.zoneUID) or 0)
@@ -521,7 +539,9 @@ function RaceGrid:BroadcastLayerState(layer)
     local instanceId = math.floor(tonumber(layer.instanceId) or -1)
     local mapId = math.floor(tonumber(layer.mapId) or 0)
     local number = math.max(1, math.min(99, math.floor(tonumber(layer.number) or 1)))
+    local layerSwapId = tostring(layer.layerSwapId or (tostring(serverId) .. "-" .. tostring(zoneUID)))
     if zoneUID <= 0 or serverId < 0 or instanceId < 0 or mapId <= 0 then return false end
+    if layerSwapId ~= tostring(serverId) .. "-" .. tostring(zoneUID) then return false end
     self:EnsureChannel()
     if not getChannelId() then return false end
 
@@ -532,7 +552,7 @@ function RaceGrid:BroadcastLayerState(layer)
     -- omitting the full registry also keeps the addon payload below 255 bytes.
     local payload = table.concat({
         "LAYER_STATE", "1", tostring(zoneUID), tostring(serverId), tostring(instanceId),
-        tostring(mapId), tostring(number), "",
+        tostring(mapId), tostring(number), "", layerSwapId,
     }, SEP)
     local sent
     for _, name in ipairs(getChannelMemberNames()) do
@@ -850,7 +870,12 @@ function RaceGrid:BroadcastReport(fromClick)
     local report = self:GetLocalReport()
     if not report.name or report.name == "" or not report.guid or report.guid == "" or not report.race then return false end
     if isMutedOlympusGuild(report.guildName) then return false end
-    local payload = serializeGuildReport(report)
+    -- Keep the hardware-authorized public-channel burst as small as possible.
+    -- Current clients already understand the extended report used by cache
+    -- transfer, so description and class details can normally ride together.
+    local payload = serializeGuildReport(report, true)
+    local combinedPayload = #payload <= MAX_CHANNEL_PAYLOAD
+    if not combinedPayload then payload = serializeGuildReport(report) end
     if #payload > MAX_CHANNEL_PAYLOAD then return false end
     if self:StoreGuildReport(report) then localReportDirty = false end
     -- Public custom-channel sends require a hardware event on Classic. Startup
@@ -859,6 +884,11 @@ function RaceGrid:BroadcastReport(fromClick)
     if not send(PREFIX, payload, "CHANNEL", CHANNEL_NAME) then
         iRC:DebugMsg(iRC:Text("RACEGRID_REPORT_SEND_FAILED", report.guildName, #payload), 1)
         return false
+    end
+    if combinedPayload then
+        iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
+            report.activeMembers, report.activePlayers, report.members), 3)
+        return true
     end
     local description = tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength)
     local descriptionTimestamp = math.floor(tonumber(report.guildDescriptionTimestamp) or 0)
@@ -1395,7 +1425,8 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     if (distribution == "CHANNEL" or distribution == "WHISPER")
         and message:match("^LAYER_STATE\t") then
-        if iRC.GuildMap then iRC.GuildMap:ReceiveLayerState(split(message), sender) end
+        local trusted = distribution == "CHANNEL" or isOwnGuildSender(sender) or RaceGrid:IsKnownChannelMember(sender)
+        if trusted and iRC.GuildMap then iRC.GuildMap:ReceiveLayerState(split(message), sender) end
         return
     end
     if distribution == "CHANNEL" and isOwnGuildSender(sender) and message:match("^GUILD_") then return end
@@ -1589,6 +1620,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... ~= iRC.Name then return end
         registerPrefix(PREFIX)
+        registerPrefix("LayerSwap")
     elseif event == "PLAYER_LOGIN" then
         channelJoinStartedAt = GetTime and GetTime() or 0
         if getChannelId() and LeaveChannelByName then
@@ -1625,12 +1657,20 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "CHANNEL_ROSTER_UPDATE" then
         local displayIndex, rosterCount = ...
+        channelMemberKeysAt = -math.huge
         if adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10 then
             refreshAdminChannelRoster(displayIndex, rosterCount)
         end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
+        if prefix == "LayerSwap" then
+            if iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "layerswap")
+                and iRC.GuildMap then iRC.GuildMap:ReceiveLayerSwapMessage(message, sender, distribution) end
+            return
+        end
+        if prefix == PREFIX
+            and not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "race-grid") then return end
         handleMessage(prefix, message, sender, distribution)
     elseif event == "CHAT_MSG_CHANNEL_LIST" or event == "CHAT_MSG_SYSTEM" then
         captureAdminChannelList(...)
@@ -1643,10 +1683,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
             or iRC:IsSecretValue(channelName) then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if channelName == CHANNEL_NAME and type(message) == "string" and message:sub(1, #PREFIX + 1) == PREFIX .. ":" then
+            if not iRC:AcceptIncomingAddonTraffic(PREFIX, message, "CHANNEL", sender, "race-grid-wire") then return end
             local decoded = decodeChannelWire(message, sender)
             -- Same-guild reports are already assembled locally. Admin
             -- presence probes still need to reach every channel member.
-            if decoded and (not isOwnGuildSender(sender) or not decoded:match("^GUILD_")) then
+            if decoded and iRC:AcceptIncomingAddonTraffic(PREFIX, decoded, "CHANNEL", sender, "race-grid-channel")
+                and (not isOwnGuildSender(sender) or not decoded:match("^GUILD_")) then
                 handleMessage(PREFIX, decoded, sender, "CHANNEL")
             end
         end

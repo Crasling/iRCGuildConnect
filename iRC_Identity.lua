@@ -55,6 +55,25 @@ local function eventSemanticKey(eventType, name, text)
     return table.concat({ tostring(eventType or ""), iRC:NormalizeName(name), normalizedText }, "|")
 end
 
+local function findDuplicateLevelTransition(store, eventType, name, text)
+    if eventType ~= "LEVEL" then return nil, nil end
+    local fromLevel, toLevel = tostring(text or ""):match(" changed from level (%d+) to level (%d+)%.")
+    local wantedKey = fromLevel and table.concat({ "LEVEL", iRC:NormalizeName(name), fromLevel, toLevel }, "|")
+        or eventSemanticKey(eventType, name, text)
+    for index = #(store and store.guildLog or {}), 1, -1 do
+        local existing = store.guildLog[index]
+        local existingFrom, existingTo = tostring(existing and existing.text or "")
+            :match(" changed from level (%d+) to level (%d+)%.")
+        local existingKey = existingFrom
+            and table.concat({ "LEVEL", iRC:NormalizeName(existing.name), existingFrom, existingTo }, "|")
+            or eventSemanticKey(existing.eventType, existing.name, existing.text)
+        if existing.eventType == "LEVEL" and existingKey == wantedKey then
+            return index, existing
+        end
+    end
+    return nil, nil
+end
+
 local MEMBERSHIP_EVENT_STATE = {
     JOIN = "IN", REJOIN = "IN",
     LEAVE = "OUT", KICK = "OUT",
@@ -193,6 +212,8 @@ local function guildStore(create)
                     record.eventType, record.name, record.occurredAt)
                 local _, duplicateRank = findRecentRankTransition(cleanedStore,
                     record.eventType, record.name, record.text, record.occurredAt)
+                local _, duplicateLevel = findDuplicateLevelTransition(cleanedStore,
+                    record.eventType, record.name, record.text)
                 if duplicateMembership then
                     enrichDuplicateMembershipRecord(duplicateMembership, record)
                 elseif duplicateRank then
@@ -201,6 +222,8 @@ local function guildStore(create)
                         duplicateRank.text = record.text
                     end
                     if record.classFile and not duplicateRank.classFile then duplicateRank.classFile = record.classFile end
+                elseif duplicateLevel then
+                    if record.classFile and not duplicateLevel.classFile then duplicateLevel.classFile = record.classFile end
                 elseif not findRecentMatchingGuildLogEvent(cleanedStore, record.eventType, record.name,
                     record.text, record.occurredAt) then
                     cleanedLog[#cleanedLog + 1] = record
@@ -493,6 +516,7 @@ local function addGuildLog(store, eventType, name, text, classFile)
     local log = store and store.guildLog
     if not log then return end
     local occurredAt = time()
+    if findDuplicateLevelTransition(store, eventType, name, text) then return false end
     if findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt) then return false end
     local _, duplicateRank = findRecentRankTransition(store, eventType, name, text, occurredAt)
     if duplicateRank then
@@ -1002,6 +1026,28 @@ function Identity:ReceiveSync(parts, sender)
         or not iRC:IsGuildMemberName(name) and eventType ~= "LEAVE" and eventType ~= "KICK" then return false end
     local store = guildStore(true)
     if not store or store.guildLogIds[id] then return false end
+    -- A character cannot legitimately repeat an identical level transition.
+    -- Other clients may discover it much later from a stale roster baseline,
+    -- so merge it across the retained history rather than using the generic
+    -- two-minute observation window.
+    local _, duplicateLevel = findDuplicateLevelTransition(store, eventType, name, text)
+    if duplicateLevel then
+        store.guildLogIds[id] = true
+        local changed = false
+        if classFile ~= "" and not duplicateLevel.classFile then
+            duplicateLevel.classFile = classFile
+            changed = true
+        end
+        if occurredAt < (tonumber(duplicateLevel.occurredAt) or occurredAt) then
+            duplicateLevel.occurredAt = math.floor(occurredAt)
+            table.sort(store.guildLog, function(a, b)
+                return (tonumber(a.occurredAt) or 0) < (tonumber(b.occurredAt) or 0)
+            end)
+            changed = true
+        end
+        if changed and iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+        return false
+    end
     -- JOIN records may be enriched with the recruiter after the roster event,
     -- and a confirmed iRC removal may replace an earlier ambiguous LEAVE.
     -- Merge those updates into the original row instead of adding a duplicate.

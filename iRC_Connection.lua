@@ -2104,6 +2104,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
+        -- Guild-map positions have their own lean receiver. Do not enqueue and
+        -- parse them a second time through the connection protocol dispatcher.
+        if prefix == iRC.Prefix and type(message) == "string" and message:match("^MAP_POS\t") then return end
+        if prefix == iRC.Prefix
+            and not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "connection") then return end
         if prefix == iRC.Prefix and iRC:QueuePerformanceIncoming(message, function()
             handleMessage(prefix, message, distribution, sender)
         end) then return end

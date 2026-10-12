@@ -400,6 +400,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
-        if prefix == ICON_PREFIX then Announcements:ReceiveIconWire(message, distribution, sender) end
+        if prefix == ICON_PREFIX
+            and iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "chat-icons") then
+            Announcements:ReceiveIconWire(message, distribution, sender)
+        end
     end
 end)

@@ -198,21 +198,44 @@ end
 local PERFORMANCE_QUEUE_LIMIT = 256
 local INCOMING_PACKET_SPACING = 0.05
 local OUTGOING_PACKET_SPACING = 0.08
+local OUTGOING_BYTES_PER_SECOND = 800
+local OUTGOING_BURST_BYTES = 1200
+local CHAT_LOCKDOWN_RETRY_DELAY = 0.5
 
 -- Head/tail queues avoid table.remove(queue, 1), which copies every remaining
 -- entry and can itself create a CPU spike when a large sync arrives.
 local incomingPerformanceQueue, incomingPerformanceHead, incomingPerformanceTail = {}, 1, 0
-local outgoingPerformanceQueue, outgoingPerformanceHead, outgoingPerformanceTail = {}, 1, 0
+local outgoingPerformanceQueues = {
+    ALERT = { entries = {}, head = 1, tail = 0 },
+    NORMAL = { entries = {}, head = 1, tail = 0 },
+    BULK = { entries = {}, head = 1, tail = 0 },
+}
+local outgoingPerformanceCount = 0
+local outgoingReplaceable = {}
+local outgoingTokens = OUTGOING_BURST_BYTES
+local outgoingTokenUpdatedAt = GetTime and GetTime() or 0
 
 local function queueSize(head, tail)
     return math.max(0, tail - head + 1)
 end
 
-local function isUrgentTrafficKind(kind)
-    return kind == "HELLO" or kind == "PRESENCE_REQUEST" or kind == "RULES"
-        or kind == "RULES_REQUEST" or kind == "RULES_ACK" or kind == "GUILD_ACTIVATION"
-        or kind == "GUILD_ACTIVATION_REQUEST" or kind == "GROUP_VIOLATION"
-        or kind == "GROUP_VIOLATION_ACK" or kind == "MAP_POS"
+local function trafficPriority(kind)
+    if kind == "RULES_ACK" or kind == "GROUP_VIOLATION_ACK"
+        or kind == "GUILD_ACTIVATION" or kind == "GUILD_ACTIVATION_REQUEST" then return "ALERT" end
+    if kind == "MAP_POS" or kind == "LAYER_STATE" or kind == "CACHE_DATA"
+        or kind == "GUILD_REPORT" or kind == "GUILD_CLASS_BREAKDOWN" then return "BULK" end
+    return "NORMAL"
+end
+
+local function replaceableTrafficLifetime(kind)
+    if kind == "MAP_POS" then return 10 end
+    if kind == "LAYER_STATE" then return 20 end
+    if kind == "HELLO" then return 30 end
+end
+
+local function replaceableTrafficKey(prefix, kind, distribution, target)
+    if kind ~= "MAP_POS" and kind ~= "LAYER_STATE" and kind ~= "HELLO" then return nil end
+    return table.concat({ tostring(prefix or ""), kind, tostring(distribution or ""), tostring(target or "") }, "\031")
 end
 
 local incomingPerformanceScheduled = false
@@ -237,7 +260,7 @@ end
 function iRC:GetPerformanceQueueStatus()
     return {
         incoming = queueSize(incomingPerformanceHead, incomingPerformanceTail),
-        outgoing = queueSize(outgoingPerformanceHead, outgoingPerformanceTail),
+        outgoing = outgoingPerformanceCount,
     }
 end
 
@@ -245,7 +268,6 @@ function iRC:QueuePerformanceIncoming(message, callback)
     if self:IsSecretValue(message) then return true end
     if not self:IsPerformanceMode() or not C_Timer or not C_Timer.After then return false end
     local kind = type(message) == "string" and message:match("^([A-Z][A-Z0-9_]*)") or ""
-    if isUrgentTrafficKind(kind) then return false end
     local queued = queueSize(incomingPerformanceHead, incomingPerformanceTail)
     if queued >= PERFORMANCE_QUEUE_LIMIT then
         if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "incoming", kind, queued) end
@@ -266,34 +288,80 @@ function iRC:QueuePerformanceIncoming(message, callback)
 end
 
 local outgoingPerformanceScheduled = false
+local function chatMessagingLocked()
+    local checker = C_ChatInfo and C_ChatInfo.InChatMessagingLockdown
+    if type(checker) ~= "function" then return false end
+    local ok, locked = pcall(checker)
+    if not ok then return false end
+    local secretChecker = _G and _G.issecretvalue
+    if type(secretChecker) == "function" and secretChecker(locked) == true then return true end
+    return locked == true
+end
+
 local function sendAddonTrafficNow(prefix, message, distribution, target)
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
+    if chatMessagingLocked() then return false end
     local sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
     if sent and iRC.TrafficMonitorEnabled then iRC:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
     if iRC.Diagnostics then iRC.Diagnostics:Trace(sent and "SEND" or "SEND_FAIL", prefix, message:match("^([A-Z][A-Z0-9_]*)") or "other", #message, distribution, target or "") end
     return sent or false
 end
 
+local function updateOutgoingTokens(now)
+    now = tonumber(now) or 0
+    local elapsed = math.max(0, now - outgoingTokenUpdatedAt)
+    outgoingTokenUpdatedAt = now
+    outgoingTokens = math.min(OUTGOING_BURST_BYTES, outgoingTokens + elapsed * OUTGOING_BYTES_PER_SECOND)
+end
+
+local function outgoingPacketCost(packet)
+    return #tostring(packet.prefix or "") + #tostring(packet.message or "")
+        + #tostring(packet.target or "") + 40
+end
+
+local function peekOutgoingPacket()
+    for _, priority in ipairs({ "ALERT", "NORMAL", "BULK" }) do
+        local queue = outgoingPerformanceQueues[priority]
+        if queue.head <= queue.tail then return queue.entries[queue.head], queue end
+    end
+end
+
+local function removeOutgoingPacket(packet, queue)
+    queue.entries[queue.head] = nil
+    queue.head = queue.head + 1
+    outgoingPerformanceCount = math.max(0, outgoingPerformanceCount - 1)
+    if packet and packet.replaceKey and outgoingReplaceable[packet.replaceKey] == packet then
+        outgoingReplaceable[packet.replaceKey] = nil
+    end
+    if queue.head > queue.tail then queue.entries, queue.head, queue.tail = {}, 1, 0 end
+end
+
 local function drainOutgoingPerformanceQueue()
-    local packet = outgoingPerformanceQueue[outgoingPerformanceHead]
-    outgoingPerformanceQueue[outgoingPerformanceHead] = nil
-    outgoingPerformanceHead = outgoingPerformanceHead + 1
-    if packet then
-        local ok, err = true, nil
-        if type(packet) == "function" then ok, err = pcall(packet)
-        elseif packet.guildKey == iRC:GetGuildKey() then
-            ok, err = pcall(sendAddonTrafficNow, packet.prefix, packet.message, packet.distribution, packet.target)
-        elseif iRC.Diagnostics then
-            iRC.Diagnostics:Trace("QUEUE_DROP", "stale outgoing", packet.prefix, packet.kind or "other")
-        end
+    local packet, queue = peekOutgoingPacket()
+    if not packet then outgoingPerformanceScheduled = false; return end
+    if chatMessagingLocked() then
+        C_Timer.After(CHAT_LOCKDOWN_RETRY_DELAY, drainOutgoingPerformanceQueue)
+        return
+    end
+    local now = GetTime and GetTime() or 0
+    local cost = outgoingPacketCost(packet)
+    updateOutgoingTokens(now)
+    if outgoingTokens < cost then
+        C_Timer.After(math.max(OUTGOING_PACKET_SPACING, (cost - outgoingTokens) / OUTGOING_BYTES_PER_SECOND), drainOutgoingPerformanceQueue)
+        return
+    end
+    removeOutgoingPacket(packet, queue)
+    local expired = packet.expiresAt and now > packet.expiresAt
+    if not expired and packet.guildKey == iRC:GetGuildKey() then
+        outgoingTokens = math.max(0, outgoingTokens - cost)
+        local ok, err = pcall(sendAddonTrafficNow, packet.prefix, packet.message, packet.distribution, packet.target)
         if not ok and geterrorhandler then geterrorhandler()(err) end
+    elseif iRC.Diagnostics then
+        iRC.Diagnostics:Trace("QUEUE_DROP", expired and "expired outgoing" or "stale outgoing",
+            packet.prefix, packet.kind or "other")
     end
-    if outgoingPerformanceHead <= outgoingPerformanceTail then
-        C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
-    else
-        outgoingPerformanceQueue, outgoingPerformanceHead, outgoingPerformanceTail = {}, 1, 0
-        outgoingPerformanceScheduled = false
-    end
+    if outgoingPerformanceCount > 0 then C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
+    else outgoingPerformanceScheduled = false end
 end
 
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
@@ -315,19 +383,39 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         return true
     end
     local kind = message:match("^([A-Z][A-Z0-9_]*)") or ""
-    local urgent = isUrgentTrafficKind(kind)
-    if self:IsPerformanceMode() and not urgent and C_Timer and C_Timer.After then
-        local queued = queueSize(outgoingPerformanceHead, outgoingPerformanceTail)
-        if queued >= PERFORMANCE_QUEUE_LIMIT then
-            if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "outgoing", prefix, kind, queued) end
+    if self:IsPerformanceMode() and C_Timer and C_Timer.After then
+        local priority = trafficPriority(kind)
+        local immediatePacket = { prefix = prefix, message = message, distribution = distribution, target = target }
+        local immediateCost = outgoingPacketCost(immediatePacket)
+        updateOutgoingTokens(now)
+        if outgoingPerformanceCount == 0 and not chatMessagingLocked() and outgoingTokens >= immediateCost then
+            outgoingTokens = outgoingTokens - immediateCost
+            return sendAddonTrafficNow(prefix, message, distribution, target)
+        end
+        local replaceKey = replaceableTrafficKey(prefix, kind, distribution, target)
+        local existing = replaceKey and outgoingReplaceable[replaceKey]
+        local lifetime = replaceableTrafficLifetime(kind)
+        if existing then
+            existing.message, existing.guildKey = message, guildKey
+            existing.expiresAt = lifetime and (now + lifetime) or nil
+            if self.Diagnostics then self.Diagnostics:Trace("QUEUE_COALESCE", prefix, kind, #message, priority) end
+            return true
+        end
+        if outgoingPerformanceCount >= PERFORMANCE_QUEUE_LIMIT then
+            if self.Diagnostics then self.Diagnostics:Trace("QUEUE_DROP", "outgoing", prefix, kind, outgoingPerformanceCount) end
             return false
         end
-        outgoingPerformanceTail = outgoingPerformanceTail + 1
-        outgoingPerformanceQueue[outgoingPerformanceTail] = {
+        local packet = {
             prefix = prefix, message = message, distribution = distribution, target = target,
-            guildKey = guildKey, kind = kind,
+            guildKey = guildKey, kind = kind, replaceKey = replaceKey,
+            expiresAt = lifetime and (now + lifetime) or nil,
         }
-        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, queued + 1) end
+        local queue = outgoingPerformanceQueues[priority]
+        queue.tail = queue.tail + 1
+        queue.entries[queue.tail] = packet
+        outgoingPerformanceCount = outgoingPerformanceCount + 1
+        if replaceKey then outgoingReplaceable[replaceKey] = packet end
+        if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, outgoingPerformanceCount, priority) end
         if not outgoingPerformanceScheduled then
             outgoingPerformanceScheduled = true
             C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
@@ -335,6 +423,115 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         return true
     end
     return sendAddonTrafficNow(prefix, message, distribution, target)
+end
+
+function iRC:IsChatMessagingLocked()
+    return chatMessagingLocked()
+end
+
+local incomingTrafficStates = {}
+local incomingTrafficLastCleanup = 0
+local INCOMING_SENDER_STATE_LIMIT = 256
+local INCOMING_PREFIX_POLICIES = {
+    [iRC.Prefix] = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
+    iRCGFRoster = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
+    iRCGridV1 = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
+    iRCIconV1 = { distributions = { WHISPER = true } },
+    LayerSwap = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
+}
+local INCOMING_SCOPE_KINDS = {
+    connection = {
+        GF_AUDIT = true, GF_TRADE_EXCEPTIONS = true, GROUP_VIOLATION = true, GROUP_VIOLATION_ACK = true,
+        GUILD_ACTIVATION = true, GUILD_ACTIVATION_REQUEST = true, GUILD_CONTACT_NOTE = true,
+        GUILD_CONTACTS = true, GUILD_HOMEPAGE_CLASSES = true, GUILD_HOMEPAGE_DESC = true,
+        GUILD_HOMEPAGE_ICON = true, GUILD_HOMEPAGE_TAG = true, GUILD_MASTER_RANK = true,
+        GUILD_SETTINGS = true, HELLO = true, IDENT_ADMIN_MEMBER = true, IDENT_EVENT = true,
+        IDENT_LINK_DECLINE = true, IDENT_LINK_REQUEST = true, IDENT_MEMBER = true, IDENT_REQUEST = true,
+        IDENTITY_PERMISSION = true, INCIDENT_UPLOAD = true, MEMBER_PERMISSIONS = true,
+        MEMBER_REMOVAL_PERMISSION = true, MGMT_CONFLICT = true, PRESENCE_REQUEST = true,
+        PROF_REC = true, PROF_SUM = true, RANK_MANAGEMENT_PERMISSION = true, RANK_PERMISSIONS = true,
+        RECRUIT_REQUEST = true, RECRUIT_STATUS = true, RECRUITMENT_PERMISSION = true,
+        ROSTER_HISTORY_PERMISSION = true, RULES = true, RULES_ACK = true, RULES_REQUEST = true,
+    },
+    ["guild-map"] = { MAP_POS = true },
+    ["chat-icons"] = { ICON_REQ = true, ICON_STATUS = true },
+    ["race-grid"] = {
+        ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true, CACHE_DATA = true,
+        CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
+        GUILD_DESC = true, GUILD_REPORT = true, LAYER_STATE = true,
+    },
+    ["race-grid-channel"] = {
+        ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true, CACHE_DATA = true,
+        CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
+        GUILD_DESC = true, GUILD_REPORT = true, LAYER_STATE = true,
+    },
+}
+
+local function incomingTrafficPolicy(kind)
+    if kind:find("_REQUEST$", 1, false) then return 3, 10, 1 end
+    if kind == "HELLO" or kind == "MAP_POS" or kind == "LAYER_STATE" then return 10, 10, 0.5 end
+    if kind == "CACHE_DATA" then return 80, 10, 0 end
+    if kind == "RULES" or kind == "GUILD_ACTIVATION" or kind:find("^GUILD_") then return 12, 10, 1 end
+    return 40, 10, 0.25
+end
+
+function iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, scope)
+    if self:HasSecretValues(prefix, message, distribution, sender) or type(prefix) ~= "string"
+        or type(message) ~= "string" or type(distribution) ~= "string" or type(sender) ~= "string"
+        or sender == "" or #message > 1024 then return false end
+    local ownName = self:NormalizeName(self:GetPlayerName())
+    local senderKey = self:NormalizeName(sender)
+    if senderKey == "" or senderKey == ownName then return false end
+    local prefixPolicy = INCOMING_PREFIX_POLICIES[prefix]
+    if not prefixPolicy or not prefixPolicy.distributions[distribution] then return false end
+    if prefixPolicy.guildWhispers and distribution == "WHISPER" and not self:IsGuildMemberName(sender) then return false end
+
+    local now = GetTime and GetTime() or 0
+    if now - incomingTrafficLastCleanup >= 60 then
+        local count, oldestKey, oldestSeen = 0, nil, math.huge
+        for key, state in pairs(incomingTrafficStates) do
+            if now - (state.lastSeen or 0) > 60 then incomingTrafficStates[key] = nil
+            else
+                count = count + 1
+                if state.lastSeen < oldestSeen then oldestKey, oldestSeen = key, state.lastSeen end
+            end
+        end
+        if count >= INCOMING_SENDER_STATE_LIMIT and oldestKey then incomingTrafficStates[oldestKey] = nil end
+        incomingTrafficLastCleanup = now
+    end
+    local kind = message:match("^([A-Z][A-Z0-9_]*)") or "OTHER"
+    local allowedKinds = INCOMING_SCOPE_KINDS[scope]
+    if allowedKinds and not allowedKinds[kind] then return false end
+    local limit, window, duplicateWindow = incomingTrafficPolicy(kind)
+    local key = table.concat({ tostring(scope or prefix), senderKey, kind }, "\031")
+    local state = incomingTrafficStates[key]
+    if not state or now - (state.windowStartedAt or 0) >= window then
+        if not state then
+            local count, oldestKey, oldestSeen = 0, nil, math.huge
+            for existingKey, existingState in pairs(incomingTrafficStates) do
+                count = count + 1
+                if (existingState.lastSeen or 0) < oldestSeen then
+                    oldestKey, oldestSeen = existingKey, existingState.lastSeen or 0
+                end
+            end
+            if count >= INCOMING_SENDER_STATE_LIMIT and oldestKey then incomingTrafficStates[oldestKey] = nil end
+        end
+        state = { windowStartedAt = now, count = 0, duplicates = {} }
+        incomingTrafficStates[key] = state
+    end
+    state.lastSeen = now
+    local previous = state.duplicates[message]
+    if duplicateWindow > 0 and previous and now - previous < duplicateWindow then
+        if self.Diagnostics then self.Diagnostics:Trace("RATE_DROP", "duplicate", prefix, kind, sender) end
+        return false
+    end
+    if state.count >= limit then
+        if self.Diagnostics then self.Diagnostics:Trace("RATE_DROP", "incoming", prefix, kind, sender, state.count) end
+        return false
+    end
+    state.count = state.count + 1
+    if duplicateWindow > 0 then state.duplicates[message] = now end
+    return true
 end
 
 local trafficBuckets = { incoming = {}, outgoing = {} }

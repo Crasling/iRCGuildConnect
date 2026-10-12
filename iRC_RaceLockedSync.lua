@@ -675,6 +675,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if (channel ~= "GUILD" and channel ~= "WHISPER") or type(msg) ~= "string" or #msg > 255 then return end
         if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if prefix == IRC_ROSTER then
+            if not iRC:AcceptIncomingAddonTraffic(prefix, msg, channel, sender, "race-locked") then return end
             if iRC:QueuePerformanceIncoming(msg, function() Sync:ReceiveRoster(msg, sender) end) then return end
             Sync:ReceiveRoster(msg, sender)
         end

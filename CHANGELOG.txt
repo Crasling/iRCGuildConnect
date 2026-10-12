@@ -2,6 +2,18 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.24 - Layer Support & Communication Safety
+--------------------------------------------------------------------------------
+[ADDED] LayerSwap-compatible identities and recent same-zone cache data help keep iRC's numeric Layer 1-N assignments consistent without opening or controlling LayerSwap
+[ADDED] Guild map tooltips show known member layers, and Blizzard party pins show detailed iRC information for guild members
+[FIXED] Layer detection rejects player-controlled pets and secret or inaccessible GUIDs, and requires nearby NPC agreement before changing layers
+[FIXED] Stale layer identities expire after one hour and zone registries remain capped at 99 entries
+[FIXED] Incoming addon traffic is validated by sender, distribution, packet type, duplicate window, and per-sender rate before processing
+[FIXED] Duplicate level transitions from stale roster snapshots are merged into one guild-log entry
+[CHANGED] Layer displays identify the current zone clearly without exposing raw IDs or detection sources
+[CHANGED] Addon traffic uses prioritized, byte-limited queues that coalesce replaceable state, throttle LayerSwap input, and pause safely during chat lockdown
+[CHANGED] Guild overview broadcasts combine report details into one bounded public-channel package when possible
+
 v0.5.23 - Exports, Guild Log & Layer Detection
 --------------------------------------------------------------------------------
 [ADDED] Guild Members and Guild Overview provide copyable CSV reports for roster details, linked identities, activity, and distribution statistics

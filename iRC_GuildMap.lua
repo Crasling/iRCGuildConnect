@@ -13,6 +13,12 @@ local DEFAULT_PIN_SIZE = 12
 local CLUSTER_MINIMUM_DISTANCE = 18
 local MAX_CLUSTER_TOOLTIP_MEMBERS = 5
 local LOCAL_LAYER_LIFETIME = 300
+local LAYER_ID_LIFETIME = 3600
+local MAX_LAYER_IDS = 99
+local LAYER_VOTE_WINDOW = 5
+local LAYERSWAP_DEDUP_WINDOW = 2
+local LAYERSWAP_BURST_WINDOW = 10
+local LAYERSWAP_BURST_LIMIT = 20
 local LAYER_PANEL_WIDTH = 126
 local LAYER_PANEL_HEIGHT = 42
 local initialized, mapInitialized, mapInitializationArmed, mapInitializationPending, positionSendPending
@@ -21,12 +27,18 @@ local layerPanelTicker
 local pinMenu
 local mapControls
 local layerPanel
+local groupMemberTooltipHooked
 local lastSentMapId, lastSentXWire, lastSentYWire, lastPositionSentAt
 local lastDisplayedMapId
 local lastGroupedMembers = {}
 local localLayer
+local layerVotes, layerVotedGuids = {}, {}
 local knownLayerIds = {}
+local layerSwapZoneIds, importedLayerSwapZones = {}, {}
+local layerSwapMessageThrottle = {}
+local lastLayerSwapThrottleCleanup = 0
 local layerUsers = {}
+local guildRosterLookup, guildRosterLookupSource = {}, nil
 local lastLayerBroadcastSignature
 local lastLayerBroadcastAt = 0
 
@@ -41,6 +53,18 @@ local function parseWorldLayerGuid(guid)
     return zoneUID, serverId, instanceId, unitType
 end
 
+local function safeUnitGuid(unit)
+    local secretChecker = C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret
+    if type(secretChecker) == "function" then
+        local checked, secret = pcall(secretChecker, unit)
+        if not checked or iRC:IsSecretValue(secret) or secret == true then return nil end
+    end
+    if type(UnitGUID) ~= "function" then return nil end
+    local ok, guid = pcall(UnitGUID, unit)
+    if not ok or iRC:IsSecretValue(guid) then return nil end
+    return guid
+end
+
 local function currentPlayerMapId()
     if not C_Map or type(C_Map.GetBestMapForUnit) ~= "function" then return nil end
     local mapId = C_Map.GetBestMapForUnit("player")
@@ -48,14 +72,54 @@ local function currentPlayerMapId()
     return mapId
 end
 
-local function getLayerNumber(zoneUID, serverId, instanceId)
+local function getLayerSwapId(serverId, zoneUID)
+    serverId, zoneUID = tonumber(serverId), tonumber(zoneUID)
+    if not serverId or not zoneUID then return nil end
+    return tostring(math.floor(serverId)) .. "-" .. tostring(math.floor(zoneUID))
+end
+
+function GuildMap:GetLayerSwapIdentity()
+    local layer = self:GetLocalLayer()
+    if not layer then return nil end
+    return getLayerSwapId(layer.serverId, layer.zoneUID), layer.number
+end
+
+local function registryNow()
+    return time and time() or (GetTime and GetTime() or 0)
+end
+
+local function pruneLayerIds(ids)
+    local now = registryNow()
+    for zoneUID, seenAt in pairs(ids or {}) do
+        if type(seenAt) ~= "number" or now - seenAt > LAYER_ID_LIFETIME then ids[zoneUID] = nil end
+    end
+end
+
+local function rememberLayerId(ids, zoneUID, seenAt)
+    pruneLayerIds(ids)
+    local existed = ids[zoneUID] ~= nil
+    if not existed then
+        local count, oldestId, oldestSeenAt = 0, nil, math.huge
+        for knownId, knownSeenAt in pairs(ids) do
+            count = count + 1
+            if knownSeenAt < oldestSeenAt then oldestId, oldestSeenAt = knownId, knownSeenAt end
+        end
+        if count >= MAX_LAYER_IDS and oldestId then ids[oldestId] = nil end
+    end
+    seenAt = tonumber(seenAt) or registryNow()
+    if not ids[zoneUID] or seenAt > ids[zoneUID] then ids[zoneUID] = seenAt end
+    return not existed
+end
+
+local function getLayerNumber(zoneUID, serverId, instanceId, refresh)
     local scope = tostring(serverId or 0) .. ":" .. tostring(instanceId or 0)
     local ids = knownLayerIds[scope]
     if not ids then
         ids = {}
         knownLayerIds[scope] = ids
     end
-    ids[zoneUID] = true
+    pruneLayerIds(ids)
+    if refresh ~= false then rememberLayerId(ids, zoneUID) end
     local sorted = {}
     for knownId in pairs(ids) do sorted[#sorted + 1] = knownId end
     table.sort(sorted)
@@ -65,8 +129,61 @@ local function getLayerNumber(zoneUID, serverId, instanceId)
     return 1
 end
 
+local function layerSwapZoneKey(mapId, serverId)
+    mapId, serverId = tonumber(mapId), tonumber(serverId)
+    if not mapId or mapId <= 0 or not serverId or serverId <= 0 then return nil end
+    return tostring(math.floor(mapId)) .. ":" .. tostring(math.floor(serverId))
+end
+
+local function rememberLayerSwapZoneId(mapId, serverId, zoneUID, seenAt)
+    local key = layerSwapZoneKey(mapId, serverId)
+    zoneUID = tonumber(zoneUID)
+    if not key or not zoneUID or zoneUID <= 0 then return false end
+    local ids = layerSwapZoneIds[key]
+    if not ids then ids = {}; layerSwapZoneIds[key] = ids end
+    return rememberLayerId(ids, zoneUID, seenAt)
+end
+
+local function mergeLayerSwapZoneIds(mapId, serverId, instanceId)
+    local source = layerSwapZoneIds[layerSwapZoneKey(mapId, serverId) or ""]
+    if not source then return false end
+    pruneLayerIds(source)
+    local scope = tostring(serverId or 0) .. ":" .. tostring(instanceId or 0)
+    local destination = knownLayerIds[scope]
+    if not destination then destination = {}; knownLayerIds[scope] = destination end
+    pruneLayerIds(destination)
+    local changed = false
+    for zoneUID, seenAt in pairs(source) do
+        if not destination[zoneUID] then changed = true end
+        rememberLayerId(destination, zoneUID, seenAt)
+    end
+    return changed
+end
+
+local function importLayerSwapZoneData(mapId)
+    local zoneName = GetRealZoneText and GetRealZoneText()
+    if type(zoneName) ~= "string" or zoneName == "" then return false end
+    local importKey = tostring(mapId or 0) .. ":" .. zoneName
+    local now = registryNow()
+    if importedLayerSwapZones[importKey] and now - importedLayerSwapZones[importKey] < 60 then return false end
+    local db = _G and _G.LayerSwapDB
+    local layers = type(db) == "table" and db.layers
+    if type(layers) ~= "table" then return false end
+    importedLayerSwapZones[importKey] = now
+    local changed = false
+    for routeId, entry in pairs(layers) do
+        local lastSeen = type(entry) == "table" and tonumber(entry.last)
+        if lastSeen and (now == 0 or now - lastSeen <= 3600) and entry.zone == zoneName then
+            local serverId, zoneUID = tostring(routeId):match("^(%d+)%-(%d+)$")
+            if rememberLayerSwapZoneId(mapId, tonumber(serverId), tonumber(zoneUID), lastSeen) then changed = true end
+        end
+    end
+    return changed
+end
+
 function GuildMap:GetLayerRegistryWire(serverId, instanceId)
     local ids = knownLayerIds[tostring(serverId or 0) .. ":" .. tostring(instanceId or 0)] or {}
+    pruneLayerIds(ids)
     local sorted = {}
     for zoneUID in pairs(ids) do sorted[#sorted + 1] = zoneUID end
     table.sort(sorted)
@@ -80,7 +197,8 @@ function GuildMap:BroadcastLocalLayer(force)
     if not layer or iRC:GetSettings().showLayerPanel == false
         or not iRC.RaceGrid or not iRC.RaceGrid.BroadcastLayerState then return false end
     if (InCombatLockdown and InCombatLockdown())
-        or (UnitAffectingCombat and UnitAffectingCombat("player")) then return false end
+        or (UnitAffectingCombat and UnitAffectingCombat("player"))
+        or (iRC.IsChatMessagingLocked and iRC:IsChatMessagingLocked()) then return false end
     local registry = self:GetLayerRegistryWire(layer.serverId, layer.instanceId)
     local signature = tostring(layer.serverId) .. ":" .. tostring(layer.instanceId) .. ":"
         .. tostring(layer.zoneUID) .. ":" .. registry
@@ -208,14 +326,20 @@ local function initializeLayerPanel()
     layerPanel:SetScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-        GameTooltip:SetText("iRC Current Layer")
+        GameTooltip:SetText("Current Zone Layer")
         local layer = GuildMap:GetLocalLayer()
         if layer then
-            GameTooltip:AddLine("Layer " .. tostring(layer.number), 0.30, 1, 0.35)
-            GameTooltip:AddLine("Raw zone ID: " .. tostring(layer.zoneUID), 0.68, 0.68, 0.68)
-            GameTooltip:AddLine("Detected from " .. tostring(layer.source or "nearby NPC") .. ".", 0.68, 0.68, 0.68)
+            GameTooltip:AddLine("You are currently on Layer " .. tostring(layer.number) .. " in this zone.", 0.30, 1, 0.35)
+            local ids = knownLayerIds[tostring(layer.serverId or 0) .. ":" .. tostring(layer.instanceId or 0)]
+            pruneLayerIds(ids)
+            local count = 0
+            for _ in pairs(ids or {}) do count = count + 1 end
+            if count > 0 then
+                local range = count == 1 and "1" or ("1-" .. tostring(math.min(99, count)))
+                GameTooltip:AddLine("Known layers in this zone: " .. range, 0.68, 0.68, 0.68)
+            end
         else
-            GameTooltip:AddLine("Waiting for a nearby NPC observation.", 0.72, 0.72, 0.72, true)
+            GameTooltip:AddLine("Waiting to detect your current layer in this zone.", 0.72, 0.72, 0.72, true)
         end
         GameTooltip:AddLine(" ")
         if settings.layerPanelLocked == true then
@@ -229,11 +353,12 @@ local function initializeLayerPanel()
     end)
     layerPanel:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     layerPanel:SetScript("OnMouseUp", function(_, button)
-        if button ~= "RightButton" then return end
-        settings.layerPanelLocked = settings.layerPanelLocked ~= true
-        updateLockState()
-        iRC:Print(settings.layerPanelLocked and "Layer panel locked." or "Layer panel unlocked.")
-        if GameTooltip then GameTooltip:Hide() end
+        if button == "RightButton" then
+            settings.layerPanelLocked = settings.layerPanelLocked ~= true
+            updateLockState()
+            iRC:Print(settings.layerPanelLocked and "Layer panel locked." or "Layer panel unlocked.")
+            if GameTooltip then GameTooltip:Hide() end
+        end
     end)
     updateLockState()
     layerPanel:ClearAllPoints()
@@ -247,6 +372,7 @@ function GuildMap:GetLocalLayer()
     local now = GetTime and GetTime() or 0
     if now - (localLayer.seenAt or 0) > LOCAL_LAYER_LIFETIME then
         localLayer = nil
+        layerVotes, layerVotedGuids = {}, {}
         return nil
     end
     local mapId = currentPlayerMapId()
@@ -258,11 +384,10 @@ function GuildMap:UpdateLocalLayerDisplay()
     local layer = self:GetLocalLayer()
     if mapControls and mapControls.layerLabel then
         if layer then
-            mapControls.layerLabel:SetText("Layer " .. tostring(layer.number) .. "  |cff888888(ID "
-                .. tostring(layer.zoneUID) .. ", " .. tostring(layer.source or "observed") .. ")|r")
+            mapControls.layerLabel:SetText("Current zone layer: " .. tostring(layer.number))
             mapControls.layerLabel:SetTextColor(0.30, 1, 0.35, 1)
         else
-            mapControls.layerLabel:SetText("Current layer: waiting for a nearby NPC")
+            mapControls.layerLabel:SetText("Current zone layer: waiting for nearby NPCs")
             mapControls.layerLabel:SetTextColor(0.72, 0.72, 0.72, 1)
         end
     end
@@ -278,16 +403,58 @@ function GuildMap:ObserveLocalLayer(unit, source)
     if type(unit) ~= "string" or not UnitGUID then return false end
     if iRC:GetSettings().showLayerPanel == false then return false end
     if iRC.IsForeverClient and not iRC:IsForeverClient() then return false end
-    local guid = UnitGUID(unit)
+    -- A summoned pet can keep the GUID layer identity from where it was
+    -- created even after following its owner elsewhere. Never use a
+    -- player-controlled unit as evidence for the player's current layer.
+    if UnitPlayerControlled then
+        local checked, controlled = pcall(UnitPlayerControlled, unit)
+        if not checked or iRC:IsSecretValue(controlled) or controlled then return false end
+    end
+    local guid = safeUnitGuid(unit)
+    if not guid then return false end
     local zoneUID, serverId, instanceId, unitType = parseWorldLayerGuid(guid)
     if not zoneUID then return false end
     local mapId = currentPlayerMapId()
     if not mapId then return false end
+    importLayerSwapZoneData(mapId)
+    mergeLayerSwapZoneIds(mapId, serverId, instanceId)
+
+    local routeId = getLayerSwapId(serverId, zoneUID)
+    if not routeId then return false end
+    if layerVotedGuids[guid] then
+        if localLayer and localLayer.layerSwapId == routeId then
+            localLayer.seenAt = GetTime and GetTime() or 0
+            localLayer.number = getLayerNumber(zoneUID, serverId, instanceId)
+        end
+        return false
+    end
+    layerVotedGuids[guid] = true
+    layerVotes[#layerVotes + 1] = routeId
+    if #layerVotes > LAYER_VOTE_WINDOW then table.remove(layerVotes, 1) end
+
+    local confirmations = 0
+    for _, observedId in ipairs(layerVotes) do
+        if observedId == routeId then confirmations = confirmations + 1 end
+    end
+    local required = localLayer and 3 or 2
+    if localLayer and localLayer.layerSwapId == routeId then
+        localLayer.seenAt = GetTime and GetTime() or 0
+        localLayer.number = getLayerNumber(zoneUID, serverId, instanceId)
+        return true
+    end
+    if confirmations < required then
+        iRC:DebugMsg("Layer candidate ignored until confirmed: route=" .. routeId
+            .. ", votes=" .. tostring(confirmations) .. "/" .. tostring(required)
+            .. ", source=" .. tostring(source or unit), 3)
+        return false
+    end
+
     local changed = not localLayer or localLayer.zoneUID ~= zoneUID
         or localLayer.serverId ~= serverId or localLayer.instanceId ~= instanceId
         or localLayer.mapId ~= mapId
     localLayer = {
         zoneUID = zoneUID,
+        layerSwapId = routeId,
         number = getLayerNumber(zoneUID, serverId, instanceId),
         serverId = serverId,
         instanceId = instanceId,
@@ -307,6 +474,7 @@ end
 
 function GuildMap:ClearLocalLayer()
     localLayer = nil
+    layerVotes, layerVotedGuids = {}, {}
     self:UpdateLocalLayerDisplay()
 end
 
@@ -327,35 +495,106 @@ function GuildMap:ReceiveLayerState(parts, sender)
     local serverId = tonumber(parts[4])
     local instanceId = tonumber(parts[5])
     local mapId = tonumber(parts[6])
+    local expectedLayerSwapId = getLayerSwapId(serverId, zoneUID)
+    local layerSwapId = tostring(parts[9] or "")
+    if layerSwapId == "" then layerSwapId = expectedLayerSwapId end
     if not zoneUID or zoneUID <= 0 or not serverId or serverId < 0
-        or not instanceId or instanceId < 0 or not mapId or mapId <= 0 then return false end
+        or not instanceId or instanceId < 0 or not mapId or mapId <= 0
+        or layerSwapId ~= expectedLayerSwapId then return false end
     local scope = tostring(serverId) .. ":" .. tostring(instanceId)
     local ids = knownLayerIds[scope]
     if not ids then ids = {}; knownLayerIds[scope] = ids end
-    local registryChanged = ids[zoneUID] ~= true
-    ids[zoneUID] = true
+    pruneLayerIds(ids)
+    local registryChanged = ids[zoneUID] == nil
+    rememberLayerId(ids, zoneUID)
     for rawId in tostring(parts[8] or ""):gmatch("%d+") do
         local knownId = tonumber(rawId)
         if knownId and knownId > 0 and not ids[knownId] then
-            ids[knownId] = true
+            rememberLayerId(ids, knownId)
             registryChanged = true
         end
     end
-    local number = getLayerNumber(zoneUID, serverId, instanceId)
+    local number = getLayerNumber(zoneUID, serverId, instanceId, false)
     local senderKey = iRC:NormalizeName(sender)
     if senderKey ~= "" then
         layerUsers[senderKey] = {
             name = sender, zoneUID = zoneUID, number = number,
+            layerSwapId = layerSwapId,
             serverId = serverId, instanceId = instanceId, mapId = mapId,
             seenAt = GetTime and GetTime() or 0,
         }
+        self:UpdatePins(true)
     end
     if localLayer and localLayer.serverId == serverId and localLayer.instanceId == instanceId then
-        localLayer.number = getLayerNumber(localLayer.zoneUID, serverId, instanceId)
+        localLayer.number = getLayerNumber(localLayer.zoneUID, serverId, instanceId, false)
         self:UpdateLocalLayerDisplay()
         if registryChanged and C_Timer and C_Timer.After then
             C_Timer.After(1 + math.random() * 2, function() GuildMap:BroadcastLocalLayer(false) end)
         end
+    end
+    return true
+end
+
+local layerSwapZones = {}
+local function throttleLayerSwapMessage(senderKey, messageKey)
+    local now = GetTime and GetTime() or 0
+    if now - lastLayerSwapThrottleCleanup >= 60 then
+        for key, state in pairs(layerSwapMessageThrottle) do
+            if now - (state.lastSeen or 0) > 60 then layerSwapMessageThrottle[key] = nil end
+        end
+        lastLayerSwapThrottleCleanup = now
+    end
+    local state = layerSwapMessageThrottle[senderKey]
+    if not state or now - (state.windowStartedAt or 0) >= LAYERSWAP_BURST_WINDOW then
+        state = { windowStartedAt = now, count = 0, messages = {} }
+        layerSwapMessageThrottle[senderKey] = state
+    end
+    state.lastSeen = now
+    local previous = state.messages[messageKey]
+    if previous and now - previous < LAYERSWAP_DEDUP_WINDOW then return true end
+    if state.count >= LAYERSWAP_BURST_LIMIT then return true end
+    state.count = state.count + 1
+    state.messages[messageKey] = now
+    return false
+end
+
+function GuildMap:ReceiveLayerSwapMessage(message, sender, distribution)
+    if iRC:GetSettings().showLayerPanel == false or iRC:HasSecretValues(message, sender, distribution) then return false end
+    if distribution ~= "GUILD" and distribution ~= "WHISPER" and distribution ~= "CHANNEL" then return false end
+    message, sender = tostring(message or ""), tostring(sender or "")
+    local senderKey = iRC:NormalizeName(sender)
+    if senderKey == "" or senderKey == iRC:NormalizeName(iRC:GetPlayerName()) then return false end
+    local zone = message:match("^zone%s+(%d+)$")
+    if zone then
+        if throttleLayerSwapMessage(senderKey, "zone:" .. zone) then return false end
+        layerSwapZones[senderKey] = { mapId = tonumber(zone), seenAt = GetTime and GetTime() or 0 }
+        return true
+    end
+    local _, routeId, heardZone = message:match("^heard%s+(.-)|([^|]+)|([^|]+)|[^|]*$")
+    if not routeId then routeId = message:match("^not%s+(%d+%-%d+)$") end
+    if not routeId then routeId = message:match("^want%s+(%d+%-%d+)$") end
+    local serverId, zoneUID = tostring(routeId or ""):match("^(%d+)%-(%d+)$")
+    serverId, zoneUID = tonumber(serverId), tonumber(zoneUID)
+    if not serverId or serverId <= 0 or not zoneUID or zoneUID <= 0 then return false end
+    if throttleLayerSwapMessage(senderKey, message) then return false end
+    local rememberedZone = layerSwapZones[senderKey]
+    if rememberedZone and GetTime() - rememberedZone.seenAt > 10 then
+        layerSwapZones[senderKey], rememberedZone = nil, nil
+    end
+    local mapId = tonumber(heardZone)
+        or (rememberedZone and (GetTime() - rememberedZone.seenAt <= 10) and rememberedZone.mapId)
+    -- LayerSwap does not publish a canonical number; its letters and discovery
+    -- order are local to each client. Use only same-zone raw identities to
+    -- populate iRC's deterministic numeric registry. Never treat these notes
+    -- as local-layer evidence or as a tracked guild member position.
+    local playerMapId = currentPlayerMapId()
+    if not mapId then return false end
+    rememberLayerSwapZoneId(mapId, serverId, zoneUID)
+    if playerMapId and mapId == playerMapId and localLayer
+        and localLayer.mapId == playerMapId and localLayer.serverId == serverId then
+        mergeLayerSwapZoneIds(mapId, serverId, localLayer.instanceId)
+        localLayer.number = getLayerNumber(localLayer.zoneUID, serverId, localLayer.instanceId, false)
+        self:UpdateLocalLayerDisplay()
     end
     return true
 end
@@ -368,6 +607,7 @@ function GuildMap:GetUserLayer(name)
         layerUsers[iRC:NormalizeName(name)] = nil
         return nil
     end
+    entry.number = getLayerNumber(entry.zoneUID, entry.serverId, entry.instanceId, false)
     return entry
 end
 
@@ -382,6 +622,99 @@ local function classColoredName(name, classFile)
         math.floor(color.r * 255 + 0.5),
         math.floor(color.g * 255 + 0.5),
         math.floor(color.b * 255 + 0.5), name)
+end
+
+local function findGuildRosterMember(name)
+    local wanted = iRC:NormalizeName(name)
+    if wanted == "" or not iRC.GetGuildRosterSnapshot then return nil end
+    local snapshot = iRC:GetGuildRosterSnapshot()
+    if snapshot ~= guildRosterLookupSource then
+        guildRosterLookup, guildRosterLookupSource = {}, snapshot
+        for _, member in ipairs(snapshot) do
+            guildRosterLookup[iRC:NormalizeName(member.name)] = member
+        end
+    end
+    return guildRosterLookup[wanted]
+end
+
+local function addGuildMemberTooltip(tooltip, name, unit, member)
+    member = member or findGuildRosterMember(name)
+    local className, classFile, level
+    if member then
+        className, classFile, level = member.className, member.classFile, member.level
+    elseif unit then
+        local okClass, localizedClass, classToken = pcall(UnitClass, unit)
+        local okLevel, unitLevel = pcall(UnitLevel, unit)
+        if okClass then className, classFile = localizedClass, classToken end
+        if okLevel then level = unitLevel end
+    end
+    local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile or ""]
+    local displayName = iRC:FormatPlayerName(name or "Unknown")
+    if color then
+        tooltip:AddLine(displayName, color.r, color.g, color.b)
+    else
+        tooltip:AddLine(displayName, 1, 0.82, 0)
+    end
+    local details = {}
+    if member and member.rankName and member.rankName ~= "" then details[#details + 1] = member.rankName end
+    if tonumber(level) and tonumber(level) > 0 then details[#details + 1] = "Level " .. tostring(level) end
+    if className and className ~= "" then details[#details + 1] = className end
+    tooltip:AddLine(#details > 0 and table.concat(details, "  |  ") or "Guild member", 0.68, 0.68, 0.68)
+    local identityLabel = iRC.Identity and iRC.Identity.GetIdentityLabel
+        and iRC.Identity:GetIdentityLabel(name) or nil
+    if identityLabel and identityLabel ~= "" then
+        tooltip:AddLine(identityLabel, 0.72, 0.48, 1)
+    end
+    local layer = GuildMap:GetUserLayer(name)
+    if layer and layer.mapId == currentPlayerMapId() then
+        tooltip:AddLine("Current zone layer: " .. tostring(layer.number), 0.30, 1, 0.35)
+    end
+end
+
+local function replaceGroupMemberTooltip(pin)
+    if not GameTooltip or GameTooltip:GetOwner() ~= pin
+        or type(pin.GetCurrentMouseOverUnits) ~= "function" then return end
+    local ok, mouseOverUnits = pcall(pin.GetCurrentMouseOverUnits, pin)
+    if not ok or type(mouseOverUnits) ~= "table" then return end
+    local guildMembers = {}
+    for unit in pairs(mouseOverUnits) do
+        local name
+        local nameOk, unitName, realmName = pcall(UnitName, unit)
+        if nameOk and not iRC:HasSecretValues(unitName, realmName) and unitName and unitName ~= "" then
+            name = realmName and realmName ~= "" and (unitName .. "-" .. realmName) or unitName
+        end
+        local member = name and findGuildRosterMember(name) or nil
+        local unitIsGuildMember = false
+        if not member and name and type(UnitIsInMyGuild) == "function" then
+            local guildOk, guildResult = pcall(UnitIsInMyGuild, unit)
+            unitIsGuildMember = guildOk and not iRC:IsSecretValue(guildResult) and guildResult == true
+        end
+        if member or unitIsGuildMember then
+            guildMembers[#guildMembers + 1] = { name = name, unit = unit, member = member }
+        end
+    end
+    if #guildMembers == 0 then return end
+    table.sort(guildMembers, function(a, b)
+        return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name)
+    end)
+    GameTooltip:ClearLines()
+    if #guildMembers > 1 then
+        GameTooltip:AddLine("Guild party members (" .. tostring(#guildMembers) .. ")", 1, 0.82, 0)
+    end
+    for index, entry in ipairs(guildMembers) do
+        if index > 1 then GameTooltip:AddLine(" ") end
+        addGuildMemberTooltip(GameTooltip, entry.name, entry.unit, entry.member)
+    end
+    GameTooltip:Show()
+end
+
+local function hookGroupMemberTooltip()
+    if groupMemberTooltipHooked or type(GroupMembersPinMixin) ~= "table"
+        or type(GroupMembersPinMixin.Refresh) ~= "function" or not hooksecurefunc then return end
+    local ok = pcall(hooksecurefunc, GroupMembersPinMixin, "Refresh", function(pin)
+        replaceGroupMemberTooltip(pin)
+    end)
+    if ok then groupMemberTooltipHooked = true end
 end
 
 local function showPinMenu(pin)
@@ -455,7 +788,7 @@ local function clearPin(name)
     if pinMenu and pinMenu:IsShown() and pinMenu.playerName == pin.playerName then hidePinMenu() end
     pin:Hide()
     pin.playerName, pin.classFile, pin.level = nil, nil, nil
-    pin.className, pin.clusterMembers = nil, nil
+    pin.className, pin.layerNumber, pin.clusterMembers = nil, nil, nil
     if pin.count then pin.count:Hide() end
     if pin.clusterDots then
         for _, dot in ipairs(pin.clusterDots) do
@@ -531,6 +864,7 @@ local function acquirePin(parent)
                     local member = self.clusterMembers[index]
                     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile or ""]
                     local details = "Level " .. tostring(member.level or 0) .. " " .. tostring(member.className or member.classFile or "Unknown")
+                    if member.layerNumber then details = details .. "  |  Layer " .. tostring(member.layerNumber) end
                     if color then
                         GameTooltip:AddDoubleLine(iRC:FormatPlayerName(member.playerName or "Unknown"), details, color.r, color.g, color.b, 0.65, 0.65, 0.65)
                     else
@@ -548,6 +882,9 @@ local function acquirePin(parent)
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[self.classFile or ""]
             if color then GameTooltip:AddLine(shortName, color.r, color.g, color.b) else GameTooltip:AddLine(shortName) end
             GameTooltip:AddLine("Level " .. tostring(self.level or 0) .. " " .. tostring(self.className or self.classFile or "Unknown"), 0.65, 0.65, 0.65)
+            if self.layerNumber then
+                GameTooltip:AddLine("Current zone layer: " .. tostring(self.layerNumber), 0.30, 1, 0.35)
+            end
             GameTooltip:Show()
         end)
         pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -568,12 +905,15 @@ end
 local function memberDetails(name, position)
     local profile = iRC:FindConnectionProfile(name)
     local classFile = profile and profile.class or ""
+    local layer = GuildMap:GetUserLayer(position.name or name)
+    local layerNumber = layer and layer.mapId == position.mapId and layer.number or nil
     return {
         key = name,
         playerName = position.name or name,
         classFile = classFile,
         level = profile and profile.level or 0,
         className = classFile ~= "" and classFile:sub(1, 1) .. classFile:sub(2):lower() or "Unknown",
+        layerNumber = layerNumber,
     }
 end
 
@@ -588,7 +928,7 @@ local function configureSinglePin(pin, member, size)
     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile or ""]
     pin.center:SetVertexColor(color and color.r or 1, color and color.g or 1, color and color.b or 1, 1)
     pin.playerName, pin.classFile, pin.level = member.playerName, member.classFile, member.level
-    pin.className, pin.clusterMembers = member.className, { member }
+    pin.className, pin.layerNumber, pin.clusterMembers = member.className, member.layerNumber, { member }
     pin.count:Hide()
     for _, dot in ipairs(pin.clusterDots) do
         dot.border:Hide()
@@ -601,7 +941,7 @@ local function configureClusterPin(pin, members, size)
     pin:SetSize(width, height)
     pin.border:Hide()
     pin.center:Hide()
-    pin.playerName, pin.classFile, pin.level, pin.className = nil, nil, nil, nil
+    pin.playerName, pin.classFile, pin.level, pin.className, pin.layerNumber = nil, nil, nil, nil, nil
     pin.clusterMembers = members
     local offsets = {
         { 0, math.floor(size * 0.28) },
@@ -791,6 +1131,7 @@ local function initializeMap()
         or type(WorldMapFrame.HookScript) ~= "function"
         or type(WorldMapFrame.ScrollContainer.HookScript) ~= "function" then return end
     mapInitialized = true
+    hookGroupMemberTooltip()
     local function addLabelOutline(label)
         local fontFile, fontSize = label:GetFont()
         if fontFile and fontSize then label:SetFont(fontFile, fontSize, "OUTLINE") end
@@ -990,10 +1331,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         for name in pairs(groupedMembers()) do clearPin(name) end
         GuildMap:UpdatePins()
     elseif event == "CHAT_MSG_ADDON" then
-        local prefix, message, _, sender = ...
-        if iRC:HasSecretValues(prefix, message, sender) then return end
+        local prefix, message, distribution, sender = ...
+        if iRC:HasSecretValues(prefix, message, distribution, sender) then return end
         if prefix ~= iRC.Prefix or not enabled() or not iRC:IsGuildMemberName(sender)
             or iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
+        if not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "guild-map") then return end
         local version, mapId, xWire, yWire = tostring(message or ""):match("^MAP_POS\t([^\t]+)\t(%d+)\t(%d+)\t(%d+)$")
         mapId, xWire, yWire = tonumber(mapId), tonumber(xWire), tonumber(yWire)
         if version ~= POSITION_VERSION or not mapId or not xWire or not yWire or xWire > 10000 or yWire > 10000 then return end
