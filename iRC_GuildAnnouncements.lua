@@ -30,7 +30,7 @@ local DEFAULT_ICON_PRIORITY = {
     "officer1", "selfFound", "guildFound",
 }
 
-local rosterReference, rosterGuildKey, rosterRanks = nil, nil, {}
+local rosterReference, rosterGuildKey, rosterRanks, rosterMembers = nil, nil, {}, {}
 
 -- Death is a Hardcore identity state, not a general "currently unable to act"
 -- state. Keeping this check in one place prevents ordinary realm deaths from
@@ -67,13 +67,21 @@ local function getRosterRank(name)
     if not guildKey or not iRC.GetGuildRosterSnapshot then return nil end
     local roster = iRC:GetGuildRosterSnapshot()
     if roster ~= rosterReference or guildKey ~= rosterGuildKey then
-        rosterReference, rosterGuildKey, rosterRanks = roster, guildKey, {}
+        rosterReference, rosterGuildKey, rosterRanks, rosterMembers = roster, guildKey, {}, {}
         for _, member in ipairs(roster) do
             local memberKey = publicNameKey(member.name)
-            if memberKey then rosterRanks[memberKey] = member.rankIndex end
+            if memberKey then
+                rosterRanks[memberKey] = member.rankIndex
+                rosterMembers[memberKey] = member
+            end
         end
     end
     return rosterRanks[publicNameKey(name)]
+end
+
+local function getRosterMember(name)
+    getRosterRank(name)
+    return rosterMembers[publicNameKey(name)]
 end
 
 function Announcements:GetUnlockedIcons(name)
@@ -118,6 +126,9 @@ function Announcements:GetUnlockedIcons(name)
     if guildFoundApplies and status and status.clean == false then unlocked.violation = true end
     if fresh and profile.currentGroupRuleViolation then unlocked.violation = true end
     if fresh and profile.race and iRC:GetGuildMemberRaceCheck(profile.race, connection).mismatch then
+        unlocked.violation = true
+    end
+    if fresh and profile.class and iRC:GetGuildMemberClassCheck(profile.class, connection).mismatch then
         unlocked.violation = true
     end
     local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(name)
@@ -261,6 +272,23 @@ local function iconLink(kind, icon)
     return string.format("|Haddon:iRCIcon:%s|h|T%s:0:0|t|h", kind, icon)
 end
 
+local function altIdentityLink(author)
+    if iRCCharDB and iRCCharDB.showLinkedMainsInChat == false then return nil end
+    if not (iRC.Identity and iRC.Identity.GetIdentityLabel
+        and iRC.Identity.GetMainCharacterName) then return nil end
+    local label = iRC.Identity:GetIdentityLabel(author)
+    if type(label) ~= "string" or label == "Main" or label:find("^Pending")
+        or not label:find("Alt of", 1, true) then return nil end
+    local mainName = iRC.Identity:GetMainCharacterName(author)
+    if type(mainName) ~= "string" or mainName == ""
+        or iRC:NormalizeName(mainName) == iRC:NormalizeName(author) then return nil end
+    mainName = iRC:FormatPlayerName(mainName):gsub("[%c|:]", ""):sub(1, 80)
+    if mainName == "" then return nil end
+    local bankAlt = label:find("Personal Bank Alt", 1, true) ~= nil
+    local kind, color = bankAlt and "BankAlt" or "Alt", bankAlt and "66ccff" or "b38cff"
+    return string.format("|Haddon:iRCIdentity:%s:%s|h|cff%s[%s]|r|h", kind, mainName, color, kind)
+end
+
 local hookedChatFrames = {}
 local activeTooltipChatFrame
 local tooltipMouseWasEnabled
@@ -278,6 +306,36 @@ local function hookChatTooltip(chatFrame)
     if not chatFrame or not chatFrame.HookScript or hookedChatFrames[chatFrame] then return end
     hookedChatFrames[chatFrame] = true
     chatFrame:HookScript("OnHyperlinkEnter", function(self, link)
+        local identityKind, mainName
+        if type(link) == "string" then
+            identityKind, mainName = link:match("^addon:iRCIdentity:(%w+):(.+)$")
+        end
+        if mainName and mainName ~= "" and GameTooltip then
+            activeTooltipChatFrame = self
+            GameTooltip.iRCChatIconOwner = self
+            if tooltipMouseWasEnabled == nil and GameTooltip.IsMouseEnabled then
+                tooltipMouseWasEnabled = GameTooltip:IsMouseEnabled()
+            end
+            GameTooltip:EnableMouse(false)
+            GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+            local bankAlt = identityKind == "BankAlt"
+            GameTooltip:SetText(bankAlt and "Personal Bank Alt" or "Alt character",
+                bankAlt and 0.40 or 0.70, bankAlt and 0.80 or 0.55, 1.00)
+            local member = getRosterMember(mainName)
+            local classColor = member and member.classFile and RAID_CLASS_COLORS
+                and RAID_CLASS_COLORS[member.classFile]
+            GameTooltip:AddLine(mainName, classColor and classColor.r or 1,
+                classColor and classColor.g or 1, classColor and classColor.b or 1, true)
+            if member then
+                GameTooltip:AddLine("Level " .. tostring(member.level or "?") .. " "
+                    .. tostring(member.className or "Unknown") .. "  -  "
+                    .. tostring(member.rankName or "Unknown rank"), 0.78, 0.78, 0.78, true)
+            else
+                GameTooltip:AddLine("Main character", 0.78, 0.78, 0.78, true)
+            end
+            GameTooltip:Show()
+            return
+        end
         local kind = type(link) == "string" and link:match("^addon:iRCIcon:(%w+)$")
         local help = kind and ICON_HELP[kind]
         if not help or not GameTooltip then
@@ -313,13 +371,67 @@ function Announcements:AnnounceDeath()
     return pcall(SendChatMessage, iRC:Text("CHAT_ANNOUNCE_DEATH"), "GUILD")
 end
 
-function Announcements:AnnounceLevel60(level)
-    if tonumber(level) ~= 60 or not canAnnounce("enableGuildLevel60Message") then return false end
+function Announcements:AnnounceLevelMilestone(level)
+    level = math.floor(tonumber(level) or 0)
+    local rules = iRC:GetConnectionRules()
+    local minimum = math.max(10, math.min(60,
+        math.floor((tonumber(rules and rules.guildLevelAnnouncementMinimum) or 60) / 10) * 10))
+    if level < minimum or level % 10 ~= 0 or not canAnnounce("enableGuildLevel60Message") then return false end
     iRCCharDB = iRCCharDB or {}
-    if iRCCharDB.guildLevel60AnnouncementSent then return false end
-    local sent = pcall(SendChatMessage, iRC:Text("CHAT_ANNOUNCE_LEVEL60"), "GUILD")
-    if sent then iRCCharDB.guildLevel60AnnouncementSent = true end
+    iRCCharDB.guildLevelAnnouncementsSent = iRCCharDB.guildLevelAnnouncementsSent or {}
+    if level == 60 and iRCCharDB.guildLevel60AnnouncementSent then
+        iRCCharDB.guildLevelAnnouncementsSent[60] = true
+    end
+    if iRCCharDB.guildLevelAnnouncementsSent[level] then return false end
+    local sent = pcall(SendChatMessage, iRC:Text("CHAT_ANNOUNCE_LEVEL", level), "GUILD")
+    if sent then
+        iRCCharDB.guildLevelAnnouncementsSent[level] = true
+        if level == 60 then iRCCharDB.guildLevel60AnnouncementSent = true end
+        iRC:DebugMsg("Guild level announcement sent for level " .. tostring(level) .. ".", 3)
+    end
     return sent
+end
+
+function Announcements:CheckProfessionMilestones(skills, names)
+    if type(skills) ~= "table" then return false end
+    iRCCharDB = iRCCharDB or {}
+    local observed = iRCCharDB.guildProfessionAnnouncementObservedSkills
+    if type(observed) ~= "table" then
+        observed = {}
+        iRCCharDB.guildProfessionAnnouncementObservedSkills = observed
+        for professionID, rank in pairs(skills) do observed[professionID] = tonumber(rank) or 0 end
+        return false
+    end
+    local rules = iRC:GetConnectionRules()
+    local firstMilestone = math.max(75, math.min(300,
+        math.floor((tonumber(rules and rules.guildProfessionAnnouncementSkill) or 300) / 75) * 75))
+    iRCCharDB.guildProfessionAnnouncementsSent = iRCCharDB.guildProfessionAnnouncementsSent or {}
+    local sentAny = false
+    for professionID, rank in pairs(skills) do
+        professionID, rank = tonumber(professionID), math.floor(tonumber(rank) or 0)
+        local previous = tonumber(observed[professionID])
+        local primary = professionID and professionID ~= 185 and professionID ~= 356 and professionID ~= 129
+        if primary and previous then
+            for milestone = firstMilestone, 300, 75 do
+                local announcementKey = tostring(professionID) .. ":" .. tostring(milestone)
+                if previous < milestone and rank >= milestone
+                    and not iRCCharDB.guildProfessionAnnouncementsSent[announcementKey]
+                    and canAnnounce("enableGuildProfessionMessage") then
+                    local name = type(names) == "table" and names[professionID] or tostring(professionID)
+                    local sent = pcall(SendChatMessage,
+                        iRC:Text("CHAT_ANNOUNCE_PROFESSION", milestone, tostring(name or professionID)), "GUILD")
+                    if sent then
+                        iRCCharDB.guildProfessionAnnouncementsSent[announcementKey] = true
+                        sentAny = true
+                        iRC:DebugMsg("Guild profession announcement sent for " .. tostring(name or professionID)
+                            .. " at skill " .. tostring(milestone) .. ".", 3)
+                    end
+                end
+            end
+        end
+        observed[professionID] = rank
+    end
+    return sentAny
 end
 
 function Announcements:SendTest(kind)
@@ -337,9 +449,11 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
     if iRC:IsOfficialHardcoreRealm()
         and (message == iRC:Text("CHAT_ANNOUNCE_DEATH") or message == iRC:Text("CHAT_ANNOUNCE_TEST_DEATH")) then
         icon, iconKind = Announcements.Icons.death, "death"
-    elseif message == iRC:Text("CHAT_ANNOUNCE_LEVEL60") or message == iRC:Text("CHAT_ANNOUNCE_TEST_LEVEL60") then icon, iconKind = Announcements.Icons.level60, "level60" end
+    elseif message == iRC:Text("CHAT_ANNOUNCE_LEVEL", 60) or message == iRC:Text("CHAT_ANNOUNCE_LEVEL60")
+        or message == iRC:Text("CHAT_ANNOUNCE_TEST_LEVEL60") then icon, iconKind = Announcements.Icons.level60, "level60" end
     local hideAll = iRCCharDB and iRCCharDB.hideAllChatIcons == true
-    if hideAll and not icon then return false end
+    local identity = altIdentityLink(author)
+    if hideAll and not icon and not identity then return false end
     local badge, badgeKind
     if not hideAll then
         badge, badgeKind = Announcements:GetDefaultChatIcon(author)
@@ -349,7 +463,8 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
     end
     if icon and iconKind ~= badgeKind then message = message .. " " .. iconLink(iconKind, icon) end
     if badge then message = iconLink(badgeKind, badge) .. " " .. message end
-    if not icon and not badge then return false end
+    if identity then message = identity .. " " .. message end
+    if not icon and not badge and not identity then return false end
     hookChatTooltip(chatFrame)
     return false, message, author, ...
 end
@@ -396,7 +511,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
         shareCurrentDeathState()
     elseif event == "PLAYER_LEVEL_UP" then
-        Announcements:AnnounceLevel60(...)
+        Announcements:AnnounceLevelMilestone(...)
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = ...
         if iRC:HasSecretValues(prefix, message, distribution, sender) then return end

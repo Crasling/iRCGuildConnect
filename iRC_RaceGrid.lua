@@ -822,9 +822,11 @@ end
 
 local externalReady = false
 local localReportDirty = true
+local cachedOwnGuildReports, cachedOwnGuildConnection
 
 function RaceGrid:MarkLocalReportDirty()
     localReportDirty = true
+    cachedOwnGuildReports, cachedOwnGuildConnection = nil, nil
 end
 
 -- Verification participation remains useful metadata, but guild statistics
@@ -838,6 +840,7 @@ end
 function RaceGrid:BuildOwnGuildReports()
     local connection = iRC:GetConnection()
     if not connection or not iRC:IsGuildConnectionActive() then return {} end
+    if cachedOwnGuildReports and cachedOwnGuildConnection == connection then return cachedOwnGuildReports end
     local profile = iRC:GetLocalProfile()
     -- Ordinary members do not know the Guild Master's selected guild race
     -- during bootstrap. The report still needs a valid legacy race token;
@@ -866,6 +869,8 @@ function RaceGrid:BuildOwnGuildReports()
         rules = {
             requireIRC = rules.requireIRC == true,
             raceLock = rules.raceLock == true,
+            classLock = rules.classLock == true,
+            guildClass = iRC:NormalizeGuildClass(rules.guildClass),
             nativeTongueOnly = rules.nativeTongueOnly and true or false,
             selfFoundOnly = rules.selfFoundOnly and true or false,
             guildFoundOnly = rules.guildFoundOnly and true or false,
@@ -931,7 +936,8 @@ function RaceGrid:BuildOwnGuildReports()
     group.averageLevel = group.totalLevel / group.members
     for class, count in pairs(group.classes) do group.classAverageLevels[class] = group.classTotals[class] / count end
     group.totalLevel, group.classTotals = nil, nil
-    return { group }
+    cachedOwnGuildReports, cachedOwnGuildConnection = { group }, connection
+    return cachedOwnGuildReports
 end
 
 function RaceGrid:IsExternalBroadcaster()
@@ -967,6 +973,9 @@ local function serializeGuildReport(report, includeDescription)
         if report.rulesKnown ~= false and rules[entry[1]]
             and (not raceOnly or rules.raceLock == true) then ruleMask = ruleMask + entry[2] end
     end
+    -- Class-Locked must be present in the base report. The optional details
+    -- packet supplies the class name, but may arrive before or after this one.
+    if report.rulesKnown ~= false and rules.classLock == true then ruleMask = ruleMask + 512 end
     fields[#fields + 1] = tostring(ruleMask)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
@@ -995,6 +1004,8 @@ local function serializeGuildReport(report, includeDescription)
         end
         fields[#fields + 1] = report.guildHomepageTag == "PVE" and "PVE"
             or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
+        fields[#fields + 1] = rules.classLock == true and "1" or "0"
+        fields[#fields + 1] = iRC:NormalizeGuildClass(rules.guildClass)
     end
     return table.concat(fields, SEP)
 end
@@ -1046,6 +1057,8 @@ function RaceGrid:BroadcastReport(fromClick)
     end
     classBreakdownFields[#classBreakdownFields + 1] = report.guildHomepageTag == "PVE" and "PVE"
         or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
+    classBreakdownFields[#classBreakdownFields + 1] = report.rules and report.rules.classLock == true and "1" or "0"
+    classBreakdownFields[#classBreakdownFields + 1] = iRC:NormalizeGuildClass(report.rules and report.rules.guildClass)
     send(GRID_PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
         report.activeMembers, report.activePlayers, report.members), 3)
@@ -1107,7 +1120,7 @@ local function parseGuildReport(parts)
     if parts[22] ~= nil then
         -- Mask 256 means the guild report was assembled during first-start
         -- bootstrap and intentionally does not claim authoritative rules.
-        local mask = validNumber(parts[22], 0, 256)
+        local mask = validNumber(parts[22], 0, 767)
         local sameRaceLevel = validNumber(parts[23], 1, 60)
         local guildGroupsLevel = validNumber(parts[24], 1, 60)
         if not mask or not sameRaceLevel or not guildGroupsLevel then return nil end
@@ -1120,6 +1133,7 @@ local function parseGuildReport(parts)
                 sameRaceGroupsOnly = enabled(16), allowLevel60MixedRaceGroups = enabled(32),
                 guildGroupsOnly = enabled(64), sameRaceMinimumLevel = sameRaceLevel,
                 guildFoundTradeExceptions = enabled(128),
+                classLock = enabled(512),
                 guildMapEnabled = parts[29] == "1",
                 raceLock = parts[30] == "1",
                 guildGroupsMinimumLevel = guildGroupsLevel,
@@ -1167,6 +1181,20 @@ local function parseGuildReport(parts)
     local guildHomepageTag = tostring(parts[descriptionStart + 15] or "NORMAL")
     if guildHomepageTag ~= "PVE" and guildHomepageTag ~= "PVP" and guildHomepageTag ~= "RP" then
         guildHomepageTag = "NORMAL"
+    end
+    if rules then
+        local rawClassLockFlag = parts[descriptionStart + 16]
+        if rawClassLockFlag ~= nil then
+            local classLockFlag = tostring(rawClassLockFlag)
+            local guildClass = iRC:NormalizeGuildClass(parts[descriptionStart + 17])
+            if classLockFlag ~= "0" and classLockFlag ~= "1" then return nil end
+            if classLockFlag == "1" and guildClass == "" then return nil end
+            rules.classLock = classLockFlag == "1"
+            rules.guildClass = guildClass
+        else
+            rules.guildClass = iRC:NormalizeGuildClass(rules.guildClass)
+        end
+        if rules.classLock and rules.raceLock then return nil end
     end
     return {
         name = name, guid = guid, guildName = guildName, race = race,
@@ -1715,13 +1743,18 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             if not count or count ~= math.floor(count) or count < 0 then validClasses = false break end
             filteredClasses[class], filteredTotal = count, filteredTotal + count
         end
+        local classLockFlag = tostring(parts[17] or "0")
+        local guildClass = iRC:NormalizeGuildClass(parts[18])
+        local validClassLock = (classLockFlag == "0" or classLockFlag == "1")
+            and (classLockFlag ~= "1" or guildClass ~= "")
         if reportTimestamp and (mode == "ALL" or mode == "RANGE" or mode == "MAX")
             and minLevel and minLevel == math.floor(minLevel) and minLevel >= 1 and minLevel <= 60
             and maxLevel and maxLevel == math.floor(maxLevel) and maxLevel >= minLevel and maxLevel <= 60
-            and validClasses then
+            and validClasses and validClassLock then
             for _, report in pairs(getServerStore().guildReports) do
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
-                    and tonumber(report.timestamp) == reportTimestamp and filteredTotal <= (tonumber(report.members) or 0) then
+                    and tonumber(report.timestamp) == reportTimestamp and filteredTotal <= (tonumber(report.members) or 0)
+                    and not (classLockFlag == "1" and report.rules and report.rules.raceLock == true) then
                     report.classBreakdownMode = mode
                     report.classBreakdownMinLevel = mode == "MAX" and 60 or mode == "ALL" and 1 or minLevel
                     report.classBreakdownMaxLevel = mode == "MAX" and 60 or mode == "ALL" and 60 or maxLevel
@@ -1729,6 +1762,9 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                     local guildHomepageTag = tostring(parts[16] or "NORMAL")
                     report.guildHomepageTag = guildHomepageTag == "PVE" and "PVE"
                         or guildHomepageTag == "PVP" and "PVP" or guildHomepageTag == "RP" and "RP" or "NORMAL"
+                    report.rules = report.rules or {}
+                    report.rules.classLock = classLockFlag == "1" and guildClass ~= ""
+                    report.rules.guildClass = guildClass
                     if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
                     break
                 end

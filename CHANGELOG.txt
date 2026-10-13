@@ -2,6 +2,24 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.27 - Large Guild Performance & Class-Locked Rules
+--------------------------------------------------------------------------------
+[ADDED] A character-specific Edit Menu, opened from the compact server-heading control, can show, hide, reset, and reorder accessible left-menu pages within each section
+[ADDED] Confirmed linked characters show purple [Alt] or light-blue [BankAlt] chat labels with the main's class-colored name, level, and guild rank on hover; a Personal Settings toggle controls their visibility
+[ADDED] Guild Notifications can announce configurable 10-level milestones and primary-profession milestones every 75 skill points from a selected starting milestone; defaults are level 60 and skill 300 and settings synchronize with the Guild Master's ruleset
+[ADDED] Class-Locked guild rules use the native Guild Master's class, flag mismatched members through verification and bundled officer warnings, and appear in a dedicated Guild Leaderboard tab with a class tag and icon
+[CHANGED] Personal Settings dropdowns and sliders use matching dark-gold iRC controls instead of Blizzard templates
+[CHANGED] Guild Settings is renamed Guild Notifications and remains visibly disabled until at least one guild enforcement rule is active
+[CHANGED] More than three simultaneous enforcement notices are summarized per officer or guild channel, and bulk individual whispers are suppressed to prevent large-roster chat floods
+[PERFORMANCE] Guild Members, Verification, Member Management, and bulk member workflows render only visible roster rows for responsive scrolling in guilds with up to 1,000 members
+[PERFORMANCE] Unchanged roster events and tab changes reuse cached member, connection, Guild Report, Guild Map, and Guild-Found data instead of repeatedly rebuilding full-guild results
+[PERFORMANCE] Guild Verification caches filtered results, builds details only for visible rows, and limits native roster polling while roster pages are open
+[FIXED] Guild Member and Guild Overview CSV exports preserve multilingual Unicode text with explicit UTF-8 spreadsheet encoding, while preview-font limitations no longer interrupt panel loading
+[FIXED] The Edit Menu lists only pages the current character can access, and reopening the main panel no longer assumes an export popup has already been created
+[FIXED] Layer detection coalesces matching nameplate observations while assignment is pending instead of repeatedly processing and logging the same route at login
+[FIXED] Class-Locked guild reports retain their Class-Locked tag and leaderboard classification even when public report details are split or arrive out of order
+[FIXED] The Window Scale slider follows changes made with the panel's bottom-right resize handle
+
 v0.5.26 - Communication Split & Verification Tools
 --------------------------------------------------------------------------------
 [ADDED] Debug mode reports communication prefix registration, rejected prefix or protocol mismatches, delayed Admin Probe replies, and confirmed public Guild Report receivers

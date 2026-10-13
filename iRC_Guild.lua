@@ -15,15 +15,32 @@ local confirmedRankChanges = {}
 local CONFIRMED_RANK_OVERRIDE_LIFETIME = 15
 local memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries
 local memberRowsDirty = {}
+local memberRowsRevision = 0
 local rosterUpdateTicket
+local lastVisibleRosterRefreshAt = 0
+
+local function bumpMemberRowsRevision()
+    memberRowsRevision = memberRowsRevision + 1
+end
+
+function iRC:GetGuildRosterRevision()
+    return memberRowsRevision
+end
 
 function iRC:InvalidateGuildMemberRows()
     memberRows, memberRowsConnection, memberRowsIndex, memberRowsRoster, memberRowsExpiries = nil, nil, nil, nil, nil
     memberRowsDirty = {}
+    bumpMemberRowsRevision()
 end
 
 function iRC:InvalidateGuildMemberRow(name)
-    if memberRows and name then memberRowsDirty[self:NormalizeName(name)] = true end
+    if memberRows and name then
+        local key = self:NormalizeName(name)
+        if not memberRowsDirty[key] then
+            memberRowsDirty[key] = true
+            bumpMemberRowsRevision()
+        end
+    end
 end
 
 function iRC:ResetPresenceNotificationChecks()
@@ -51,7 +68,46 @@ end
 
 function iRC:InvalidateGuildRosterSnapshot()
     guildRosterSnapshotValid = false
-    self:InvalidateGuildMemberRows()
+end
+
+local ROSTER_MEMBER_FIELDS = {
+    "rankName", "rankIndex", "level", "className", "classFile", "online",
+    "guid", "publicNote", "officerNote", "lastOnlineDays",
+}
+
+local function sameRosterMember(left, right)
+    if not left or not right or iRC:NormalizeName(left.name) ~= iRC:NormalizeName(right.name) then return false end
+    for _, field in ipairs(ROSTER_MEMBER_FIELDS) do
+        if left[field] ~= right[field] then return false end
+    end
+    return true
+end
+
+local function reconcileMemberRowsWithSnapshot(previous, current)
+    local membershipChanged = #previous ~= #current
+    local previousByName = {}
+    for _, member in ipairs(previous) do previousByName[iRC:NormalizeName(member.name)] = member end
+    local refreshedRoster, changedKeys = {}, {}
+    for _, member in ipairs(current) do
+        local key = iRC:NormalizeName(member.name)
+        local oldMember = previousByName[key]
+        if not oldMember then
+            membershipChanged = true
+        elseif not sameRosterMember(oldMember, member) then
+            changedKeys[#changedKeys + 1] = key
+        end
+        refreshedRoster[key] = member
+    end
+    if membershipChanged then
+        iRC:InvalidateGuildMemberRows()
+        return true
+    end
+    if memberRows and memberRowsRoster then
+        for _, key in ipairs(changedKeys) do memberRowsDirty[key] = true end
+    end
+    if #changedKeys > 0 then bumpMemberRowsRevision() end
+    memberRowsRoster = refreshedRoster
+    return #changedKeys > 0
 end
 
 local function getRankName(rankIndex)
@@ -111,7 +167,8 @@ local function pruneDepartedMemberData(self, snapshot)
 end
 
 function iRC:GetGuildRosterSnapshot()
-    if guildRosterSnapshotValid then return guildRosterSnapshot end
+    if guildRosterSnapshotValid then return guildRosterSnapshot, false end
+    local previousSnapshot = guildRosterSnapshot
     local snapshot = {}
     local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
     for index = 1, count do
@@ -157,12 +214,25 @@ function iRC:GetGuildRosterSnapshot()
             }
         end
     end
-    if #snapshot > 0 then pruneDepartedMemberData(self, snapshot) end
+    local inGuildConnection = self:IsInGuildConnection()
+    local snapshotChanged = false
+    if #snapshot > 0 then
+        pruneDepartedMemberData(self, snapshot)
+        snapshotChanged = reconcileMemberRowsWithSnapshot(previousSnapshot, snapshot)
+    elseif not inGuildConnection then
+        snapshotChanged = #previousSnapshot > 0
+        self:InvalidateGuildMemberRows()
+    else
+        -- Forever can briefly return an empty roster while loading. Retain the
+        -- last usable snapshot and retry instead of invalidating every derived
+        -- row and making an open 1,000-member page flicker.
+        return previousSnapshot, false
+    end
     guildRosterSnapshot = snapshot
     -- An empty result during initial guild loading is not authoritative; keep
     -- retrying until WoW supplies the roster or confirms that we have no guild.
-    guildRosterSnapshotValid = #snapshot > 0 or not self:IsInGuildConnection()
-    return guildRosterSnapshot
+    guildRosterSnapshotValid = #snapshot > 0 or not inGuildConnection
+    return guildRosterSnapshot, snapshotChanged
 end
 
 function iRC:GetMemberAttentionSince(name, verification, connection)
@@ -191,8 +261,8 @@ function iRC:FindConnectionProfile(name)
 end
 
 function iRC:RefreshGuildRoster()
+    if GetTime then lastVisibleRosterRefreshAt = GetTime() end
     if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
-    self:InvalidateGuildRosterSnapshot()
     if C_GuildInfo and type(C_GuildInfo.GuildRoster) == "function" then
         C_GuildInfo.GuildRoster()
     elseif GuildRoster then
@@ -291,10 +361,16 @@ local function announcePresenceMismatch(member, verification, escalated)
         and iRC:Text("PRESENCE_PLAYER_ESCALATION")
         or iRC:Text("PRESENCE_PLAYER_NOTICE")
     if SendChatMessage then
-        if iRC:IsAutomaticWarningEnabled("OFFICER") then SendChatMessage(officerMessage, "OFFICER") end
-        if iRC:IsAutomaticWarningEnabled("WHISPER") then SendChatMessage(whisperMessage, "WHISPER", nil, displayName) end
+        if iRC:IsAutomaticWarningEnabled("OFFICER") then
+            iRC:QueueEnforcementNotification("OFFICER", officerMessage, nil, displayName)
+        end
+        if iRC:IsAutomaticWarningEnabled("WHISPER") then
+            iRC:QueueEnforcementNotification("WHISPER", whisperMessage, displayName, displayName)
+        end
         if escalated then
-            if iRC:IsAutomaticWarningEnabled("GUILD") then SendChatMessage(iRC:Text("PRESENCE_GUILD_ESCALATION", displayName), "GUILD") end
+            if iRC:IsAutomaticWarningEnabled("GUILD") then
+                iRC:QueueEnforcementNotification("GUILD", iRC:Text("PRESENCE_GUILD_ESCALATION", displayName), nil, displayName)
+            end
             local occurredAt = time()
             iRC:StoreOfficerIncident({
                 id = "presence:" .. iRC:NormalizeName(member.name) .. ":" .. occurredAt,
@@ -344,6 +420,7 @@ function iRC:CheckPresenceMismatches()
     connection.newMemberChecks = connection.newMemberChecks or {}
     connection.newMemberWelcomeNotices = connection.newMemberWelcomeNotices or {}
     connection.raceMismatchNotices = connection.raceMismatchNotices or {}
+    connection.classMismatchNotices = connection.classMismatchNotices or {}
     for _, member in ipairs(self:GetGuildRosterRows()) do
         local key = self:NormalizeName(member.name)
         local id = memberKey(member.name, member.guid)
@@ -354,7 +431,9 @@ function iRC:CheckPresenceMismatches()
             if connection.raceMismatchNotices[key] ~= signature and SendChatMessage and self:IsAutomaticWarningEnabled("OFFICER") then
                 local actualRace = self:Text("GUILD_RACE_" .. member.raceCheck.actual)
                 local expectedRace = self:Text("GUILD_RACE_" .. member.raceCheck.expected)
-                local sent = pcall(SendChatMessage, self:Text("RACE_MISMATCH_OFFICER_NOTICE", self:FormatPlayerName(member.name), actualRace, expectedRace), "OFFICER")
+                local sent = self:QueueEnforcementNotification("OFFICER",
+                    self:Text("RACE_MISMATCH_OFFICER_NOTICE", self:FormatPlayerName(member.name), actualRace, expectedRace),
+                    nil, self:FormatPlayerName(member.name))
                 if sent then
                     connection.raceMismatchNotices[key] = signature
                     self:DebugMsg(self:Text("RACE_MISMATCH_DETECTED", self:FormatPlayerName(member.name), actualRace, expectedRace), 2)
@@ -362,6 +441,24 @@ function iRC:CheckPresenceMismatches()
             end
         else
             connection.raceMismatchNotices[key] = nil
+        end
+        if member.classMismatch and member.classCheck then
+            local signature = table.concat({ tostring(member.guid or ""), member.classCheck.actual, member.classCheck.expected }, ":")
+            if connection.classMismatchNotices[key] ~= signature and SendChatMessage
+                and self:IsAutomaticWarningEnabled("OFFICER") then
+                local actualClass = self:GetClassDisplayName(member.classCheck.actual)
+                local expectedClass = self:GetClassDisplayName(member.classCheck.expected)
+                local sent = self:QueueEnforcementNotification("OFFICER",
+                    self:Text("CLASS_MISMATCH_OFFICER_NOTICE", self:FormatPlayerName(member.name), actualClass, expectedClass),
+                    nil, self:FormatPlayerName(member.name))
+                if sent then
+                    connection.classMismatchNotices[key] = signature
+                    self:DebugMsg(self:Text("CLASS_MISMATCH_DETECTED",
+                        self:FormatPlayerName(member.name), actualClass, expectedClass), 2)
+                end
+            end
+        else
+            connection.classMismatchNotices[key] = nil
         end
         if not member.online then
             reportedPresenceMismatches[key], pendingPresenceChecks[key] = nil, nil
@@ -407,7 +504,9 @@ function iRC:CheckPresenceMismatches()
                                     and self:IsPresenceNotificationLeader() and not self:SuppressesPresenceWarnings()
                                     and self:IsNewMemberWelcomeEnabled() then
                                     connection.newMemberWelcomeNotices[id] = now
-                                    SendChatMessage(self:Text("NEW_MEMBER_WELCOME", self:FormatPlayerName(member.name)), "GUILD")
+                                    self:QueueEnforcementNotification("GUILD",
+                                        self:Text("NEW_MEMBER_WELCOME", self:FormatPlayerName(member.name)),
+                                        nil, self:FormatPlayerName(member.name))
                                 end
                                 queuePresenceReview(300 - CONFIRMATION_WINDOW)
                             end
@@ -423,6 +522,7 @@ function iRC:CheckPresenceMismatches()
     for key in pairs(pendingPresenceChecks) do if not currentMembers[key] then pendingPresenceChecks[key] = nil end end
     for key in pairs(reportedPresenceMismatches) do if not currentMembers[key] then reportedPresenceMismatches[key] = nil end end
     for key in pairs(connection.raceMismatchNotices) do if not currentMembers[key] then connection.raceMismatchNotices[key] = nil end end
+    for key in pairs(connection.classMismatchNotices) do if not currentMembers[key] then connection.classMismatchNotices[key] = nil end end
     if #probeBatch > 0 then
         -- One guild-wide batch covers all pending members. A poll merely
         -- received from another client is not evidence that we tried a probe.
@@ -494,6 +594,25 @@ function iRC:GetGuildMemberRaceCheck(race, connection)
     }
 end
 
+function iRC:GetClassDisplayName(class)
+    class = self:NormalizeGuildClass(class)
+    return LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]
+        or class:sub(1, 1) .. class:sub(2):lower()
+end
+
+function iRC:GetGuildMemberClassCheck(class, connection)
+    connection = connection or self:GetConnection()
+    local expected = connection and connection.active == true and connection.rules and connection.rules.classLock == true
+        and self:NormalizeGuildClass(connection.rules.guildClass) or ""
+    local actual = self:NormalizeGuildClass(class)
+    return {
+        expected = expected,
+        actual = actual,
+        known = expected ~= "" and actual ~= "",
+        mismatch = expected ~= "" and actual ~= "" and actual ~= expected,
+    }
+end
+
 local function buildGuildRosterRows(self, roster, connection)
     local now = time()
     local rows, expiries = {}, {}
@@ -541,10 +660,12 @@ local function buildGuildRosterRows(self, roster, connection)
             end
             local verification = self:GetMemberVerification(name, online and true or false, profile, context)
             local raceCheck = self:GetGuildMemberRaceCheck(race, connection)
+            local memberClass = (profile and profile.class) or classFile or className or "UNKNOWN"
+            local classCheck = self:GetGuildMemberClassCheck(memberClass, connection)
             local attentionSince = self:GetMemberAttentionSince(name, verification, connection or false)
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
-                level = level or (profile and profile.level) or 1, class = (profile and profile.class) or classFile or className or "UNKNOWN",
+                level = level or (profile and profile.level) or 1, class = memberClass,
                 race = race, online = online and true or false, profile = profile,
                 dead = profile and type(profile.deadGuid) == "string" and profile.deadGuid ~= ""
                     and profile.deadGuid == (guid and guid ~= "" and guid or profile.guid) or false,
@@ -560,6 +681,8 @@ local function buildGuildRosterRows(self, roster, connection)
                 verification = verification,
                 raceCheck = raceCheck,
                 raceMismatch = raceCheck.mismatch,
+                classCheck = classCheck,
+                classMismatch = classCheck.mismatch,
                 attentionSince = attentionSince,
             }
         end
@@ -567,7 +690,8 @@ local function buildGuildRosterRows(self, roster, connection)
     if #rows == 0 and self:IsInGuildConnection() then
         local profile = self:GetLocalProfile()
         local raceCheck = self:GetGuildMemberRaceCheck(profile.race)
-        rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, selfFound = profile.selfFound, addonVersion = profile.addonVersion, verification = self:GetMemberVerification(profile.name, true, profile), raceCheck = raceCheck, raceMismatch = raceCheck.mismatch }
+        local classCheck = self:GetGuildMemberClassCheck(profile.class)
+        rows[1] = { name = profile.name, guid = profile.guid, rankIndex = 0, level = profile.level, class = profile.class, race = profile.race, online = true, profile = profile, selfFound = profile.selfFound, addonVersion = profile.addonVersion, verification = self:GetMemberVerification(profile.name, true, profile), raceCheck = raceCheck, raceMismatch = raceCheck.mismatch, classCheck = classCheck, classMismatch = classCheck.mismatch }
     end
     table.sort(rows, function(a, b) return string.lower(a.name) < string.lower(b.name) end)
     return rows, expiries
@@ -579,7 +703,10 @@ function iRC:GetGuildRosterRows()
     if memberRows and memberRowsConnection == connection and guildRosterSnapshotValid then
         local now = time()
         for key, expiresAt in pairs(memberRowsExpiries) do
-            if expiresAt and now >= expiresAt then memberRowsDirty[key] = true end
+            if expiresAt and now >= expiresAt and not memberRowsDirty[key] then
+                memberRowsDirty[key] = true
+                bumpMemberRowsRevision()
+            end
         end
         for key in pairs(memberRowsDirty) do
             local index, rosterMember = memberRowsIndex[key], memberRowsRoster[key]
@@ -651,15 +778,17 @@ frame:SetScript("OnEvent", function(_, event)
         C_Timer.After(3, function() iRC:RefreshGuildRoster() end)
         if C_Timer and C_Timer.NewTicker then
             C_Timer.NewTicker(15, function()
-                if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
                 local mainFrame = iRC.MainUI and iRC.MainUI.frame
                 local category = mainFrame and mainFrame.category
+                local now = GetTime and GetTime() or 0
                 if mainFrame and mainFrame:IsShown()
                     and (category == "Guild Members" or category == "Guild Overview"
-                        or category == "Guild Log" or category == "Member Management") then
+                        or category == "Guild Log" or category == "Member Management")
+                    and now - lastVisibleRosterRefreshAt >= 30 then
                     -- Forever does not reliably push another officer's roster
                     -- changes to every client. Request a current native roster
-                    -- while a roster-dependent page is actually being viewed.
+                    -- every 30 seconds while a roster-dependent page is viewed.
+                    lastVisibleRosterRefreshAt = now
                     iRC:RefreshGuildRoster()
                 end
                 -- Detect expired iRC presence even if WoW still lists the
@@ -668,19 +797,23 @@ frame:SetScript("OnEvent", function(_, event)
             end)
         end
     elseif event == "GUILD_ROSTER_UPDATE" then
-        iRC:InvalidateGuildRosterSnapshot()
+        if rosterUpdateTicket then return end
         local ticket = {}
         rosterUpdateTicket = ticket
         local function processRosterUpdate()
             if rosterUpdateTicket ~= ticket then return end
             rosterUpdateTicket = nil
-            if iRC.GuildMap then iRC.GuildMap:Cleanup() end
+            iRC:InvalidateGuildRosterSnapshot()
+            local _, rosterChanged = iRC:GetGuildRosterSnapshot()
+            if rosterChanged and iRC.GuildMap then iRC.GuildMap:Cleanup() end
             iRC:CheckGuildRosterForNewMembers()
-            if iRC.RaceGrid and iRC.RaceGrid.MarkLocalReportDirty then iRC.RaceGrid:MarkLocalReportDirty() end
+            if rosterChanged and iRC.RaceGrid and iRC.RaceGrid.MarkLocalReportDirty then
+                iRC.RaceGrid:MarkLocalReportDirty()
+            end
             if iRC.Identity and iRC.Identity.HandleRosterUpdate then iRC.Identity:HandleRosterUpdate() end
             if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
-            if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
-            if iRC.MainUI and iRC.MainUI.frame
+            if rosterChanged and iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
+            if rosterChanged and iRC.MainUI and iRC.MainUI.frame
                 and (iRC.MainUI.frame.category == "Guild Members"
                     or iRC.MainUI.frame.category == "Guild Overview"
                     or iRC.MainUI.frame.category == "Guild Log"

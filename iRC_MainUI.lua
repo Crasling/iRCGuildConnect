@@ -26,6 +26,11 @@ end
 local function getGuildCardTag(group)
     local rules = group and group.rulesKnown and group.rules
     if not rules then return nil end
+    if rules.classLock == true then
+        local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[iRC:NormalizeGuildClass(rules.guildClass)]
+        return "Class-Locked", color and { color.r or color[1], color.g or color[2], color.b or color[3] }
+            or { 0.72, 0.55, 1.00 }
+    end
     if rules.raceLock == true then return "Race-Locked", { 0.25, 0.85, 1 } end
     local progression = iRC:GetProgressionMode(rules)
     if isGuildFoundRules(rules) then
@@ -44,6 +49,7 @@ end
 local function getCurrentGuildStatsFilter()
     if not iRC:IsGuildConnectionActive() then return "ALL" end
     local rules = iRC:GetConnectionRules()
+    if rules.classLock == true then return "CLASS_LOCKED" end
     if rules.raceLock == true then return "RACE_LOCKED" end
     local progression = iRC:GetProgressionMode(rules)
     if isGuildFoundRules(rules) then return "GUILD_FOUND" end
@@ -101,13 +107,37 @@ local RACE_ICONS = {
     TROLL = "Interface\\Icons\\Achievement_Character_Troll_Male",
     BLOODELF = "Interface\\Icons\\Achievement_Character_Bloodelf_Male",
 }
+local CLASS_ICONS = {
+    WARRIOR = "Interface\\Icons\\Ability_Warrior_BattleShout",
+    PALADIN = "Interface\\Icons\\Spell_Holy_HolyBolt",
+    HUNTER = "Interface\\Icons\\Ability_Hunter_BeastTaming",
+    ROGUE = "Interface\\Icons\\Ability_Stealth",
+    PRIEST = "Interface\\Icons\\Spell_Holy_PowerWordShield",
+    SHAMAN = "Interface\\Icons\\Spell_Nature_BloodLust",
+    MAGE = "Interface\\Icons\\Spell_Frost_FrostBolt02",
+    WARLOCK = "Interface\\Icons\\Spell_Nature_FaerieFire",
+    DRUID = "Interface\\Icons\\Ability_Druid_Maul",
+}
 local NO_DATA_ICON = "Interface\\Icons\\Achievement_General"
 
 local function getGuildCardIcon(group)
     local rules = group and group.rulesKnown and group.rules
+    if rules and rules.classLock == true then
+        local guildClass = iRC:NormalizeGuildClass(rules.guildClass)
+        local coords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[guildClass]
+        if coords then return "Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES", coords end
+        return CLASS_ICONS[guildClass] or NO_DATA_ICON
+    end
     if rules and rules.raceLock == true then return RACE_ICONS[group.race] or NO_DATA_ICON end
     local index = math.floor(tonumber(group and group.guildHomepageIcon) or 0)
     return iRC.GuildHomepageIcons[index] or NO_DATA_ICON
+end
+
+local function setGuildCardIcon(texture, group)
+    local path, coords = getGuildCardIcon(group)
+    texture:SetTexture(path)
+    if coords then texture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+    else texture:SetTexCoord(0, 1, 0, 1) end
 end
 
 local RACE_COLORS = {
@@ -309,6 +339,17 @@ local function makeGuildRuleRow(parent, index)
     row.state:SetPoint("CENTER", row.stateBackground, "CENTER", 0, 0)
     row.state:SetWidth(96)
     row.state:SetJustifyH("CENTER")
+    row.setting = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.setting:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 15, 8)
+    row.setting:SetPoint("RIGHT", row, "RIGHT", -73, 0)
+    row.setting:SetJustifyH("LEFT")
+    row.settingPrevious = makeIRCActionButton(row, 26, 20, "<", false)
+    row.settingPrevious:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -40, 5)
+    row.settingNext = makeIRCActionButton(row, 26, 20, ">", false)
+    row.settingNext:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -9, 5)
+    row.setting:Hide()
+    row.settingPrevious:Hide()
+    row.settingNext:Hide()
     row.dependencyVertical = row:CreateTexture(nil, "ARTWORK")
     row.dependencyVertical:SetColorTexture(0.72, 0.48, 0.18, 0.85)
     row.dependencyVertical:SetWidth(2)
@@ -514,10 +555,97 @@ local MAIN_NAVIGATION = {
     { id = "Member Management", label = "Member Management", child = true, memberManagement = true, requiresGuild = true },
     { id = "Recruitment Management", label = "Recruitment", child = true, permission = "recruitment", requiresGuild = true },
     { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, verificationManagement = true, dashboardTab = "Verification", requiresConnection = true },
-    { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications", requiresConnection = true },
+    { id = "Notification Management", label = iRC:Text("GUILD_NOTIFICATIONS_TAB"), child = true, permission = "notifications", panelKey = "notifications", requiresConnection = true, requiresEnforcement = true },
     { id = "Homepage Management", label = iRC:Text("GUILD_HOMEPAGE_TAB"), child = true, permission = "homepage", panelKey = "homepage", requiresConnection = true },
     { id = "Guild-Found Management", label = iRC:Text("GUILDFOUND_TOOLS_TAB"), child = true, permission = "tradeExceptions", panelKey = "guildFound", requiresGuildFound = true },
 }
+
+local NAVIGATION_HEADERS, NAVIGATION_PAGES = {}, {}
+do
+    local section
+    for _, item in ipairs(MAIN_NAVIGATION) do
+        if item.header then
+            section = item.id
+            NAVIGATION_HEADERS[#NAVIGATION_HEADERS + 1] = item
+        else
+            item.navigationSection = section
+            NAVIGATION_PAGES[#NAVIGATION_PAGES + 1] = item
+        end
+    end
+end
+
+local function getCharacterNavigationSettings()
+    iRCCharDB = iRCCharDB or {}
+    if type(iRCCharDB.navigationMenu) ~= "table" then iRCCharDB.navigationMenu = {} end
+    local settings = iRCCharDB.navigationMenu
+    if type(settings.order) ~= "table" then settings.order = {} end
+    if type(settings.hidden) ~= "table" then settings.hidden = {} end
+    return settings
+end
+
+local function getNavigationPageOrder()
+    local settings = getCharacterNavigationSettings()
+    local known, order = {}, {}
+    for _, item in ipairs(NAVIGATION_PAGES) do known[item.id] = item end
+    for _, id in ipairs(settings.order) do
+        if known[id] and not order[id] then
+            order[#order + 1], order[id] = id, true
+        end
+    end
+    for _, item in ipairs(NAVIGATION_PAGES) do
+        if not order[item.id] then order[#order + 1], order[item.id] = item.id, true end
+    end
+    for id in pairs(known) do order[id] = nil end
+    settings.order = order
+    return order
+end
+
+local function getOrderedNavigationItems()
+    local pagesById, pagesBySection = {}, {}
+    for _, item in ipairs(NAVIGATION_PAGES) do
+        pagesById[item.id] = item
+        pagesBySection[item.navigationSection] = pagesBySection[item.navigationSection] or {}
+    end
+    for _, id in ipairs(getNavigationPageOrder()) do
+        local item = pagesById[id]
+        if item then pagesBySection[item.navigationSection][#pagesBySection[item.navigationSection] + 1] = item end
+    end
+    local ordered = {}
+    for _, header in ipairs(NAVIGATION_HEADERS) do
+        ordered[#ordered + 1] = header
+        for _, item in ipairs(pagesBySection[header.id] or {}) do ordered[#ordered + 1] = item end
+    end
+    return ordered
+end
+
+local function isNavigationPageHidden(id)
+    return getCharacterNavigationSettings().hidden[id] == true
+end
+
+local function setNavigationPageHidden(id, hidden)
+    getCharacterNavigationSettings().hidden[id] = hidden and true or nil
+end
+
+local function moveNavigationPage(id, direction, eligible)
+    local order, pagesById = getNavigationPageOrder(), {}
+    for _, item in ipairs(NAVIGATION_PAGES) do pagesById[item.id] = item end
+    local index
+    for current, pageId in ipairs(order) do if pageId == id then index = current break end end
+    if not index then return false end
+    local section = pagesById[id] and pagesById[id].navigationSection
+    local target = index + direction
+    while target >= 1 and target <= #order do
+        local targetItem = pagesById[order[target]]
+        if targetItem and targetItem.navigationSection == section
+            and (not eligible or eligible(targetItem)) then
+            order[index], order[target] = order[target], order[index]
+            getCharacterNavigationSettings().order = order
+            return true
+        end
+        target = target + direction
+    end
+    return false
+end
 
 local DEFAULT_OPEN_LAST = "__LAST__"
 
@@ -665,6 +793,9 @@ end
 local function getNavigationUnavailableReason(item)
     if item.requiresConnection and not iRC:IsGuildConnectionActive() then
         return iRC:Text("MANAGEMENT_REQUIRES_CONNECTION")
+    end
+    if item.requiresEnforcement and not iRC:IsAddonResponseRequired() then
+        return iRC:Text("MANAGEMENT_REQUIRES_ENFORCEMENT")
     end
     if item.requiresGuildFound then
         if not iRC:IsGuildConnectionActive() then return iRC:Text("MANAGEMENT_REQUIRES_CONNECTION") end
@@ -821,6 +952,7 @@ function UI:Create()
         self.dragging = false
         settings.mainWindowScale = math.floor(frame:GetScale() * 20 + 0.5) / 20
         frame:SetScale(settings.mainWindowScale)
+        if frame.RefreshScaleSettingControl then frame:RefreshScaleSettingControl() end
     end)
     frame.resizeHandle = resize
     iRC:EnableIdleWindowFade(frame)
@@ -1043,20 +1175,17 @@ function UI:Create()
         removeMemberConfirm.accept:SetEnabled(selected > 0)
         removeMemberConfirm.accept:SetAlpha(selected > 0 and 1 or 0.42)
     end
-    local function setBulkCandidates(candidates)
-        removeMemberConfirm.bulkCandidates = {}
-        for index, member in ipairs(candidates or {}) do
-            local candidate = {
-                name = member.name,
-                lastOnlineDays = tonumber(member.lastOnlineDays) or 0,
-                rankName = member.rankName,
-                rankIndex = member.rankIndex,
-                detail = member.detail,
-                selected = member.selected ~= false,
-                locked = member.locked == true,
-            }
-            removeMemberConfirm.bulkCandidates[index] = candidate
-            local row = removeMemberConfirm.bulkRows[index]
+    local function renderBulkCandidates()
+        local candidates = removeMemberConfirm.bulkCandidates or {}
+        local first = math.floor((bulkScroll:GetVerticalScroll() or 0) / 36) + 1
+        local scrollHeight = bulkScroll:GetHeight() or 0
+        if scrollHeight < 1 then scrollHeight = 300 end
+        local visible = math.max(0, math.min(#candidates - first + 1,
+            math.ceil(scrollHeight / 36) + 1))
+        for slot = 1, visible do
+            local index = first + slot - 1
+            local candidate = candidates[index]
+            local row = removeMemberConfirm.bulkRows[slot]
             if not row then
                 row = CreateFrame("Button", nil, bulkChild, "BackdropTemplate")
                 row:SetHeight(34)
@@ -1093,7 +1222,7 @@ function UI:Create()
                     self:SetAlpha(self.candidate.selected and 1 or 0.52)
                     refreshBulkSelection()
                 end)
-                removeMemberConfirm.bulkRows[index] = row
+                removeMemberConfirm.bulkRows[slot] = row
             end
             row.candidate = candidate
             row:ClearAllPoints()
@@ -1110,13 +1239,27 @@ function UI:Create()
             row:SetAlpha(candidate.selected and 1 or 0.52)
             row:Show()
         end
-        for index = #(candidates or {}) + 1, #removeMemberConfirm.bulkRows do
-            removeMemberConfirm.bulkRows[index]:Hide()
+        for slot = visible + 1, #removeMemberConfirm.bulkRows do removeMemberConfirm.bulkRows[slot]:Hide() end
+    end
+    local function setBulkCandidates(candidates)
+        removeMemberConfirm.bulkCandidates = {}
+        for index, member in ipairs(candidates or {}) do
+            removeMemberConfirm.bulkCandidates[index] = {
+                name = member.name,
+                lastOnlineDays = tonumber(member.lastOnlineDays) or 0,
+                rankName = member.rankName,
+                rankIndex = member.rankIndex,
+                detail = member.detail,
+                selected = member.selected ~= false,
+                locked = member.locked == true,
+            }
         end
         bulkChild:SetHeight(math.max(1, #(candidates or {}) * 36))
         bulkScroll:SetVerticalScroll(0)
+        renderBulkCandidates()
         refreshBulkSelection()
     end
+    bulkScroll:HookScript("OnVerticalScroll", renderBulkCandidates)
     removeMemberConfirm.setBulkCandidates = setBulkCandidates
     function removeMemberConfirm:SetBulkLayout(showPromotionTarget)
         self:SetSize(570, showPromotionTarget and 530 or 490)
@@ -1153,15 +1296,18 @@ function UI:Create()
         scroll:SetScrollChild(child)
         queue.batchList.rows = {}
 
-        function queue:SetBatchMembers(names)
-            names = names or {}
-            self.batchList.title:SetText("Members in this batch (" .. #names .. ")")
-            local rosterByName = {}
-            for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
-                rosterByName[iRC:NormalizeName(member.name)] = member
-            end
-            for index, name in ipairs(names) do
-                local row = self.batchList.rows[index]
+        local function renderBatchMembers()
+            local entries = queue.batchList.entries or {}
+            local first = math.floor((scroll:GetVerticalScroll() or 0) / 46) + 1
+            local scrollHeight = scroll:GetHeight() or 0
+            if scrollHeight < 1 then scrollHeight = 260 end
+            local visible = math.max(0, math.min(#entries - first + 1,
+                math.ceil(scrollHeight / 46) + 1))
+            for slot = 1, visible do
+                local index = first + slot - 1
+                local entry = entries[index]
+                local name, member = entry.name, entry.member
+                local row = queue.batchList.rows[slot]
                 if not row then
                     row = CreateFrame("Frame", nil, child, "BackdropTemplate")
                     row:SetHeight(42)
@@ -1187,12 +1333,11 @@ function UI:Create()
                     row.detail:SetPoint("BOTTOMLEFT", row.name, "BOTTOMLEFT", 0, -16)
                     row.detail:SetPoint("RIGHT", row, "RIGHT", -10, 0)
                     row.detail:SetJustifyH("LEFT")
-                    self.batchList.rows[index] = row
+                    queue.batchList.rows[slot] = row
                 end
                 row:ClearAllPoints()
                 row:SetPoint("TOPLEFT", child, "TOPLEFT", 2, -((index - 1) * 46))
                 row:SetPoint("TOPRIGHT", child, "TOPRIGHT", -2, -((index - 1) * 46))
-                local member = rosterByName[iRC:NormalizeName(name)]
                 local identityText, identityColor = rankIdentityPresentation(name)
                 local classColor = member and member.classFile and RAID_CLASS_COLORS
                     and RAID_CLASS_COLORS[member.classFile]
@@ -1210,9 +1355,27 @@ function UI:Create()
                     .. tostring(member.rankName or "Unknown rank")) or "Guild roster details unavailable")
                 row:Show()
             end
-            for index = #names + 1, #self.batchList.rows do self.batchList.rows[index]:Hide() end
+            for slot = visible + 1, #queue.batchList.rows do queue.batchList.rows[slot]:Hide() end
+        end
+        scroll:HookScript("OnVerticalScroll", renderBatchMembers)
+
+        function queue:SetBatchMembers(names)
+            names = names or {}
+            self.batchList.title:SetText("Members in this batch (" .. #names .. ")")
+            local rosterByName = {}
+            for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+                rosterByName[iRC:NormalizeName(member.name)] = member
+            end
+            self.batchList.entries = {}
+            for index, name in ipairs(names) do
+                self.batchList.entries[index] = {
+                    name = name,
+                    member = rosterByName[iRC:NormalizeName(name)],
+                }
+            end
             child:SetHeight(math.max(1, #names * 46))
             scroll:SetVerticalScroll(0)
+            renderBatchMembers()
         end
     end
 
@@ -2333,7 +2496,25 @@ function UI:Create()
                 heading:SetTextColor(unpack(COLORS.gold))
                 if item.id == "Current Server" then
                     heading:SetText(currentServerNavigationName())
+                    heading:SetWidth(128)
                     frame.serverNameHeader = heading
+                    local navigationEdit = makeIRCActionButton(navigationContent, 24, 20, "...", false)
+                    navigationEdit:SetPoint("LEFT", heading, "RIGHT", 5, 0)
+                    navigationEdit:SetScript("OnClick", function()
+                        if not frame.navigationEditor then return end
+                        frame.navigationEditor:Refresh()
+                        frame.navigationEditor:Show()
+                        frame.navigationEditor:Raise()
+                    end)
+                    navigationEdit:SetScript("OnEnter", function(self)
+                        if not GameTooltip then return end
+                        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                        GameTooltip:SetText("Edit Menu", unpack(COLORS.gold))
+                        GameTooltip:AddLine("Reorder or hide pages for this character.", 0.72, 0.72, 0.72, true)
+                        GameTooltip:Show()
+                    end)
+                    navigationEdit:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+                    frame.navigationEdit = navigationEdit
                 elseif item.managementHeader then
                     heading:SetText("Management")
                 elseif item.id == "Personal" then
@@ -2374,10 +2555,6 @@ function UI:Create()
                             iRC.RaceGrid:RequestGuildCacheFromOpen()
                         end
                     end
-                    if self.category == "Guild Overview" or self.category == "Guild Members"
-                        or self.category == "Member Management" then
-                        iRC:RefreshGuildRoster()
-                    end
                     if self.category ~= "Guild Members" and self.category ~= "Race Overview" then frame.subjectName = iRC:GetPlayerName() end
                     UI:Refresh()
                 end)
@@ -2417,11 +2594,20 @@ function UI:Create()
             end
         end
         local visibleIndex = 0
-        for _, item in ipairs(MAIN_NAVIGATION) do
-            local visible = not item.hidden
-                and (not item.managementHeader or showManagement)
-                and hasNavigationPermission(item)
-                and (not item.anyPermission or showManagement)
+        local orderedNavigation = getOrderedNavigationItems()
+        local pageVisible, sectionVisible = {}, {}
+        for _, item in ipairs(orderedNavigation) do
+            if not item.header then
+                local accessible = not item.hidden and hasNavigationPermission(item)
+                    and (not item.anyPermission or showManagement)
+                local visible = accessible and not isNavigationPageHidden(item.id)
+                if item.widget then item.widget.navigationAccessible = accessible end
+                pageVisible[item.id] = visible
+                if visible then sectionVisible[item.navigationSection] = true end
+            end
+        end
+        for _, item in ipairs(orderedNavigation) do
+            local visible = item.header and sectionVisible[item.id] == true or pageVisible[item.id] == true
             local widget = item.widget
             if widget then
                 widget:SetShown(visible)
@@ -2513,6 +2699,194 @@ function UI:Create()
     frame:RegisterModalPopup(removeMemberConfirm)
     frame:RegisterModalPopup(removalQueue)
     frame:RegisterModalPopup(rankQueue)
+
+    local navigationEditor = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    navigationEditor:SetSize(560, 560)
+    navigationEditor:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    navigationEditor:SetClampedToScreen(true)
+    createBackdrop(navigationEditor, { 0.025, 0.022, 0.018, 1 }, { 0.75, 0.48, 0.13, 1 })
+    navigationEditor.title = navigationEditor:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    navigationEditor.title:SetPoint("TOPLEFT", 20, -17)
+    navigationEditor.title:SetText("Edit Left Menu")
+    navigationEditor.title:SetTextColor(unpack(COLORS.gold))
+    navigationEditor.description = navigationEditor:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    navigationEditor.description:SetPoint("TOPLEFT", navigationEditor.title, "BOTTOMLEFT", 0, -7)
+    navigationEditor.description:SetPoint("TOPRIGHT", navigationEditor, "TOPRIGHT", -48, -42)
+    navigationEditor.description:SetJustifyH("LEFT")
+    navigationEditor.description:SetTextColor(unpack(COLORS.gray))
+    navigationEditor.description:SetText("Character-only layout. Show or hide pages and move them within their section.")
+
+    local navigationEditorList = CreateFrame("Frame", nil, navigationEditor, "BackdropTemplate")
+    navigationEditorList:SetPoint("TOPLEFT", navigationEditor, "TOPLEFT", 18, -74)
+    navigationEditorList:SetPoint("BOTTOMRIGHT", navigationEditor, "BOTTOMRIGHT", -18, 58)
+    createBackdrop(navigationEditorList, { 0.012, 0.012, 0.012, 0.98 }, { 0.34, 0.28, 0.20, 0.95 })
+    local navigationEditorScroll = CreateFrame("ScrollFrame", nil, navigationEditorList, "UIPanelScrollFrameTemplate")
+    iRC:StyleScrollFrame(navigationEditorScroll)
+    navigationEditorScroll:SetPoint("TOPLEFT", navigationEditorList, "TOPLEFT", 8, -8)
+    navigationEditorScroll:SetPoint("BOTTOMRIGHT", navigationEditorList, "BOTTOMRIGHT", -28, 8)
+    local navigationEditorContent = CreateFrame("Frame", nil, navigationEditorScroll)
+    navigationEditorContent:SetSize(490, 1)
+    navigationEditorScroll:SetScrollChild(navigationEditorContent)
+    navigationEditor.headers, navigationEditor.rows = {}, {}
+
+    local function editorHeaderLabel(item)
+        if item.id == "Current Server" then return currentServerNavigationName() end
+        if item.id == "Current Guild" then return currentGuildNavigationName() end
+        if item.id == "Personal" then return "Personal" end
+        return "Management"
+    end
+
+    local function editorPageAccessible(item)
+        return item and item.widget and item.widget.navigationAccessible == true
+    end
+
+    for _, item in ipairs(MAIN_NAVIGATION) do
+        if item.header then
+            local label = navigationEditorContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            label:SetWidth(470)
+            label:SetJustifyH("LEFT")
+            label:SetText(editorHeaderLabel(item))
+            label:SetTextColor(unpack(COLORS.gold))
+            navigationEditor.headers[item.id] = label
+        else
+            local navigationItem = item
+            local row = CreateFrame("Frame", nil, navigationEditorContent, "BackdropTemplate")
+            row:SetHeight(34)
+            createBackdrop(row, { 0.055, 0.045, 0.035, 0.98 }, { 0.28, 0.23, 0.16, 0.9 })
+            row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row.label:SetPoint("LEFT", row, "LEFT", 11, 0)
+            row.label:SetWidth(245)
+            row.label:SetJustifyH("LEFT")
+            row.label:SetWordWrap(false)
+            row.label:SetText(navigationItem.label)
+            row.visibility = makeIRCActionButton(row, 76, 24, "Shown", false)
+            row.visibility:SetPoint("RIGHT", row, "RIGHT", -128, 0)
+            row.visibility:SetScript("OnClick", function()
+                setNavigationPageHidden(navigationItem.id, not isNavigationPageHidden(navigationItem.id))
+                navigationEditor:Refresh()
+                frame.LayoutNavigation()
+            end)
+            row.up = makeIRCActionButton(row, 54, 24, "Up", false)
+            row.up:SetPoint("LEFT", row.visibility, "RIGHT", 6, 0)
+            row.up:SetScript("OnClick", function()
+                if moveNavigationPage(navigationItem.id, -1, editorPageAccessible) then
+                    navigationEditor:Refresh()
+                    frame.LayoutNavigation()
+                end
+            end)
+            row.down = makeIRCActionButton(row, 54, 24, "Down", false)
+            row.down:SetPoint("LEFT", row.up, "RIGHT", 6, 0)
+            row.down:SetScript("OnClick", function()
+                if moveNavigationPage(navigationItem.id, 1, editorPageAccessible) then
+                    navigationEditor:Refresh()
+                    frame.LayoutNavigation()
+                end
+            end)
+            navigationEditor.rows[navigationItem.id] = row
+        end
+    end
+
+    function navigationEditor:Refresh()
+        frame.LayoutNavigation()
+        local order, positions, sections, pagesById = getNavigationPageOrder(), {}, {}, {}
+        for _, item in ipairs(NAVIGATION_PAGES) do pagesById[item.id] = item end
+        for index, id in ipairs(order) do
+            positions[id] = index
+            for _, item in ipairs(NAVIGATION_PAGES) do
+                if item.id == id then sections[id] = item.navigationSection break end
+            end
+        end
+        local editableSections = {}
+        for _, item in ipairs(NAVIGATION_PAGES) do
+            if editorPageAccessible(item) then editableSections[item.navigationSection] = true end
+        end
+        for _, label in pairs(self.headers) do label:Hide() end
+        for _, row in pairs(self.rows) do row:Hide() end
+        local y = 4
+        for _, item in ipairs(getOrderedNavigationItems()) do
+            if item.header and editableSections[item.id] then
+                local label = self.headers[item.id]
+                label:ClearAllPoints()
+                label:SetPoint("TOPLEFT", navigationEditorContent, "TOPLEFT", 4, -y)
+                label:SetText(editorHeaderLabel(item))
+                label:Show()
+                y = y + 24
+            elseif not item.header and editorPageAccessible(item) then
+                local row = self.rows[item.id]
+                local hidden = isNavigationPageHidden(item.id)
+                local position = positions[item.id]
+                local canUp, canDown = false, false
+                if position then
+                    for index = position - 1, 1, -1 do
+                        local candidate = pagesById[order[index]]
+                        if sections[order[index]] == item.navigationSection and editorPageAccessible(candidate) then
+                            canUp = true
+                            break
+                        end
+                    end
+                    for index = position + 1, #order do
+                        local candidate = pagesById[order[index]]
+                        if sections[order[index]] == item.navigationSection and editorPageAccessible(candidate) then
+                            canDown = true
+                            break
+                        end
+                    end
+                end
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", navigationEditorContent, "TOPLEFT", 2, -y)
+                row:SetPoint("TOPRIGHT", navigationEditorContent, "TOPRIGHT", -2, -y)
+                row.label:SetTextColor(unpack(hidden and COLORS.gray or COLORS.parchment))
+                row.visibility:SetText(hidden and "Hidden" or "Shown")
+                row.visibility:SetBackdropColor(hidden and 0.045 or 0.12, hidden and 0.045 or 0.10,
+                    hidden and 0.045 or 0.035, 0.98)
+                row.visibility:SetBackdropBorderColor(hidden and 0.22 or COLORS.gold[1],
+                    hidden and 0.22 or COLORS.gold[2], hidden and 0.22 or COLORS.gold[3], 1)
+                row.up:SetEnabled(canUp)
+                row.up:SetAlpha(canUp and 1 or 0.38)
+                row.down:SetEnabled(canDown)
+                row.down:SetAlpha(canDown and 1 or 0.38)
+                row:Show()
+                y = y + 38
+            end
+        end
+        navigationEditorContent:SetHeight(math.max(1, y + 4))
+        navigationEditorScroll:UpdateScrollChildRect()
+    end
+
+    local function finishNavigationEditing()
+        navigationEditor:Hide()
+        frame.LayoutNavigation()
+        local currentTab = frame.tabs[frame.category]
+        if not currentTab or not currentTab:IsShown() then
+            for _, item in ipairs(getOrderedNavigationItems()) do
+                local tab = not item.header and frame.tabs[item.id]
+                if tab and tab:IsShown() and not tab.unavailable then
+                    frame.category = item.id
+                    break
+                end
+            end
+        end
+        UI:Refresh()
+    end
+
+    local navigationEditorClose = CreateFrame("Button", nil, navigationEditor, "UIPanelCloseButton")
+    navigationEditorClose:SetPoint("TOPRIGHT", 3, 3)
+    navigationEditorClose:SetScript("OnClick", finishNavigationEditing)
+    local navigationEditorDone = makeIRCActionButton(navigationEditor, 105, 28, "Done", false)
+    navigationEditorDone:SetPoint("BOTTOMRIGHT", navigationEditor, "BOTTOMRIGHT", -18, 17)
+    navigationEditorDone:SetScript("OnClick", finishNavigationEditing)
+    local navigationEditorReset = makeIRCActionButton(navigationEditor, 145, 28, "Reset to Default", false)
+    navigationEditorReset:SetPoint("RIGHT", navigationEditorDone, "LEFT", -8, 0)
+    navigationEditorReset:SetScript("OnClick", function()
+        iRCCharDB = iRCCharDB or {}
+        iRCCharDB.navigationMenu = nil
+        navigationEditor:Refresh()
+        frame.LayoutNavigation()
+    end)
+    navigationEditor:Hide()
+    frame.navigationEditor = navigationEditor
+    frame:RegisterModalPopup(navigationEditor)
+
     frame.contentTitle = main:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.contentTitle:SetPoint("TOPLEFT", 15, -14)
     frame.contentTitle:SetTextColor(unpack(COLORS.gold))
@@ -2646,13 +3020,14 @@ function UI:Create()
     for index, filter in ipairs({
         { key = "ALL", label = "All" },
         { key = "RACE_LOCKED", label = "Race-Locked" },
+        { key = "CLASS_LOCKED", label = "Class-Locked" },
         { key = "GUILD_FOUND", label = "Guild-Found" },
         { key = "SELF_FOUND", label = "Self-Found" },
     }) do
         local filterKey, filterLabel = filter.key, filter.label
         local button = CreateFrame("Button", nil, main, "BackdropTemplate")
-        button:SetSize(160, 27)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 166, -50)
+        button:SetSize(128, 27)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 133, -50)
         createBackdrop(button, { 0.055, 0.045, 0.035, 0.96 }, { 0.28, 0.23, 0.16, 0.9 })
         button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
         button.activeGlow:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
@@ -3272,6 +3647,8 @@ function UI:Create()
     scroll:HookScript("OnVerticalScroll", function()
         if frame.category == "Guild Members" then
             UI:RenderMemberRows()
+        elseif frame.category == "Member Management" then
+            UI:RenderMemberManagementRows()
         elseif frame.category == "Guild Log" and UI.RenderGuildLogRows then
             UI:RenderGuildLogRows()
         end
@@ -3323,6 +3700,9 @@ function UI:Create()
     frame:RegisterModalPopup(professionReport)
 
     local exportReport = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    -- Assign this immediately so asynchronous refreshes during frame creation
+    -- can safely find and hide the popup before all of its controls exist.
+    frame.memberExportReport = exportReport
     exportReport:SetSize(700, 520)
     exportReport:SetPoint("CENTER", frame, "CENTER", 0, 0)
     exportReport:SetClampedToScreen(true)
@@ -3361,7 +3741,20 @@ function UI:Create()
     exportReport.output = CreateFrame("EditBox", nil, exportScroll)
     exportReport.output:SetMultiLine(true)
     exportReport.output:SetAutoFocus(false)
-    exportReport.output:SetFontObject("GameFontHighlightSmall")
+    -- Inherit the chat font first to preserve the client's multilingual glyph
+    -- coverage. Forever clients do not all expose FontObject:GetFont(), but
+    -- FontInstance:SetFontHeight() can enlarge the inherited font safely.
+    local fontObjectApplied = pcall(exportReport.output.SetFontObject, exportReport.output,
+        ChatFontNormal or "ChatFontNormal")
+    if not fontObjectApplied then exportReport.output:SetFontObject("GameFontHighlight") end
+    local fontHeightApplied = type(exportReport.output.SetFontHeight) == "function"
+        and pcall(exportReport.output.SetFontHeight, exportReport.output, 16)
+    if not fontHeightApplied and ChatFontNormal then
+        local fontRead, fontPath, _, fontFlags = pcall(function() return ChatFontNormal:GetFont() end)
+        if fontRead and type(fontPath) == "string" and fontPath ~= "" then
+            pcall(exportReport.output.SetFont, exportReport.output, fontPath, 16, fontFlags)
+        end
+    end
     exportReport.output:SetWidth(600)
     exportReport.output:SetHeight(360)
     exportReport.output:SetTextInsets(4, 4, 4, 4)
@@ -3372,7 +3765,7 @@ function UI:Create()
     exportReport.output:SetScript("OnTextChanged", function(self)
         local lineCount = 1
         for _ in tostring(self:GetText() or ""):gmatch("\n") do lineCount = lineCount + 1 end
-        self:SetHeight(math.max(360, lineCount * 14 + 20))
+        self:SetHeight(math.max(360, lineCount * 20 + 20))
         exportScroll:UpdateScrollChildRect()
     end)
     exportScroll:SetScrollChild(exportReport.output)
@@ -3391,6 +3784,11 @@ function UI:Create()
         local text = tostring(value == nil and "" or value)
         if text:find('[,"\r\n]') then text = '"' .. text:gsub('"', '""') .. '"' end
         return text
+    end
+    local function csvDocument(lines)
+        -- A UTF-8 BOM makes Excel and similar programs detect copied CSV
+        -- files correctly instead of decoding non-Latin names as ANSI text.
+        return "\239\187\191" .. table.concat(lines, "\r\n")
     end
     local function lastOnlineText(member)
         if member.online then return "Online now", "0" end
@@ -3429,7 +3827,7 @@ function UI:Create()
                 csvField(mainName ~= "" and iRC:FormatPlayerName(mainName) or ""),
             }, ",")
         end
-        self.output:SetText(table.concat(lines, "\n"))
+        self.output:SetText(csvDocument(lines))
         self.output:SetCursorPosition(0)
         self.output:HighlightText(0, 0)
         exportScroll:SetVerticalScroll(0)
@@ -3469,7 +3867,7 @@ function UI:Create()
         for index, label in ipairs(data.retentionLabels) do
             add("Member Activity", label, data.retention[index] or 0, data.total, "")
         end
-        self.output:SetText(table.concat(lines, "\n"))
+        self.output:SetText(csvDocument(lines))
         self.output:SetCursorPosition(0)
         self.output:HighlightText(0, 0)
         exportScroll:SetVerticalScroll(0)
@@ -3477,7 +3875,6 @@ function UI:Create()
         return true
     end
     exportReport:Hide()
-    frame.memberExportReport = exportReport
     frame:RegisterModalPopup(exportReport)
     frame.memberExport:SetScript("OnClick", function()
         exportReport:Generate()
@@ -3647,6 +4044,9 @@ function UI:Create()
         if group.rulesKnown and type(group.rules) == "table" and group.rules.raceLock == true then
             lines[#lines + 1] = infoLine("Guild race", RACE_LABELS[group.race] or group.race or "Unknown")
         end
+        if group.rulesKnown and type(group.rules) == "table" and group.rules.classLock == true then
+            lines[#lines + 1] = infoLine("Guild class", iRC:GetClassDisplayName(group.rules.guildClass))
+        end
         lines[#lines + 1] = infoLine("Members", group.members or 0)
         lines[#lines + 1] = infoLine("Active players", group.activePlayers or group.activeMembers or 0,
             iRC.Colors.Green)
@@ -3658,6 +4058,7 @@ function UI:Create()
             lines[#lines + 1] = infoSection("Guild rules")
             lines[#lines + 1] = infoLine("Progression", progression)
             lines[#lines + 1] = infoLine("Race-Locked", group.rules.raceLock == true and "Required" or "No")
+            lines[#lines + 1] = infoLine("Class-Locked", group.rules.classLock == true and "Required" or "No")
         end
         lines[#lines + 1] = infoSection("Class distribution")
         local classData = type(group.classBreakdownClasses) == "table" and next(group.classBreakdownClasses)
@@ -4162,6 +4563,11 @@ function UI:Create()
             and not iRC:IsMouseOverFrame(excludeRankDropdown.menu) then excludeRankDropdown.menu:Hide() end
         if rankTargetDropdown.menu:IsShown() and not iRC:IsMouseOverFrame(rankTargetDropdown)
             and not iRC:IsMouseOverFrame(rankTargetDropdown.menu) then rankTargetDropdown.menu:Hide() end
+        local personalSettings = frame.personalSettings
+        for _, dropdown in ipairs(personalSettings and personalSettings.customDropdowns or {}) do
+            if dropdown.menu:IsShown() and not iRC:IsMouseOverFrame(dropdown)
+                and not iRC:IsMouseOverFrame(dropdown.menu) then dropdown.menu:Hide() end
+        end
     end)
     frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}
     frame.racePodium = makeRacePodium(content)
@@ -4174,7 +4580,7 @@ local function ensurePersonalSettings(frame)
     if frame.personalSettings then return frame.personalSettings end
 
     local page = CreateFrame("Frame", nil, frame.scrollContent)
-    page:SetSize(675, 856)
+    page:SetSize(675, 905)
     page:SetPoint("TOPLEFT")
     page.controls = {}
 
@@ -4218,6 +4624,134 @@ local function ensurePersonalSettings(frame)
         return button
     end
 
+    page.customDropdowns = {}
+    local function makePersonalDropdown(parent, width, getOptions, getValue, setValue)
+        local dropdown = CreateFrame("Button", nil, parent, "BackdropTemplate")
+        dropdown:SetSize(width, 30)
+        createBackdrop(dropdown, { 0.035, 0.030, 0.022, 0.99 }, { 0.62, 0.39, 0.10, 1 })
+        dropdown:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        dropdown.text = dropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        dropdown.text:SetPoint("LEFT", dropdown, "LEFT", 11, 0)
+        dropdown.text:SetPoint("RIGHT", dropdown, "RIGHT", -30, 0)
+        dropdown.text:SetJustifyH("LEFT")
+        dropdown.text:SetWordWrap(false)
+        dropdown.arrow = dropdown:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        dropdown.arrow:SetPoint("RIGHT", dropdown, "RIGHT", -10, 0)
+        dropdown.arrow:SetText("v")
+        dropdown.arrow:SetTextColor(unpack(COLORS.gold))
+        dropdown.menu = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        dropdown.menu:SetWidth(width)
+        dropdown.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+        dropdown.menu:SetFrameLevel(frame:GetFrameLevel() + 100)
+        dropdown.menu:SetClampedToScreen(true)
+        dropdown.menu:SetToplevel(true)
+        dropdown.menu:EnableMouse(true)
+        createBackdrop(dropdown.menu, { 0.018, 0.016, 0.012, 0.995 }, { 0.78, 0.48, 0.12, 1 })
+        dropdown.menu.buttons = {}
+        dropdown.menu:Hide()
+
+        function dropdown:Refresh()
+            local currentValue, label = getValue(), "Select"
+            for _, option in ipairs(getOptions() or {}) do
+                if option.value == currentValue then label = option.label break end
+            end
+            self.text:SetText(label)
+        end
+
+        function dropdown:RefreshMenu()
+            local options, currentValue = getOptions() or {}, getValue()
+            self.menu:SetHeight(math.max(12, #options * 27 + 10))
+            for index, option in ipairs(options) do
+                local selectedOption = option
+                local button = self.menu.buttons[index]
+                if not button then
+                    button = CreateFrame("Button", nil, self.menu, "BackdropTemplate")
+                    button:SetHeight(25)
+                    createBackdrop(button, { 0.05, 0.042, 0.032, 0.98 }, { 0.25, 0.21, 0.15, 0.85 })
+                    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                    button.text:SetPoint("LEFT", button, "LEFT", 12, 0)
+                    button.text:SetPoint("RIGHT", button, "RIGHT", -10, 0)
+                    button.text:SetJustifyH("LEFT")
+                    button.check = button:CreateTexture(nil, "ARTWORK")
+                    button.check:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
+                    button.check:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 3, 3)
+                    button.check:SetWidth(3)
+                    button.check:SetColorTexture(0.25, 1, 0.35, 1)
+                    button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                    self.menu.buttons[index] = button
+                end
+                local selected = selectedOption.value == currentValue
+                button:ClearAllPoints()
+                button:SetPoint("TOPLEFT", self.menu, "TOPLEFT", 5, -5 - (index - 1) * 27)
+                button:SetPoint("TOPRIGHT", self.menu, "TOPRIGHT", -5, -5 - (index - 1) * 27)
+                button.text:SetText(selectedOption.label)
+                button.text:SetTextColor(selected and 0.35 or 0.92,
+                    selected and 1 or 0.92, selected and 0.42 or 0.92)
+                button.check:SetShown(selected)
+                button:SetBackdropColor(selected and 0.10 or 0.05, selected and 0.08 or 0.042,
+                    selected and 0.025 or 0.032, 0.98)
+                button:SetBackdropBorderColor(selected and COLORS.gold[1] or 0.25,
+                    selected and COLORS.gold[2] or 0.21, selected and COLORS.gold[3] or 0.15, 0.9)
+                button:SetScript("OnClick", function()
+                    setValue(selectedOption.value)
+                    dropdown:Refresh()
+                    dropdown.menu:Hide()
+                end)
+                button:Show()
+            end
+            for index = #options + 1, #self.menu.buttons do self.menu.buttons[index]:Hide() end
+        end
+
+        dropdown:SetScript("OnClick", function(self)
+            for _, other in ipairs(page.customDropdowns) do
+                if other ~= self then other.menu:Hide() end
+            end
+            self:RefreshMenu()
+            self.menu:ClearAllPoints()
+            self.menu:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -2)
+            self.menu:SetShown(not self.menu:IsShown())
+            if self.menu:IsShown() then self.menu:Raise() end
+        end)
+        page.customDropdowns[#page.customDropdowns + 1] = dropdown
+        return dropdown
+    end
+
+    local function makePersonalSlider(parent, width, minimum, maximum, step, lowText, highText)
+        local slider = CreateFrame("Slider", nil, parent, "BackdropTemplate")
+        slider:SetSize(width, 18)
+        slider:SetOrientation("HORIZONTAL")
+        slider:SetMinMaxValues(minimum, maximum)
+        slider:SetValueStep(step)
+        if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+        createBackdrop(slider, { 0.025, 0.022, 0.018, 0.99 }, { 0.46, 0.35, 0.18, 1 })
+        slider.track = slider:CreateTexture(nil, "ARTWORK")
+        slider.track:SetPoint("LEFT", slider, "LEFT", 7, 0)
+        slider.track:SetPoint("RIGHT", slider, "RIGHT", -7, 0)
+        slider.track:SetHeight(4)
+        slider.track:SetColorTexture(0.22, 0.16, 0.07, 1)
+        slider.fill = slider:CreateTexture(nil, "ARTWORK", nil, 1)
+        slider.fill:SetPoint("LEFT", slider.track, "LEFT", 0, 0)
+        slider.fill:SetHeight(4)
+        slider.fill:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.95)
+        slider:SetThumbTexture("Interface\\BUTTONS\\WHITE8X8")
+        local thumb = slider:GetThumbTexture()
+        if thumb then
+            thumb:SetSize(12, 22)
+            thumb:SetVertexColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1)
+        end
+        slider.low = slider:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        slider.low:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 1, -4)
+        slider.low:SetText(lowText)
+        slider.high = slider:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        slider.high:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", -1, -4)
+        slider.high:SetText(highText)
+        slider:HookScript("OnValueChanged", function(self, value)
+            local fraction = maximum > minimum and (value - minimum) / (maximum - minimum) or 0
+            self.fill:SetWidth(math.max(1, (width - 14) * math.max(0, math.min(1, fraction))))
+        end)
+        return slider
+    end
+
     local identityCard = makeCard(0, 102, "Personal Characters")
     local identityDescription = identityCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     identityDescription:SetPoint("TOPLEFT", 16, -35)
@@ -4225,25 +4759,20 @@ local function ensurePersonalSettings(frame)
     local mainLabel = identityCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     mainLabel:SetPoint("TOPLEFT", 16, -62)
     mainLabel:SetText("Main character")
-    local mainDropdown = CreateFrame("Frame", "iRCPanelPersonalMainDropdown", identityCard, "UIDropDownMenuTemplate")
-    mainDropdown:SetPoint("LEFT", mainLabel, "RIGHT", 14, -2)
-    UIDropDownMenu_SetWidth(mainDropdown, 235)
-    UIDropDownMenu_Initialize(mainDropdown, function(_, level)
-        if level ~= 1 then return end
+    local mainDropdown = makePersonalDropdown(identityCard, 250, function()
         if iRC.Identity then iRC.Identity:RegisterCharacter(iRC:GetPlayerName()) end
+        local options = {}
         for _, character in ipairs(iRC.Identity and iRC.Identity:GetCharacters() or {}) do
-            local name = character.name
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = iRC:FormatPlayerName(name)
-            info.value = name
-            info.checked = iRC.Identity and iRC.Identity:GetMainName() == name
-            info.func = function()
-                if iRC.Identity then iRC.Identity:SetMain(name) end
-                UI:Refresh()
-            end
-            UIDropDownMenu_AddButton(info, level)
+            options[#options + 1] = { value = character.name, label = iRC:FormatPlayerName(character.name) }
         end
+        return options
+    end, function()
+        return iRC.Identity and iRC.Identity:GetMainName() or ""
+    end, function(value)
+        if iRC.Identity then iRC.Identity:SetMain(value) end
+        UI:Refresh()
     end)
+    mainDropdown:SetPoint("LEFT", mainLabel, "RIGHT", 14, -2)
     page.mainDropdown = mainDropdown
 
     local startupCard = makeCard(112, 96, "Panel Startup")
@@ -4253,33 +4782,24 @@ local function ensurePersonalSettings(frame)
     local startupLabel = startupCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     startupLabel:SetPoint("TOPLEFT", 16, -64)
     startupLabel:SetText("Opening page")
-    local startupDropdown = CreateFrame("Frame", "iRCPanelStartupPageDropdown", startupCard, "UIDropDownMenuTemplate")
-    startupDropdown:SetPoint("LEFT", startupLabel, "RIGHT", 14, -2)
-    UIDropDownMenu_SetWidth(startupDropdown, 235)
-    UIDropDownMenu_JustifyText(startupDropdown, "LEFT")
-    UIDropDownMenu_Initialize(startupDropdown, function(_, level)
-        if level ~= 1 then return end
-        local function addChoice(value, label)
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = label
-            info.value = value
-            info.checked = iRC:GetSettings().mainPanelDefaultTab == value
-            info.func = function()
-                iRC:GetSettings().mainPanelDefaultTab = value
-                UIDropDownMenu_SetSelectedValue(startupDropdown, value)
-                UIDropDownMenu_SetText(startupDropdown, label)
-            end
-            UIDropDownMenu_AddButton(info, level)
-        end
-        addChoice(DEFAULT_OPEN_LAST, getNavigationLabel(DEFAULT_OPEN_LAST))
-        for _, item in ipairs(MAIN_NAVIGATION) do
+    local startupDropdown = makePersonalDropdown(startupCard, 250, function()
+        local options = { { value = DEFAULT_OPEN_LAST, label = getNavigationLabel(DEFAULT_OPEN_LAST) } }
+        for _, item in ipairs(getOrderedNavigationItems()) do
             local tab = not item.header and frame.tabs[item.id]
-            if tab and tab:IsShown() and not tab.unavailable then addChoice(item.id, item.label) end
+            if tab and tab:IsShown() and not tab.unavailable then
+                options[#options + 1] = { value = item.id, label = item.label }
+            end
         end
+        return options
+    end, function()
+        return iRC:GetSettings().mainPanelDefaultTab or DEFAULT_OPEN_LAST
+    end, function(value)
+        iRC:GetSettings().mainPanelDefaultTab = value
     end)
+    startupDropdown:SetPoint("LEFT", startupLabel, "RIGHT", 14, -2)
     page.startupDropdown = startupDropdown
 
-    local visibilityCard = makeCard(218, 184, "Visibility & Chat")
+    local visibilityCard = makeCard(218, 233, "Visibility & Chat")
     makeToggle(visibilityCard, -38, "Show minimap button", "Show the iRC launcher beside the minimap.",
         function() return not iRC:GetSettings().minimapButton.hide end,
         function(value)
@@ -4297,22 +4817,23 @@ local function ensurePersonalSettings(frame)
             iRCCharDB = iRCCharDB or {}
             iRCCharDB.hideAllChatIcons = value and true or false
         end)
+    makeToggle(visibilityCard, -185, "Show linked mains in chat",
+        "Show confirmed Alt and BankAlt labels with main-character details on hover.",
+        function() return not iRCCharDB or iRCCharDB.showLinkedMainsInChat ~= false end,
+        function(value)
+            iRCCharDB = iRCCharDB or {}
+            iRCCharDB.showLinkedMainsInChat = value and true or false
+        end)
 
-    local layoutCard = makeCard(412, 200, "Panel & Map Appearance")
+    local layoutCard = makeCard(461, 200, "Panel & Map Appearance")
     local pinLabel = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     pinLabel:SetPoint("TOPLEFT", 16, -39)
     pinLabel:SetText(iRC:Text("GUILD_MAP_PIN_SIZE"))
     local pinValue = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     pinValue:SetPoint("LEFT", pinLabel, "RIGHT", 8, 0)
     pinValue:SetTextColor(unpack(COLORS.gold))
-    local pinSlider = CreateFrame("Slider", "iRCPanelGuildMapPinSizeSlider", layoutCard, "OptionsSliderTemplate")
+    local pinSlider = makePersonalSlider(layoutCard, 250, 5, 15, 1, "5", "15")
     pinSlider:SetPoint("TOPLEFT", 15, -59)
-    pinSlider:SetWidth(250)
-    pinSlider:SetMinMaxValues(5, 15)
-    pinSlider:SetValueStep(1)
-    _G[pinSlider:GetName() .. "Low"]:SetText("5")
-    _G[pinSlider:GetName() .. "High"]:SetText("15")
-    _G[pinSlider:GetName() .. "Text"]:SetText("")
     pinSlider:SetScript("OnValueChanged", function(_, value)
         value = math.floor(value + 0.5)
         pinValue:SetText(tostring(value))
@@ -4327,14 +4848,8 @@ local function ensurePersonalSettings(frame)
     local scaleValue = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 8, 0)
     scaleValue:SetTextColor(unpack(COLORS.gold))
-    local scaleSlider = CreateFrame("Slider", "iRCPanelMainWindowScaleSlider", layoutCard, "OptionsSliderTemplate")
+    local scaleSlider = makePersonalSlider(layoutCard, 250, 0.6, 2.0, 0.05, "60%", "200%")
     scaleSlider:SetPoint("TOPLEFT", 339, -59)
-    scaleSlider:SetWidth(250)
-    scaleSlider:SetMinMaxValues(0.6, 2.0)
-    scaleSlider:SetValueStep(0.05)
-    _G[scaleSlider:GetName() .. "Low"]:SetText("60%")
-    _G[scaleSlider:GetName() .. "High"]:SetText("200%")
-    _G[scaleSlider:GetName() .. "Text"]:SetText("")
     local function applyScaleSliderValue()
         if page.refreshing then return end
         local value = scaleSlider.pendingValue
@@ -4360,6 +4875,14 @@ local function ensurePersonalSettings(frame)
     end
     scaleSlider:HookScript("OnMouseUp", finishScaleSliderDrag)
     page.scaleSlider, page.scaleValue = scaleSlider, scaleValue
+    function frame:RefreshScaleSettingControl()
+        local scale = math.max(0.6, math.min(2, tonumber(iRC:GetSettings().mainWindowScale) or 1))
+        local wasRefreshing = page.refreshing
+        page.refreshing = true
+        scaleSlider:SetValue(scale)
+        scaleValue:SetText(math.floor(scale * 100 + 0.5) .. "%")
+        page.refreshing = wasRefreshing
+    end
 
     makeToggle(layoutCard, -104, iRC:Text("LAYER_PANEL_SHOW"), iRC:Text("LAYER_PANEL_SHOW_DESC"),
         function() return iRC:GetSettings().showLayerPanel ~= false end,
@@ -4376,7 +4899,7 @@ local function ensurePersonalSettings(frame)
         iRC:Print(iRC:Text("MAIN_WINDOW_RESET_DONE"))
     end)
 
-    local roleplayCard = makeCard(622, 234, "Character Speech")
+    local roleplayCard = makeCard(671, 234, "Character Speech")
     page.roleplayControls = {}
     local function addRoleplayToggle(y, label, description, settingKey, available)
         local button = makeToggle(roleplayCard, y, label, description,
@@ -4399,6 +4922,9 @@ local function ensurePersonalSettings(frame)
     addRoleplayToggle(-185, iRC:Text("UNDEAD_SPEAK_ENABLE"), iRC:Text("UNDEAD_SPEAK_DESC"),
         "undeadSpeak", function() return iRC.Roleplay and iRC.Roleplay:IsUndead() end)
 
+    page:HookScript("OnHide", function(self)
+        for _, dropdown in ipairs(self.customDropdowns or {}) do dropdown.menu:Hide() end
+    end)
     page:Hide()
     frame.personalSettings = page
     return page
@@ -4412,19 +4938,13 @@ local function updatePersonalSettings(frame)
     if frame.racePodium then frame.racePodium:Hide() end
     page.refreshing = true
     if iRC.Identity then iRC.Identity:RegisterCharacter(iRC:GetPlayerName()) end
-    local mainName = iRC.Identity and iRC.Identity:GetMainName() or ""
-    UIDropDownMenu_SetSelectedValue(page.mainDropdown, mainName)
-    UIDropDownMenu_SetText(page.mainDropdown,
-        mainName ~= "" and iRC:FormatPlayerName(mainName) or "No character registered")
+    page.mainDropdown:Refresh()
     local defaultTab = iRC:GetSettings().mainPanelDefaultTab or DEFAULT_OPEN_LAST
-    local defaultTabLabel = getNavigationLabel(defaultTab)
-    if not defaultTabLabel then
+    if not getNavigationLabel(defaultTab) then
         defaultTab = DEFAULT_OPEN_LAST
-        defaultTabLabel = getNavigationLabel(defaultTab)
         iRC:GetSettings().mainPanelDefaultTab = defaultTab
     end
-    UIDropDownMenu_SetSelectedValue(page.startupDropdown, defaultTab)
-    UIDropDownMenu_SetText(page.startupDropdown, defaultTabLabel)
+    page.startupDropdown:Refresh()
     for _, control in ipairs(page.controls) do control:Refresh() end
     for _, entry in ipairs(page.roleplayControls or {}) do
         local available = entry.available() == true
@@ -4598,6 +5118,67 @@ function UI:RenderMemberRows()
         row:Show()
     end
     for slot = visible + 1, #frame.memberRows do frame.memberRows[slot]:Hide() end
+end
+
+local function memberManagementRowClick(row, button)
+    if button ~= "LeftButton" or not row.managementMember or not row.managementEnabled then return end
+    local frame = UI.frame
+    if not frame then return end
+    if row.managementAction == "rank" then
+        if frame.rankMemberMenu then
+            frame.rankMemberMenu:Open(row.managementMember, row, row.managementCanPromote,
+                row.managementCanDemote, row.managementPreviewPromote, row.managementPreviewDemote)
+        end
+    elseif row.managementAction == "inactive" or row.managementAction == "specific" then
+        frame:OpenMemberRemoval(row.managementMember, row.managementAction)
+    end
+end
+
+function UI:RenderMemberManagementRows()
+    local frame = self.frame
+    if not frame or frame.category ~= "Member Management" then return end
+    local entries = frame.memberManagementData or {}
+    local renderer = frame.memberManagementRowRenderer
+    if type(renderer) ~= "function" then return end
+    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / MEMBER_MANAGEMENT_ROW_SPACING) + 1
+    local scrollHeight = frame.scroll:GetHeight() or 0
+    if scrollHeight < 1 then scrollHeight = 480 end
+    local visible = math.max(0, math.min(#entries - first + 1,
+        math.ceil(scrollHeight / MEMBER_MANAGEMENT_ROW_SPACING) + 1))
+    for slot = 1, visible do
+        local index = first + slot - 1
+        local row = frame.memberRows[slot]
+        if not row then
+            row = makeMemberRow(frame.scrollContent, slot)
+            frame.memberRows[slot] = row
+        end
+        setMemberRowDensity(row, false)
+        prepareRankCard(row)
+        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0,
+            -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0,
+            -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
+        row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
+        row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
+        renderer(row, entries[index], index)
+        row:SetScript("OnClick", memberManagementRowClick)
+        row:Show()
+    end
+    for slot = visible + 1, #frame.memberRows do
+        frame.memberRows[slot]:SetAlpha(1)
+        frame.memberRows[slot]:Hide()
+    end
+end
+
+local function setMemberManagementRows(frame, entries, renderer)
+    frame.memberManagementData = entries
+    frame.memberManagementRowRenderer = renderer
+    frame.scrollContent:SetHeight(math.max(1, #entries * MEMBER_MANAGEMENT_ROW_SPACING))
+    local maximum = math.max(0, #entries * MEMBER_MANAGEMENT_ROW_SPACING - (frame.scroll:GetHeight() or 0))
+    if (frame.scroll:GetVerticalScroll() or 0) > maximum then frame.scroll:SetVerticalScroll(maximum) end
+    UI:RenderMemberManagementRows()
 end
 
 applyMemberSearch = function(frame)
@@ -5041,20 +5622,11 @@ local function updateInactiveMembers(frame)
 
     local ownRank = getNativeGuildRank()
     local eligibleCount = 0
-    for index, member in ipairs(members) do
-        local row = frame.memberRows[index]
-        if not row then
-            row = makeMemberRow(frame.scrollContent, index)
-            frame.memberRows[index] = row
-        end
-        setMemberRowDensity(row, false)
-        prepareRankCard(row)
-        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
-        row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
-        row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
+    for _, member in ipairs(members) do
+        if type(ownRank) == "number" and type(member.rankIndex) == "number"
+            and member.rankIndex > ownRank then eligibleCount = eligibleCount + 1 end
+    end
+    setMemberManagementRows(frame, members, function(row, member)
         row.name:ClearAllPoints()
         row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -6)
         row.name:SetFontObject(GameFontHighlight)
@@ -5075,39 +5647,30 @@ local function updateInactiveMembers(frame)
         row.onlineTag:Hide()
         local canRemove = type(ownRank) == "number" and type(member.rankIndex) == "number"
             and member.rankIndex > ownRank
-        if canRemove then eligibleCount = eligibleCount + 1 end
         row.tag:ClearAllPoints()
         row.tag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -6)
         row.tag:SetText(canRemove and "REMOVE..." or "EQUAL/HIGHER RANK")
         row.tag:SetTextColor(unpack(canRemove and COLORS.red or COLORS.gray))
         row.tag:Show()
-        local selectedMember = member
-        local days = math.floor(selectedMember.lastOnlineDays + 0.5)
+        local days = math.floor(member.lastOnlineDays + 0.5)
         row.detail:ClearAllPoints()
         row.detail:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 18, 7)
         row.detail:SetPoint("RIGHT", row, "RIGHT", -16, 0)
         row.detail:SetText(tostring(days) .. " days offline  ·  "
-            .. tostring(selectedMember.rankName or "Unknown rank") .. "  ·  Level " .. tostring(selectedMember.level or "?")
-            .. " " .. tostring(selectedMember.className or "")
+            .. tostring(member.rankName or "Unknown rank") .. "  ·  Level " .. tostring(member.level or "?")
+            .. " " .. tostring(member.className or "")
             .. (identityDetail and ("  ·  " .. identityDetail) or ""))
         row.rankActions:Hide()
         row:SetAlpha(canRemove and 1 or 0.58)
-        row:SetScript("OnClick", canRemove and function(_, button)
-            if button ~= "LeftButton" then return end
-            frame:OpenMemberRemoval(selectedMember, "inactive")
-        end or nil)
+        row.managementAction = "inactive"
+        row.managementMember = member
+        row.managementEnabled = canRemove
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
-        row:Show()
-    end
-    for index = #members + 1, #frame.memberRows do
-        frame.memberRows[index]:SetAlpha(1)
-        frame.memberRows[index]:Hide()
-    end
+    end)
     if eligibleCount == 0 and iRC:IsTestAdminGuildMaster() then
         eligibleCount = #getEligibleInactiveMembers(threshold, true, excludedRank, excludeAlts)
     end
-    frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
     frame.inactiveRemoveAll:SetText(iRC:Text("INACTIVE_MEMBERS_REMOVE_ALL", eligibleCount))
     local bulkEnabled = eligibleCount > 0 or iRC:IsTestAdminGuildMaster()
     frame.inactiveRemoveAll:SetEnabled(bulkEnabled)
@@ -5158,7 +5721,8 @@ local function updateRankManagement(frame)
         end
         table.sort(members, function(a, b) return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name) end)
     end
-    for index, member in ipairs(members) do
+    local entries = {}
+    for _, member in ipairs(members) do
         local isSelf = iRC:NormalizeName(member.name) == iRC:NormalizeName(iRC:GetPlayerName())
         local nativePromote = not isSelf and isRankActionEligible(member, "PROMOTE", false)
         local nativeDemote = not isSelf and isRankActionEligible(member, "DEMOTE", false)
@@ -5169,16 +5733,19 @@ local function updateRankManagement(frame)
         local canPromote, canDemote = nativePromote or previewPromote, nativeDemote or previewDemote
         if canPromote then promoteCount = promoteCount + 1 end
         if canDemote then demoteCount = demoteCount + 1 end
-        local row = frame.memberRows[index]
-        if not row then row = makeMemberRow(frame.scrollContent, index); frame.memberRows[index] = row end
-        setMemberRowDensity(row, false)
-        prepareRankCard(row)
-        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
-        row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
-        row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
+        entries[#entries + 1] = {
+            member = member, isSelf = isSelf,
+            nativePromote = nativePromote, nativeDemote = nativeDemote,
+            previewPromote = previewPromote, previewDemote = previewDemote,
+            canPromote = canPromote, canDemote = canDemote,
+        }
+    end
+    setMemberManagementRows(frame, entries, function(row, entry)
+        local member = entry.member
+        local isSelf = entry.isSelf
+        local nativePromote, nativeDemote = entry.nativePromote, entry.nativeDemote
+        local previewPromote, previewDemote = entry.previewPromote, entry.previewDemote
+        local canPromote, canDemote = entry.canPromote, entry.canDemote
         row.name:ClearAllPoints()
         row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -6)
         row.name:SetFontObject(GameFontHighlight)
@@ -5222,18 +5789,14 @@ local function updateRankManagement(frame)
             .. iRC.Colors.Reset .. "   " .. (canDemote and iRC.Colors.Green or iRC.Colors.Gray)
             .. "Demote" .. iRC.Colors.Reset)
         row:SetAlpha(isSelf and 0.42 or ((canPromote or canDemote) and 1 or 0.58))
-        local selectedMember = member
-        row:SetScript("OnClick", (canPromote or canDemote) and function(self, button)
-            if button ~= "LeftButton" or not frame.rankMemberMenu then return end
-            frame.rankMemberMenu:Open(selectedMember, self, canPromote, canDemote,
-                previewPromote, previewDemote)
-        end or nil)
+        row.managementAction = "rank"
+        row.managementMember = member
+        row.managementEnabled = canPromote or canDemote
+        row.managementCanPromote, row.managementCanDemote = canPromote, canDemote
+        row.managementPreviewPromote, row.managementPreviewDemote = previewPromote, previewDemote
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
-        row:Show()
-    end
-    for index = #members + 1, #frame.memberRows do frame.memberRows[index]:SetAlpha(1); frame.memberRows[index]:Hide() end
-    frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
+    end)
     frame.rankManagementControls.promote.text:SetText("Promote selected... (" .. promoteCount .. ")")
     frame.rankManagementControls.demote.text:SetText("Demote selected... (" .. demoteCount .. ")")
     frame.rankManagementControls.promote:SetEnabled(promoteCount > 0)
@@ -5272,20 +5835,13 @@ local function updateSpecificMemberRemoval(frame)
     end)
 
     local eligibleCount = 0
-    for index, member in ipairs(members) do
+    for _, member in ipairs(members) do
+        if type(ownRank) == "number" and type(member.rankIndex) == "number"
+            and member.rankIndex > ownRank then eligibleCount = eligibleCount + 1 end
+    end
+    setMemberManagementRows(frame, members, function(row, member)
         local canRemove = type(ownRank) == "number" and type(member.rankIndex) == "number"
             and member.rankIndex > ownRank
-        if canRemove then eligibleCount = eligibleCount + 1 end
-        local row = frame.memberRows[index]
-        if not row then row = makeMemberRow(frame.scrollContent, index); frame.memberRows[index] = row end
-        setMemberRowDensity(row, false)
-        prepareRankCard(row)
-        row:SetHeight(MEMBER_MANAGEMENT_ROW_HEIGHT)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
-        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * MEMBER_MANAGEMENT_ROW_SPACING))
-        row:SetBackdropColor(0.035, 0.031, 0.027, 0.98)
-        row:SetBackdropBorderColor(0.30, 0.25, 0.17, 0.95)
         row.name:ClearAllPoints()
         row.name:SetPoint("TOPLEFT", row, "TOPLEFT", 18, -6)
         row.name:SetFontObject(GameFontHighlight)
@@ -5319,19 +5875,12 @@ local function updateSpecificMemberRemoval(frame)
             .. (identityDetail and ("  ·  " .. identityDetail) or ""))
         row.rankActions:Hide()
         row:SetAlpha(canRemove and 1 or 0.55)
-        local selectedMember = member
-        row:SetScript("OnClick", canRemove and function(_, button)
-            if button == "LeftButton" then frame:OpenMemberRemoval(selectedMember, "specific") end
-        end or nil)
+        row.managementAction = "specific"
+        row.managementMember = member
+        row.managementEnabled = canRemove
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
-        row:Show()
-    end
-    for index = #members + 1, #frame.memberRows do
-        frame.memberRows[index]:SetAlpha(1)
-        frame.memberRows[index]:Hide()
-    end
-    frame.scrollContent:SetHeight(math.max(1, #members * MEMBER_MANAGEMENT_ROW_SPACING))
+    end)
     frame.contentTitle:SetText("Kick Specific Member")
     if #members == 0 then
         frame.contentSubtitle:SetText(query ~= "" and "No guild members match this search."
@@ -5702,7 +6251,7 @@ local function updateGuildRules(frame)
     local connectionActive = connection and connection.active == true
     local progression = iRC:GetProgressionMode(rules)
     local maxLevelProgression = iRC:GetMaxLevelProgressionMode(rules)
-    local enforcementRequiresIRC = progression ~= "NONE" or rules.raceLock == true
+    local enforcementRequiresIRC = progression ~= "NONE" or rules.raceLock == true or rules.classLock == true
         or rules.nativeTongueOnly == true or rules.sameRaceGroupsOnly == true or rules.guildGroupsOnly == true
     local guildFoundRuleActive = rules.guildFoundOnly == true or rules.level60GuildFound == true
     local entries = {
@@ -5721,13 +6270,24 @@ local function updateGuildRules(frame)
             section = "Guild Connection",
             title = enforcementRequiresIRC and "iRC AddOn Required by Enforcement" or "Require iRC AddOn",
             description = enforcementRequiresIRC
-                and "Automatically required while progression, Race-Locked, or group enforcement rules are active."
+                and "Automatically required while progression, Race-Locked, Class-Locked, or group enforcement rules are active."
                 or "Requires every online guild member to run and respond with iRC, even when no progression or group rule is active.",
             active = enforcementRequiresIRC or rules.requireIRC == true,
             activeLabel = "REQUIRED",
             inactiveLabel = "OPTIONAL",
             locked = enforcementRequiresIRC,
             set = function(value) return iRC:SetConnectionRule("requireIRC", value) end,
+        },
+        {
+            section = "Class-Locked",
+            title = "Class-Locked Guild",
+            description = "Requires every guild member to match the native Guild Master's class"
+                .. (iRC:GetGuildClass() ~= "" and " (" .. iRC:GetClassDisplayName(iRC:GetGuildClass()) .. ")" or "")
+                .. ". Enabling this disables Race-Locked.",
+            active = rules.classLock == true,
+            activeLabel = "ENFORCED",
+            inactiveLabel = "NOT REQUIRED",
+            set = function(value) return iRC:SetConnectionRule("classLock", value) end,
         },
         {
             section = "Race-Locked",
@@ -5859,12 +6419,29 @@ local function updateGuildRules(frame)
         },
         {
             section = "Announcements",
-            title = "Level 60 Guild Announcements",
-            description = "Send a guild-chat announcement when an eligible character reaches level 60.",
+            title = "Level Announcements",
+            description = "Send a guild-chat announcement at every 10-level milestone from the selected starting level.",
             active = rules.enableGuildLevel60Message == true,
             activeLabel = "ENABLED",
             inactiveLabel = "DISABLED",
             set = function(value) return iRC:SetConnectionRule("enableGuildLevel60Message", value) end,
+            settingOptions = { 10, 20, 30, 40, 50, 60 },
+            settingValue = tonumber(rules.guildLevelAnnouncementMinimum) or 60,
+            settingText = function(value) return "First announced milestone: Level " .. tostring(value) end,
+            setTarget = function(value) return iRC:SetGuildAnnouncementTarget("guildLevelAnnouncementMinimum", value) end,
+        },
+        {
+            section = "Announcements",
+            title = "Profession Announcements",
+            description = "Send a guild-chat announcement every 75 skill points in a primary profession, starting at the selected milestone.",
+            active = rules.enableGuildProfessionMessage == true,
+            activeLabel = "ENABLED",
+            inactiveLabel = "DISABLED",
+            set = function(value) return iRC:SetConnectionRule("enableGuildProfessionMessage", value) end,
+            settingOptions = { 75, 150, 225, 300 },
+            settingValue = tonumber(rules.guildProfessionAnnouncementSkill) or 300,
+            settingText = function(value) return "First announced milestone: " .. tostring(value) end,
+            setTarget = function(value) return iRC:SetGuildAnnouncementTarget("guildProfessionAnnouncementSkill", value) end,
         },
         {
             section = "Announcements",
@@ -5890,7 +6467,8 @@ local function updateGuildRules(frame)
     end
     local sectionOrder = {
         ["Guild Connection"] = 1, ["Guild Features"] = 2, Announcements = 3,
-        ["Race-Locked"] = 4, ["Group Rules"] = 5, ["Self-Found"] = 6, ["Guild-Found"] = 7,
+        ["Class-Locked"] = 4, ["Race-Locked"] = 5, ["Group Rules"] = 6,
+        ["Self-Found"] = 7, ["Guild-Found"] = 8,
     }
     table.sort(visible, function(a, b)
         local aOrder, bOrder = sectionOrder[a.section] or 99, sectionOrder[b.section] or 99
@@ -5955,6 +6533,43 @@ local function updateGuildRules(frame)
         end
         row.title:SetText(entry.title)
         row.description:SetText(entry.description)
+        local hasSetting = type(entry.settingOptions) == "table" and #entry.settingOptions > 0
+        local rowHeight = hasSetting and 68 or 44
+        row:SetHeight(rowHeight)
+        row.description:ClearAllPoints()
+        row.description:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -1)
+        row.description:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -127, hasSetting and 27 or 4)
+        row.stateBackground:ClearAllPoints()
+        row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -9, hasSetting and 11 or 0)
+        if hasSetting then
+            local settingEditable = canEdit and connectionActive and entry.available ~= false and entry.active == true
+            local currentEntry = entry
+            row.setting:SetText(entry.settingText and entry.settingText(entry.settingValue) or tostring(entry.settingValue))
+            row.setting:SetTextColor(settingEditable and 0.78 or 0.42, settingEditable and 0.78 or 0.42,
+                settingEditable and 0.78 or 0.42)
+            row.setting:Show()
+            row.settingPrevious:SetEnabled(settingEditable)
+            row.settingNext:SetEnabled(settingEditable)
+            row.settingPrevious:SetAlpha(settingEditable and 1 or 0.4)
+            row.settingNext:SetAlpha(settingEditable and 1 or 0.4)
+            local function changeSetting(direction)
+                if not settingEditable then return end
+                local selected = 1
+                for optionIndex, option in ipairs(currentEntry.settingOptions) do
+                    if option == currentEntry.settingValue then selected = optionIndex break end
+                end
+                selected = math.max(1, math.min(#currentEntry.settingOptions, selected + direction))
+                if currentEntry.setTarget(currentEntry.settingOptions[selected]) ~= false then UI:Refresh() end
+            end
+            row.settingPrevious:SetScript("OnClick", function() changeSetting(-1) end)
+            row.settingNext:SetScript("OnClick", function() changeSetting(1) end)
+            row.settingPrevious:Show()
+            row.settingNext:Show()
+        else
+            row.setting:Hide()
+            row.settingPrevious:Hide()
+            row.settingNext:Hide()
+        end
         row.state:SetText(entry.active and (entry.activeLabel or "ACTIVE") or (entry.inactiveLabel or "INACTIVE"))
         local locked = entry.locked == true
         local editable = canEdit and (entry.activation or connectionActive) and entry.available ~= false and not locked
@@ -5988,7 +6603,7 @@ local function updateGuildRules(frame)
             if currentEntry.set(not currentEntry.active) ~= false then UI:Refresh() end
         end)
         row:Show()
-        yOffset = yOffset + 48
+        yOffset = yOffset + rowHeight + 4
     end
     for index = #visible + 1, #frame.ruleRows do frame.ruleRows[index]:Hide() end
     for index = sectionIndex + 1, #frame.ruleSectionHeaders do frame.ruleSectionHeaders[index]:Hide() end
@@ -6115,6 +6730,7 @@ local function getActiveRuleLines(group)
     if not group.rulesKnown or type(group.rules) ~= "table" then return { iRC:Text("GUILD_STATS_RULES_UNKNOWN") } end
     local rules, lines = group.rules, {}
     if rules.requireIRC then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_REQUIRE_IRC") end
+    if rules.classLock then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_CLASS_LOCK", iRC:GetClassDisplayName(rules.guildClass)) end
     if rules.raceLock then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_RACE_LOCK") end
     if rules.raceLock and rules.nativeTongueOnly then lines[#lines + 1] = iRC:Text("GUILD_STATS_RULE_NATIVE_TONGUE") end
     local progressionMode = iRC:GetProgressionMode(rules)
@@ -6166,11 +6782,17 @@ end
 
 local function setRaceCard(card, group, rank, forceExpanded)
     local rules = group and group.rulesKnown and group.rules
-    local accent = rules and rules.raceLock == true and (RACE_COLORS[group.race] or RACE_COLORS.Unknown)
+    local rawClassColor = rules and rules.classLock == true
+        and (RAID_CLASS_COLORS and RAID_CLASS_COLORS[iRC:NormalizeGuildClass(rules.guildClass)]
+            or FALLBACK_CLASS_COLORS[iRC:NormalizeGuildClass(rules.guildClass)])
+    local classColor = rawClassColor and {
+        rawClassColor.r or rawClassColor[1], rawClassColor.g or rawClassColor[2], rawClassColor.b or rawClassColor[3],
+    }
+    local accent = classColor or rules and rules.raceLock == true and (RACE_COLORS[group.race] or RACE_COLORS.Unknown)
         or isGuildFoundRules(rules)
             and { 0.30, 1, 0.35 } or RACE_COLORS.Unknown
     card.accent:SetColorTexture(accent[1], accent[2], accent[3], 1)
-    card.icon:SetTexture(getGuildCardIcon(group))
+    setGuildCardIcon(card.icon, group)
     card.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
     card.rank:SetText("#" .. rank)
     local tag, tagColor = getGuildCardTag(group)
@@ -6319,7 +6941,7 @@ local function updateRacePodium(frame, rankedGroups)
         end
         entry.rank:SetText("#" .. rank)
         if group then
-            entry.icon:SetTexture(getGuildCardIcon(group))
+            setGuildCardIcon(entry.icon, group)
             entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
             local tag, tagColor = getGuildCardTag(group)
             local showTag = guildStatsFilter == "ALL" and tag ~= nil
@@ -6336,6 +6958,7 @@ local function updateRacePodium(frame, rankedGroups)
             entry:EnableMouse(true)
         else
             entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
+            entry.icon:SetTexCoord(0, 1, 0, 1)
             entry.race:SetText(iRC:Text("GUILD_STATS_NO_DATA"))
             entry.race:ClearAllPoints()
             entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, 0)
@@ -6357,10 +6980,16 @@ local function updateRaceOverview(frame)
             if group.rulesKnown and group.rules and group.rules.raceLock == true then filtered[#filtered + 1] = group end
         end
         allGroups = filtered
+    elseif guildStatsFilter == "CLASS_LOCKED" then
+        local filtered = {}
+        for _, group in ipairs(allGroups) do
+            if group.rulesKnown and group.rules and group.rules.classLock == true then filtered[#filtered + 1] = group end
+        end
+        allGroups = filtered
     elseif guildStatsFilter == "GUILD_FOUND" then
         local filtered = {}
         for _, group in ipairs(allGroups) do
-            if group.rulesKnown and group.rules and group.rules.raceLock == false
+            if group.rulesKnown and group.rules and group.rules.raceLock == false and group.rules.classLock ~= true
                 and isGuildFoundRules(group.rules) then
                 filtered[#filtered + 1] = group
             end
@@ -6369,7 +6998,7 @@ local function updateRaceOverview(frame)
     elseif guildStatsFilter == "SELF_FOUND" then
         local filtered = {}
         for _, group in ipairs(allGroups) do
-            if group.rulesKnown and group.rules and group.rules.raceLock ~= true
+            if group.rulesKnown and group.rules and group.rules.raceLock ~= true and group.rules.classLock ~= true
                 and iRC:GetProgressionMode(group.rules) == "SELF_FOUND"
                 and iRC:GetMaxLevelProgressionMode(group.rules) == "SELF_FOUND" then
                 filtered[#filtered + 1] = group
@@ -6505,7 +7134,7 @@ function UI:Refresh()
     end
     if frame.category ~= "Guild Members" and frame.category ~= "Guild Overview" then
         frame.professionReport:Hide()
-        frame.memberExportReport:Hide()
+        if frame.memberExportReport then frame.memberExportReport:Hide() end
         frame.memberMenu:Hide()
     elseif frame.category ~= "Guild Members" then
         frame.professionReport:Hide()
@@ -6757,15 +7386,17 @@ function UI:Open(subjectName, requestCacheFromOpen, requestedCategory)
             defaultTab = "Member Management"
             frame.memberManagementView = "RANK"
         end
-        if defaultTab ~= DEFAULT_OPEN_LAST and frame.tabs[defaultTab] then frame.category = defaultTab end
+        local defaultTabButton = frame.tabs[defaultTab]
+        if defaultTab ~= DEFAULT_OPEN_LAST and defaultTabButton and defaultTabButton:IsShown()
+            and not defaultTabButton.unavailable then frame.category = defaultTab end
     end
     if not frame.category or not frame.tabs[frame.category] then frame.category = "Race Overview" end
     if frame.category == "Race Overview" then
         guildStatsFilter = getCurrentGuildStatsFilter()
         self.preservedRaceScroll = 0
     end
-    if frame.category == "Guild Overview" or frame.category == "Guild Members"
-        or frame.category == "Member Management" then
+    if opening and (frame.category == "Guild Overview" or frame.category == "Guild Members"
+        or frame.category == "Member Management") then
         iRC:RefreshGuildRoster()
     end
     frame:SetScale(iRC:GetSettings().mainWindowScale or 1)

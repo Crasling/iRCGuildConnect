@@ -100,6 +100,19 @@ assert(iRC:GetMemberVerification("Target", true).state == "missing",
 db.rules.requireIRC = false
 
 reset(true)
+for index = 1, 3 do
+    roster[#roster + 1] = { name = "BulkTarget" .. index, rank = 5, online = true }
+end
+iRC:InvalidateGuildRosterSnapshot()
+iRC:InvalidateGuildMemberRows()
+iRC:CheckPresenceMismatches(); advance(60)
+assert(#notices == 1 and notices[1][2] == "OFFICER" and notices[1][1]:match("4 automatic rule warnings"),
+    "four simultaneous presence failures become one officer summary with no bulk whispers")
+while #roster > 3 do table.remove(roster) end
+iRC:InvalidateGuildRosterSnapshot()
+iRC:InvalidateGuildMemberRows()
+
+reset(true)
 iRC:CheckPresenceMismatches()
 assert(#notices == 0 and probeCount() == 1, "probe before warning")
 advance(7); respond("Target"); advance(60)
@@ -116,7 +129,10 @@ local firstNotice = now
 advance(270); assert(probeCount() == 6)
 advance(15); assert(probeCount() == 6 and #notices == 2)
 advance(15)
-assert(#notices == 5 and notices[5][2] == "GUILD" and now == firstNotice + 300, "escalation rechecks before officer/whisper/guild notice")
+local escalationChannels = {}
+for index = 3, #notices do escalationChannels[notices[index][2]] = true end
+assert(#notices == 5 and escalationChannels.OFFICER and escalationChannels.WHISPER and escalationChannels.GUILD
+    and now == firstNotice + 300, "escalation rechecks before officer/whisper/guild notice")
 
 reset()
 respond("Target")
@@ -149,7 +165,10 @@ reset()
 iRC:ScheduleNewMemberAddonCheck("guid:Player-1-Target")
 advance(31); assert(#notices == 0)
 advance(30); assert(#notices == 0)
-advance(1); assert(#notices == 3 and notices[3][2] == "GUILD", "missing new member welcome follows three probes and a full confirmation window")
+advance(1)
+local welcomeGuildNotice = false
+for _, notice in ipairs(notices) do if notice[2] == "GUILD" then welcomeGuildNotice = true end end
+assert(#notices == 3 and welcomeGuildNotice, "missing new member welcome follows three probes and a full confirmation window")
 iRC:CheckNewMemberAddon("guid:Player-1-Target")
 assert(#notices == 3, "welcome is not repeated")
 

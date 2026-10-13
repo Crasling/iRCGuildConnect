@@ -750,8 +750,10 @@ local startupSettings = {}
 
 iRC.DefaultConnectionRules = {
     guildRace = "",
+    guildClass = "",
     requireIRC = false,
     raceLock = false,
+    classLock = false,
     nativeTongueOnly = false,
     selfFoundOnly = false,
     guildFoundOnly = false,
@@ -765,6 +767,9 @@ iRC.DefaultConnectionRules = {
     guildFoundTradeExceptions = false,
     guildMapEnabled = false,
     enableGuildLevel60Message = true,
+    guildLevelAnnouncementMinimum = 60,
+    enableGuildProfessionMessage = false,
+    guildProfessionAnnouncementSkill = 300,
     enableGuildDeathMessage = true,
     guildContacts = "",
 }
@@ -859,6 +864,9 @@ iRC.GuildRaceTBCOrder = { "DRAENEI", "BLOODELF" }
 local GuildRaceLookup = {}
 for _, race in ipairs(iRC.GuildRaceOrder) do GuildRaceLookup[race] = true end
 for _, race in ipairs(iRC.GuildRaceTBCOrder) do GuildRaceLookup[race] = true end
+iRC.GuildClassOrder = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local GuildClassLookup = {}
+for _, class in ipairs(iRC.GuildClassOrder) do GuildClassLookup[class] = true end
 
 function iRC:Print(message)
     print(self.Colors.iRC .. "[iRC]: " .. self.Colors.Reset .. tostring(message))
@@ -1362,6 +1370,11 @@ end
 local initializedConnections = setmetatable({}, { __mode = "k" })
 local pendingAutomaticActivation = setmetatable({}, { __mode = "k" })
 local savedConnectionKeysAtLoad = {}
+local currentConnectionCache, currentConnectionRoot
+
+function iRC:InvalidateConnectionCache()
+    currentConnectionCache, currentConnectionRoot = nil, nil
+end
 
 local function normalizedGuildName(value)
     return tostring(value or ""):match("^%s*(.-)%s*$"):lower()
@@ -1396,10 +1409,12 @@ local function findStoredGuildConnection(connections, currentKey, guildName, cur
 end
 
 function iRC:GetConnection()
-    local key = self:GetGuildKey()
     -- Dropdown initialization can read rules before ADDON_LOADED restores the DB.
     -- Let callers use defaults until then, without creating early saved state.
-    if not savedVariablesReady or not key or not iRCDB then return nil end
+    if not savedVariablesReady or not iRCDB then return nil end
+    if currentConnectionCache and currentConnectionRoot == iRCDB then return currentConnectionCache end
+    local key = self:GetGuildKey()
+    if not key then return nil end
     local connections = ensureAccountConnectionStore()
     local guildName = GetGuildInfo("player")
     local connection = findStoredGuildConnection(connections, key, guildName, connections[key])
@@ -1411,7 +1426,10 @@ function iRC:GetConnection()
     end
     connection.key = key
     connection.guildName = connection.guildName or guildName
-    if initializedConnections[connection] then return connection end
+    if initializedConnections[connection] then
+        currentConnectionCache, currentConnectionRoot = connection, iRCDB
+        return connection
+    end
     connection.active = connection.active == true
     if connection.activationTimestamp == nil then
         connection.activationTimestamp = decodeRulesTimestamp(connection.rulesTimestampHex)
@@ -1505,12 +1523,31 @@ function iRC:GetConnection()
     for key, value in pairs(self.DefaultConnectionRules) do
         if connection.rules[key] == nil then connection.rules[key] = value end
     end
+    connection.rules.guildLevelAnnouncementMinimum = math.max(10,
+        math.min(60, math.floor((tonumber(connection.rules.guildLevelAnnouncementMinimum) or 60) / 10) * 10))
+    connection.rules.guildProfessionAnnouncementSkill = math.max(75,
+        math.min(300, math.floor((tonumber(connection.rules.guildProfessionAnnouncementSkill) or 300) / 75) * 75))
+    connection.rules.guildClass = self:NormalizeGuildClass(connection.rules.guildClass)
     -- Rulesets saved before 0.5.15 cannot contain Require iRC. Preserve that
     -- known-false extension separately so non-GM relays cannot alter it while
     -- retaining the older base rules fingerprint.
     if connection.receivedRulesBackupVersion == 1 and type(connection.receivedRulesBackup) == "string"
         and connection.receivedRulesRequireIRC == nil then
         connection.receivedRulesRequireIRC = false
+    end
+    if connection.receivedRulesBackupVersion == 1 and type(connection.receivedRulesBackup) == "string"
+        and connection.receivedRulesAnnouncementSettings == nil then
+        connection.receivedRulesAnnouncementSettings = table.concat({
+            connection.rules.guildLevelAnnouncementMinimum,
+            connection.rules.enableGuildProfessionMessage and "1" or "0",
+            connection.rules.guildProfessionAnnouncementSkill,
+        }, ",")
+    end
+    if connection.receivedRulesBackupVersion == 1 and type(connection.receivedRulesBackup) == "string"
+        and connection.receivedRulesClassLock == nil then
+        connection.receivedRulesClassLock = table.concat({
+            connection.rules.classLock and "1" or "0", connection.rules.guildClass,
+        }, ",")
     end
     if not self:IsOfficialHardcoreRealm() then connection.rules.enableGuildDeathMessage = false end
     normalizeProgressionRules(connection.rules)
@@ -1519,7 +1556,16 @@ function iRC:GetConnection()
         connection.rules.guildRace = self:NormalizeGuildRace(raceFile)
         if connection.rulesBootstrap ~= true then self:StampConnectionRules(connection) end
     end
+    if connection.rules.classLock == true and self:IsNativeGuildMaster() then
+        local _, classFile = UnitClass("player")
+        local guildClass = self:NormalizeGuildClass(classFile)
+        if guildClass ~= "" and connection.rules.guildClass ~= guildClass then
+            connection.rules.guildClass = guildClass
+            if connection.rulesBootstrap ~= true then self:StampConnectionRules(connection) end
+        end
+    end
     initializedConnections[connection] = true
+    currentConnectionCache, currentConnectionRoot = connection, iRCDB
     return connection
 end
 
@@ -1945,6 +1991,29 @@ function iRC:NormalizeGuildRace(race)
     return GuildRaceLookup[token] and token or ""
 end
 
+function iRC:NormalizeGuildClass(class)
+    local token = tostring(class or ""):upper():gsub("%s+", "")
+    return GuildClassLookup[token] and token or ""
+end
+
+function iRC:GetGuildClass()
+    return self:NormalizeGuildClass(self:GetConnectionRules().guildClass)
+end
+
+function iRC:GetGuildMasterClass()
+    for _, member in ipairs(self:GetGuildRosterSnapshot()) do
+        if tonumber(member.rankIndex) == 0 then
+            local class = self:NormalizeGuildClass(member.classFile or member.className)
+            if class ~= "" then return class end
+        end
+    end
+    if self:IsNativeGuildMaster() then
+        local _, classFile = UnitClass("player")
+        return self:NormalizeGuildClass(classFile)
+    end
+    return ""
+end
+
 function iRC:GetAvailableGuildRaces()
     local races = {}
     for _, race in ipairs(self.GuildRaceOrder) do races[#races + 1] = race end
@@ -2225,7 +2294,7 @@ function iRC:IsAddonResponseRequired(connection)
     connection = connection or self:GetConnection()
     if not connection or connection.active ~= true or connection.rulesBootstrap == true then return false end
     local rules = connection.rules or self.DefaultConnectionRules
-    return rules.requireIRC == true or rules.raceLock == true or rules.nativeTongueOnly == true
+    return rules.requireIRC == true or rules.raceLock == true or rules.classLock == true or rules.nativeTongueOnly == true
         or rules.selfFoundOnly == true or rules.guildFoundOnly == true or rules.level60GuildFound == true
         or rules.sameRaceGroupsOnly == true or rules.guildGroupsOnly == true
 end
@@ -2241,6 +2310,73 @@ function iRC:IsAutomaticWarningEnabled(channel)
     local settings = connection and connection.guildNotifications
     local key = ({ OFFICER = "enableOfficerWarnings", WHISPER = "enableWhisperWarnings", GUILD = "enableGuildWarnings" })[channel]
     return key and settings and settings[key] == true or false
+end
+
+local enforcementNotificationQueue = {}
+local enforcementNotificationFlushPending = false
+local ENFORCEMENT_BUNDLE_THRESHOLD, ENFORCEMENT_BUNDLE_NAME_LIMIT = 3, 6
+
+local function enforcementSubjectList(rows)
+    local names, seen = {}, {}
+    for _, row in ipairs(rows) do
+        local name = tostring(row.subject or "")
+        local key = name:lower()
+        if name ~= "" and not seen[key] then
+            seen[key] = true
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    local visible = {}
+    for index = 1, math.min(#names, ENFORCEMENT_BUNDLE_NAME_LIMIT) do visible[index] = names[index] end
+    local label = #visible > 0 and table.concat(visible, ", ") or iRC:Text("ENFORCEMENT_WARNING_MULTIPLE_MEMBERS")
+    if #names > ENFORCEMENT_BUNDLE_NAME_LIMIT then
+        label = iRC:Text("ENFORCEMENT_WARNING_MORE", label, #names - ENFORCEMENT_BUNDLE_NAME_LIMIT)
+    end
+    return label
+end
+
+local function flushEnforcementNotifications()
+    enforcementNotificationFlushPending = false
+    local queued = enforcementNotificationQueue
+    enforcementNotificationQueue = {}
+    if not SendChatMessage then return end
+    local channels = { OFFICER = {}, GUILD = {}, WHISPER = {} }
+    for _, row in ipairs(queued) do
+        local group = channels[row.channel]
+        if group then group[#group + 1] = row end
+    end
+    local suppressedWhispers = #channels.WHISPER > ENFORCEMENT_BUNDLE_THRESHOLD and #channels.WHISPER or 0
+    for _, channel in ipairs({ "OFFICER", "GUILD", "WHISPER" }) do
+        local rows = channels[channel]
+        if #rows <= ENFORCEMENT_BUNDLE_THRESHOLD then
+            for _, row in ipairs(rows) do pcall(SendChatMessage, row.message, channel, nil, row.target) end
+        elseif channel ~= "WHISPER" then
+            local suffix = suppressedWhispers > 0
+                and iRC:Text("ENFORCEMENT_WARNING_WHISPERS_SUPPRESSED", suppressedWhispers) or ""
+            pcall(SendChatMessage, iRC:Text("ENFORCEMENT_WARNING_BUNDLE", #rows,
+                enforcementSubjectList(rows), suffix), channel)
+            iRC:DebugMsg(iRC:Text("ENFORCEMENT_WARNING_BUNDLED_DEBUG", #rows, channel), 3)
+        end
+    end
+    if suppressedWhispers > 0 then
+        iRC:DebugMsg(iRC:Text("ENFORCEMENT_WARNING_WHISPERS_DEBUG", suppressedWhispers), 2)
+    end
+end
+
+function iRC:QueueEnforcementNotification(channel, message, target, subject)
+    channel = tostring(channel or ""):upper()
+    if not SendChatMessage or message == nil
+        or channel ~= "OFFICER" and channel ~= "GUILD" and channel ~= "WHISPER" then return false end
+    enforcementNotificationQueue[#enforcementNotificationQueue + 1] = {
+        channel = channel, message = tostring(message), target = target, subject = subject,
+    }
+    if not enforcementNotificationFlushPending then
+        enforcementNotificationFlushPending = true
+        if C_Timer and C_Timer.After then C_Timer.After(0, flushEnforcementNotifications)
+        else flushEnforcementNotifications() end
+    end
+    return true
 end
 
 local function normalizeFullPlayerName(name, defaultRealm)
@@ -2431,6 +2567,21 @@ function iRC:SetConnectionRule(key, value)
     if value and key == "guildFoundTradeExceptions"
         and connection.rules.guildFoundOnly ~= true and connection.rules.level60GuildFound ~= true then return false end
     if value and key == "enableGuildDeathMessage" and not self:IsOfficialHardcoreRealm() then return false end
+    if value and key == "classLock" then
+        local guildClass = self:GetGuildMasterClass()
+        if guildClass == "" then
+            self:DebugMsg("Class Lock could not be enabled because the native Guild Master's class is not available in the roster.", 1)
+            return false
+        end
+        connection.rules.guildClass = guildClass
+        self:DebugMsg("Class Lock master class set to " .. guildClass .. ".", 3)
+        connection.rules.raceLock = false
+        connection.rules.nativeTongueOnly = false
+        connection.rules.sameRaceGroupsOnly = false
+        connection.rules.allowLevel60MixedRaceGroups = false
+    elseif value and key == "raceLock" then
+        connection.rules.classLock = false
+    end
     connection.rules[key] = value
     if key == "selfFoundOnly" or key == "guildFoundOnly" or key == "level60GuildFound"
         or key == "allowLevel60WithoutSelfFound" then
@@ -2457,6 +2608,24 @@ function iRC:SetConnectionRule(key, value)
         self.GuildMap:UpdatePins()
         if key == "guildMapEnabled" and value then self.GuildMap:SchedulePosition(3) end
     end
+    return true
+end
+
+function iRC:SetGuildAnnouncementTarget(key, value)
+    if not self:IsGuildMaster() then return false end
+    local connection = self:GetConnection()
+    if not connection then return false end
+    if key == "guildLevelAnnouncementMinimum" then
+        value = math.max(10, math.min(60, math.floor((tonumber(value) or 60) / 10) * 10))
+    elseif key == "guildProfessionAnnouncementSkill" then
+        value = math.max(75, math.min(300, math.floor((tonumber(value) or 300) / 75) * 75))
+    else
+        return false
+    end
+    connection.rules[key] = value
+    self:StampConnectionRules(connection)
+    if self.ScheduleConnectionRulesBroadcast then self:ScheduleConnectionRulesBroadcast() end
+    if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
 

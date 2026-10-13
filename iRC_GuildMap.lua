@@ -684,7 +684,8 @@ local function beginLocalLayerAssignment(candidate)
     layerTransitionBroadcastPending = false
     localLayer = nil
     GuildMap:UpdateLocalLayerDisplay()
-    return continueLocalLayerAssignment(token)
+    continueLocalLayerAssignment(token)
+    return true
 end
 
 function GuildMap:ReceiveLayerAssignment(parts, sender)
@@ -729,11 +730,18 @@ function GuildMap:ObserveLocalLayer(unit, source)
 
     local routeId = getLayerSwapId(serverId, zoneUID)
     if not routeId then return false end
+    local observedAt = GetTime and GetTime() or 0
+    if localLayer and localLayer.layerSwapId == routeId and localLayer.mapId == mapId then
+        localLayer.seenAt = observedAt
+        localLayer.number = getLayerNumber(zoneUID, serverId, instanceId, mapId)
+        return true
+    end
+    if pendingLocalLayer and pendingLocalLayer.layerSwapId == routeId
+        and pendingLocalLayer.mapId == mapId then
+        pendingLocalLayer.seenAt = observedAt
+        return true
+    end
     if layerVotedGuids[guid] then
-        if localLayer and localLayer.layerSwapId == routeId then
-            localLayer.seenAt = GetTime and GetTime() or 0
-            localLayer.number = getLayerNumber(zoneUID, serverId, instanceId, mapId)
-        end
         return false
     end
     layerVotedGuids[guid] = true
@@ -760,7 +768,7 @@ function GuildMap:ObserveLocalLayer(unit, source)
     local changed = not localLayer or localLayer.zoneUID ~= zoneUID
         or localLayer.serverId ~= serverId or localLayer.instanceId ~= instanceId
         or localLayer.mapId ~= mapId
-    beginLocalLayerAssignment({
+    local started = beginLocalLayerAssignment({
         zoneUID = zoneUID,
         layerSwapId = routeId,
         serverId = serverId,
@@ -768,13 +776,13 @@ function GuildMap:ObserveLocalLayer(unit, source)
         unitType = unitType,
         mapId = mapId,
         source = source or unit,
-        seenAt = GetTime and GetTime() or 0,
+        seenAt = observedAt,
     })
-    if changed then
+    if started and changed then
         iRC:DebugMsg("Local layer detected: zoneUID=" .. tostring(zoneUID)
             .. ", map=" .. tostring(mapId) .. ", source=" .. tostring(source or unit), 3)
     end
-    return true
+    return started == true
 end
 
 function GuildMap:RefreshLocalLayerEvidence()
@@ -1213,17 +1221,24 @@ function GuildMap:Clear()
     wipe(self.positions)
 end
 
+local cleanupRosterSnapshot
+local cleanupRosterOnline = {}
+
 function GuildMap:Cleanup()
     if not enabled() then self:Clear(); return end
     local now = GetTime()
-    local rosterOnline = {}
     if iRC.GetGuildRosterSnapshot then
-        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
-            rosterOnline[iRC:NormalizeName(member.name)] = member.online == true
+        local snapshot = iRC:GetGuildRosterSnapshot()
+        if snapshot ~= cleanupRosterSnapshot then
+            cleanupRosterSnapshot = snapshot
+            wipe(cleanupRosterOnline)
+            for _, member in ipairs(snapshot) do
+                cleanupRosterOnline[iRC:NormalizeName(member.name)] = member.online == true
+            end
         end
     end
     for name, position in pairs(self.positions) do
-        if now - (position.receivedAt or 0) > POSITION_LIFETIME or rosterOnline[name] == false then
+        if now - (position.receivedAt or 0) > POSITION_LIFETIME or cleanupRosterOnline[name] == false then
             self.positions[name] = nil
             clearPin(name)
         end

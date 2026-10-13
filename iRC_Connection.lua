@@ -357,6 +357,20 @@ local function rulesBackupChecksum(value)
     return string.format("%04x%04x", second, first)
 end
 
+local function announcementSettingsWire(rules)
+    rules = rules or {}
+    local level = math.max(10, math.min(60,
+        math.floor((tonumber(rules.guildLevelAnnouncementMinimum) or 60) / 10) * 10))
+    local profession = math.max(75, math.min(300,
+        math.floor((tonumber(rules.guildProfessionAnnouncementSkill) or 300) / 75) * 75))
+    return table.concat({ level, rules.enableGuildProfessionMessage and "1" or "0", profession }, ",")
+end
+
+local function classLockWire(rules)
+    rules = rules or {}
+    return table.concat({ rules.classLock and "1" or "0", iRC:NormalizeGuildClass(rules.guildClass) }, ",")
+end
+
 function iRC:GetConnectionRulesFingerprint(connection)
     connection = connection or self:GetConnection()
     if not connection then return nil end
@@ -912,7 +926,9 @@ function iRC:SendConnectionRules(targetName, force)
     if not self:IsGuildMaster() and not automaticRules
         and (connection.receivedRulesBackupVersion ~= 1
             or connection.receivedRulesBackup ~= rulesBackupFingerprint(rules, timestampHex, timestampSource)
-            or connection.receivedRulesRequireIRC ~= (rules.requireIRC == true)) then
+            or connection.receivedRulesRequireIRC ~= (rules.requireIRC == true)
+            or connection.receivedRulesAnnouncementSettings ~= announcementSettingsWire(rules)
+            or connection.receivedRulesClassLock ~= classLockWire(rules)) then
         self:DebugMsg(self:Text("RULES_RELAY_BLOCKED_BACKUP"), 2)
         return false
     end
@@ -953,6 +969,14 @@ function iRC:SendConnectionRules(targetName, force)
         rules.requireIRC and "1" or "0",
         rulesBackupChecksum(table.concat({
             rules.requireIRC and "1" or "0", timestampHex, tostring(timestampSource or ""),
+        }, SEP)),
+        announcementSettingsWire(rules),
+        rulesBackupChecksum(table.concat({
+            announcementSettingsWire(rules), timestampHex, tostring(timestampSource or ""),
+        }, SEP)),
+        classLockWire(rules),
+        rulesBackupChecksum(table.concat({
+            classLockWire(rules), timestampHex, tostring(timestampSource or ""),
         }, SEP)),
     }, SEP), distribution, targetName)
     if self:IsGuildMaster() and self.SendGuildContacts then self:SendGuildContacts(targetName, force) end
@@ -1101,7 +1125,11 @@ function iRC:SendGroupViolation(record)
         seenGroupViolations[violationId] = true
         record.reporter = record.reporter or self:GetPlayerName()
         self:StoreOfficerIncident(record)
-        if self:IsAutomaticWarningEnabled("OFFICER") then SendChatMessage(self:Text("GROUP_VIOLATION_OFFICER", self:FormatPlayerName(self:GetPlayerName()), instanceName, displayPlayerList(players)), "OFFICER") end
+        if self:IsAutomaticWarningEnabled("OFFICER") then
+            self:QueueEnforcementNotification("OFFICER",
+                self:Text("GROUP_VIOLATION_OFFICER", self:FormatPlayerName(self:GetPlayerName()), instanceName, displayPlayerList(players)),
+                nil, self:FormatPlayerName(self:GetPlayerName()))
+        end
         locallyReported = true
     end
     return locallyReported
@@ -1310,7 +1338,11 @@ local function handleMessage(prefix, message, distribution, sender)
                     id = violationId, reporter = sender, occurredAt = occurredAt,
                     instanceName = instanceName, players = players,
                 })
-                if iRC:IsAutomaticWarningEnabled("OFFICER") then SendChatMessage(iRC:Text("GROUP_VIOLATION_OFFICER", iRC:FormatPlayerName(sender), instanceName, displayPlayerList(players)), "OFFICER") end
+                if iRC:IsAutomaticWarningEnabled("OFFICER") then
+                    iRC:QueueEnforcementNotification("OFFICER",
+                        iRC:Text("GROUP_VIOLATION_OFFICER", iRC:FormatPlayerName(sender), instanceName, displayPlayerList(players)),
+                        nil, iRC:FormatPlayerName(sender))
+                end
             end
             -- Always acknowledge a valid repeat. The first acknowledgement may
             -- have been lost even though the officer notice was already sent.
@@ -1743,6 +1775,12 @@ local function handleMessage(prefix, message, distribution, sender)
         local expectedRequireIRCExtension = rulesBackupChecksum(table.concat({
             iRC:GetConnectionRules().requireIRC and "1" or "0", timestampHex, tostring(timestampSource or ""),
         }, SEP))
+        local expectedAnnouncementSettingsExtension = rulesBackupChecksum(table.concat({
+            announcementSettingsWire(iRC:GetConnectionRules()), timestampHex, tostring(timestampSource or ""),
+        }, SEP))
+        local expectedClassLockExtension = rulesBackupChecksum(table.concat({
+            classLockWire(iRC:GetConnectionRules()), timestampHex, tostring(timestampSource or ""),
+        }, SEP))
         if tostring(parts[3] or ""):lower() == tostring(timestampHex):lower()
             and tostring(parts[4] or ""):lower() == expected then
             if tostring(parts[5] or ""):lower() == expectedExtension
@@ -1750,7 +1788,9 @@ local function handleMessage(prefix, message, distribution, sender)
                 and tostring(parts[7] or ""):lower() == expectedRaceLockExtension
                 and tostring(parts[8] or ""):lower() == expectedGuildFoundExtension
                 and tostring(parts[9] or ""):lower() == expectedAnnouncementExtension
-                and tostring(parts[10] or ""):lower() == expectedRequireIRCExtension then
+                and tostring(parts[10] or ""):lower() == expectedRequireIRCExtension
+                and (parts[11] == nil or tostring(parts[11] or ""):lower() == expectedAnnouncementSettingsExtension)
+                and (parts[12] == nil or tostring(parts[12] or ""):lower() == expectedClassLockExtension) then
                 summarizeRulesAck(sender, timestampHex)
             else
                 if iRC.Diagnostics then
@@ -1797,6 +1837,36 @@ local function handleMessage(prefix, message, distribution, sender)
             -- value at the same rules timestamp instead of silently clearing it.
             incomingRequireIRC = true
         end
+        local announcementSettingsExtensionAbsent = parts[31] == nil
+        local announcementSettings = tostring(parts[31] or "")
+        local incomingLevelMinimum, incomingProfessionEnabled, incomingProfessionSkill = 60, false, 300
+        local levelText, professionFlag, professionText = announcementSettings:match("^(%d+),([01]),(%d+)$")
+        local announcementSettingsPresent = levelText ~= nil
+        if announcementSettingsPresent then
+            incomingLevelMinimum = tonumber(levelText) or 60
+            incomingProfessionEnabled = professionFlag == "1"
+            incomingProfessionSkill = tonumber(professionText) or 300
+        elseif announcementSettingsExtensionAbsent and incomingTimestamp == savedTimestamp
+            and connection and connection.rules then
+            incomingLevelMinimum = tonumber(connection.rules.guildLevelAnnouncementMinimum) or 60
+            incomingProfessionEnabled = connection.rules.enableGuildProfessionMessage == true
+            incomingProfessionSkill = tonumber(connection.rules.guildProfessionAnnouncementSkill) or 300
+        end
+        incomingLevelMinimum = math.max(10, math.min(60, math.floor(incomingLevelMinimum / 10) * 10))
+        incomingProfessionSkill = math.max(75, math.min(300, math.floor(incomingProfessionSkill / 75) * 75))
+        local classLockExtensionAbsent = parts[33] == nil
+        local classLockSettings = tostring(parts[33] or "")
+        local incomingClassLock, incomingGuildClass = false, ""
+        local classLockFlag, guildClassText = classLockSettings:match("^([01]),([A-Z]*)$")
+        local classLockSettingsPresent = classLockFlag ~= nil
+        if classLockSettingsPresent then
+            incomingClassLock = classLockFlag == "1"
+            incomingGuildClass = iRC:NormalizeGuildClass(guildClassText)
+        elseif classLockExtensionAbsent and incomingTimestamp == savedTimestamp
+            and connection and connection.rules then
+            incomingClassLock = connection.rules.classLock == true
+            incomingGuildClass = iRC:NormalizeGuildClass(connection.rules.guildClass)
+        end
         local timestampSourceValid = incomingTimestamp == 0
             or (timestampSource ~= "" and iRC:IsGuildMasterName(timestampSource))
         if incomingAutomaticRules then
@@ -1817,8 +1887,13 @@ local function handleMessage(prefix, message, distribution, sender)
             guildFoundTradeExceptions = parts[17] == "1",
             guildMapEnabled = parts[20] == "1",
             raceLock = parts[22] == "1",
+            classLock = incomingClassLock,
+            guildClass = incomingGuildClass,
             guildFoundOnly = parts[24] == "1",
             enableGuildLevel60Message = tostring(parts[26] or ""):sub(1, 1) == "1",
+            guildLevelAnnouncementMinimum = incomingLevelMinimum,
+            enableGuildProfessionMessage = incomingProfessionEnabled,
+            guildProfessionAnnouncementSkill = incomingProfessionSkill,
             enableGuildDeathMessage = tostring(parts[26] or ""):sub(2, 2) == "1",
             requireIRC = incomingRequireIRC,
         }
@@ -1869,10 +1944,26 @@ local function handleMessage(prefix, message, distribution, sender)
             or requireIRCFlagPresent and requireIRCChecksum == rulesBackupChecksum(table.concat({
                 incomingRules.requireIRC and "1" or "0", timestampHex, timestampSource,
             }, SEP))
+        local normalizedAnnouncementSettings = announcementSettingsWire(incomingRules)
+        local announcementSettingsChecksum = tostring(parts[32] or ""):lower()
+        local announcementSettingsChecksumValid = announcementSettingsExtensionAbsent
+            or announcementSettingsPresent and announcementSettings == normalizedAnnouncementSettings
+            and announcementSettingsChecksum == rulesBackupChecksum(table.concat({
+                normalizedAnnouncementSettings, timestampHex, timestampSource,
+            }, SEP))
+        local normalizedClassLockSettings = classLockWire(incomingRules)
+        local classLockChecksum = tostring(parts[34] or ""):lower()
+        local classLockChecksumValid = classLockExtensionAbsent
+            or classLockSettingsPresent and classLockSettings == normalizedClassLockSettings
+            and (not incomingRules.classLock or incomingRules.guildClass ~= "")
+            and classLockChecksum == rulesBackupChecksum(table.concat({
+                normalizedClassLockSettings, timestampHex, timestampSource,
+            }, SEP))
         local rulesSchemaSupported = exceptionFlagPresent and mapFlagPresent and raceLockFlagPresent
             and guildFoundFlagPresent and announcementFlagsPresent
             and exceptionChecksumValid and mapChecksumValid and raceLockChecksumValid
             and guildFoundChecksumValid and announcementChecksumValid and requireIRCChecksumValid
+            and announcementSettingsChecksumValid and classLockChecksumValid
         -- A local GM edit advances rulesTimestampHex before any received
         -- backup exists for that new timestamp. Never compare a newer stamp
         -- against a backup that still describes the previous ruleset.
@@ -1898,6 +1989,12 @@ local function handleMessage(prefix, message, distribution, sender)
         local sameStampRequireIRCMatches = replaceableRules or incomingTimestamp ~= savedTimestamp or not connection
             or connection.receivedRulesRequireIRC == nil
             or connection.receivedRulesRequireIRC == incomingRequireIRC
+        local sameStampAnnouncementSettingsMatches = replaceableRules or incomingTimestamp ~= savedTimestamp or not connection
+            or connection.receivedRulesAnnouncementSettings == nil
+            or connection.receivedRulesAnnouncementSettings == normalizedAnnouncementSettings
+        local sameStampClassLockMatches = replaceableRules or incomingTimestamp ~= savedTimestamp or not connection
+            or connection.receivedRulesClassLock == nil
+            or connection.receivedRulesClassLock == normalizedClassLockSettings
         local authorityName, authorityRank = getRulesAuthority()
         local senderIsAuthority = senderIsGuildMaster or senderRank ~= nil and (authorityRank == nil or senderRank < authorityRank
             or (senderRank == authorityRank and (not authorityName
@@ -1908,11 +2005,14 @@ local function handleMessage(prefix, message, distribution, sender)
             or not replaceableRules and incomingTimestamp >= savedTimestamp)
         local contentAccepted = checksumValid and exceptionChecksumValid and mapChecksumValid
             and raceLockChecksumValid and guildFoundChecksumValid and announcementChecksumValid
-            and requireIRCChecksumValid and sameStampMatches and sameStampRequireIRCMatches
+            and requireIRCChecksumValid and announcementSettingsChecksumValid and sameStampMatches
+            and classLockChecksumValid and sameStampRequireIRCMatches and sameStampAnnouncementSettingsMatches
+            and sameStampClassLockMatches
         local acceptRules = rulesSchemaSupported and contentAccepted and progressionIsExclusive and timestampAccepted
             and validTimestamp and incomingTimestamp <= time() + 300 and timestampSourceValid
             and (senderIsGuildMaster or senderIsAuthority)
             and (not incomingAutomaticRules or replaceableRules)
+            and not (incomingRules.raceLock and incomingRules.classLock)
         if connection and acceptRules then
             for key, value in pairs(incomingRules) do connection.rules[key] = value end
             if iRC.InvalidateGuildMemberRows then iRC:InvalidateGuildMemberRows() end
@@ -1926,6 +2026,8 @@ local function handleMessage(prefix, message, distribution, sender)
             connection.receivedRulesBackup = incomingBackup
             connection.receivedRulesBackupVersion = 1
             connection.receivedRulesRequireIRC = incomingRules.requireIRC == true
+            connection.receivedRulesAnnouncementSettings = normalizedAnnouncementSettings
+            connection.receivedRulesClassLock = normalizedClassLockSettings
             connection.receivedRulesChecksum = rulesBackupChecksum(incomingBackup)
             if iRC.Diagnostics then
                 iRC.Diagnostics:Trace("RULES_ACCEPT", sender, timestampHex, connection.receivedRulesChecksum,
@@ -1960,9 +2062,16 @@ local function handleMessage(prefix, message, distribution, sender)
             local receivedRequireIRCChecksum = rulesBackupChecksum(table.concat({
                 incomingRules.requireIRC and "1" or "0", timestampHex, timestampSource,
             }, SEP))
+            local receivedAnnouncementSettingsChecksum = rulesBackupChecksum(table.concat({
+                normalizedAnnouncementSettings, timestampHex, timestampSource,
+            }, SEP))
+            local receivedClassLockChecksum = rulesBackupChecksum(table.concat({
+                normalizedClassLockSettings, timestampHex, timestampSource,
+            }, SEP))
             send(iRC.Prefix, table.concat({ "RULES_ACK", WIRE_VERSION, timestampHex,
                 connection.receivedRulesChecksum, receivedExtensionChecksum, receivedMapChecksum, receivedRaceLockChecksum,
-                receivedGuildFoundChecksum, receivedAnnouncementChecksum, receivedRequireIRCChecksum }, SEP), "WHISPER", sender)
+                receivedGuildFoundChecksum, receivedAnnouncementChecksum, receivedRequireIRCChecksum,
+                receivedAnnouncementSettingsChecksum, receivedClassLockChecksum }, SEP), "WHISPER", sender)
         elseif connection and senderRank ~= nil then
             if iRC.Diagnostics then
                 local rejectReason = not rulesSchemaSupported and "unsupported schema"
@@ -2082,6 +2191,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_GUILD_UPDATE" then
         local unit = ...
         if unit ~= "player" then return end
+        if iRC.InvalidateConnectionCache then iRC:InvalidateConnectionCache() end
         -- Re-evaluate visible navigation and embedded management panels as soon
         -- as the player joins or leaves a guild. RefreshIfShown is delayed, so
         -- Blizzard has time to publish the new guild state first.

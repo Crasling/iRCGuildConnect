@@ -114,6 +114,9 @@ function Professions:CollectSkills()
     end
     data.guid = UnitGUID("player") or ""
     data.updatedAt = time()
+    if iRC.GuildAnnouncements and iRC.GuildAnnouncements.CheckProfessionMilestones then
+        iRC.GuildAnnouncements:CheckProfessionMilestones(found, byID)
+    end
     return data
 end
 

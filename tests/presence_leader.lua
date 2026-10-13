@@ -232,6 +232,11 @@ function GetGuildRosterInfo(index) rosterReads = rosterReads + 1; return getRost
 local rosterRows = iRC:GetGuildRosterRows()
 assert(#rosterRows == 1000 and rosterReads == 1000 and connectionReads <= 3, "large roster must use constant connection lookups")
 assert(iRC:GetGuildRosterRows() == rosterRows and rosterReads == 1000, "unchanged guild rows are reused without another roster pass")
+local connectionReadsBeforeRefresh = connectionReads
+iRC:InvalidateGuildRosterSnapshot()
+assert(iRC:GetGuildRosterRows() == rosterRows and rosterReads == 2000
+    and connectionReads <= connectionReadsBeforeRefresh + 3,
+    "an identical native roster refresh reuses all enriched member rows")
 local priorChangedRow, priorUntouchedRow = rosterRows[2], rosterRows[3]
 db.members.member0002 = { name = "Member0002", race = "Troll", lastSeen = now }
 iRC:InvalidateGuildMemberRow("Member0002")
@@ -245,7 +250,7 @@ now = now + 91
 local expiredRows = iRC:GetGuildRosterRows()
 assert(expiredRows == rosterRows and expiredRows[6] == expiringRow and expiredRows[6].verification.state == "stale",
     "presence expiry updates the affected row in place")
-assert(rosterReads == 1000 and expiredRows[3] == priorUntouchedRow,
+assert(rosterReads == 2000 and expiredRows[3] == priorUntouchedRow,
     "presence expiry does not rebuild the roster or unrelated offline rows")
 print("Large-guild test passed: 1000 members, " .. (connectionReads / 2) .. " connection lookup(s) per pass.")
 
@@ -296,6 +301,17 @@ assert(#view.rowData == 1000 and #view.rows == 7, "full verification refresh ret
 assert(rosterReads == rowsBefore and connectionReads - connectionBefore <= 5,
     "verification refresh reuses the cached roster without per-row connection lookups")
 assert(view.rows[1].OnClick == view.rowData[1].onClick, "pooled row receives current click handler")
+assert(view.rowData[1].values and view.rowData[8].verificationMember and not view.rowData[8].values,
+    "verification details are built only for rows inside the visible pool")
+local verificationCache = view.verificationCache
+offset = 499 * 48
+dashboard:RenderVisibleRows()
+assert(view.rowData[500].values and not view.rowData[500].verificationMember,
+    "a verification row is materialized when it scrolls into view")
+offset = 0
+dashboard:Refresh()
+assert(view.verificationCache == verificationCache,
+    "unchanged verification refreshes reuse the prepared member model")
 view.filters.Verification = "attention"
 dashboard:Refresh()
 assert(#view.rowData > 0 and #view.rowData < 1000, "filters still work with pooled rows")

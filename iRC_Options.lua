@@ -18,6 +18,9 @@ end
 local function BuildActiveRulesExplanation()
     if not iRC:IsGuildConnectionActive() then return iRC:Text("RULES_READ_ONLY_INACTIVE") end
     local rules, lines = iRC:GetConnectionRules(), {}
+    if rules.classLock == true then
+        lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_CLASS_LOCK", iRC:GetClassDisplayName(rules.guildClass))
+    end
     if rules.raceLock == true then
         local race = iRC:GetGuildRace()
         lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_RACE_LOCK",
@@ -49,7 +52,14 @@ local function BuildActiveRulesExplanation()
     end
     if rules.guildGroupsOnly then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_GROUPS", rules.guildGroupsMinimumLevel or 1) end
     if rules.guildMapEnabled then lines[#lines + 1] = iRC:Text("RULES_READ_ONLY_GUILD_MAP") end
-    if rules.enableGuildLevel60Message then lines[#lines + 1] = iRC:Text("ENABLE_GUILD_LEVEL60_MESSAGE") end
+    if rules.enableGuildLevel60Message then
+        lines[#lines + 1] = iRC:Text("ENABLE_GUILD_LEVEL60_MESSAGE") .. " (Level "
+            .. tostring(rules.guildLevelAnnouncementMinimum or 60) .. "+)"
+    end
+    if rules.enableGuildProfessionMessage then
+        lines[#lines + 1] = iRC:Text("ENABLE_GUILD_PROFESSION_MESSAGE") .. " (from "
+            .. tostring(rules.guildProfessionAnnouncementSkill or 300) .. ")"
+    end
     if iRC:IsOfficialHardcoreRealm() and rules.enableGuildDeathMessage then
         lines[#lines + 1] = iRC:Text("ENABLE_GUILD_DEATH_MESSAGE")
     end
@@ -1251,7 +1261,7 @@ y = connectionActionsY - 70
 local rulesEditorTopY = y - 2
 
 local guildRulesStatus
-local guildActivationCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, sameRaceLevelSlider, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local guildActivationCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, levelAnnouncementDropdown, professionAnnouncementDropdown, sameRaceLevelSlider, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
 local raceRuleUI = {}
 local homepageDescriptionUI = {}
 local guildContactRows = {}
@@ -1268,6 +1278,10 @@ guildActivationCheck, y = CreateSettingsCheckbox(connectionContent, L.GUILD_ACTI
         end
         iRC:SetGuildConnectionActive(value)
     end, nil, true)
+_, y = CreateSubcategoryHeader(connectionContent, "Class Rules", y - 2)
+raceRuleUI.classLock, y = CreateSettingsCheckbox(connectionContent, L.CLASS_LOCK_RULE, L.CLASS_LOCK_RULE_DESC, y,
+    function() return iRC:GetConnectionRules().classLock == true end,
+    function(value) iRC:SetConnectionRule("classLock", value) end, nil, true)
 _, y = CreateSubcategoryHeader(connectionContent, "Race Rules", y - 2)
 raceRuleUI.lock, y = CreateSettingsCheckbox(connectionContent, L.RACE_LOCK_RULE, L.RACE_LOCK_RULE_DESC, y,
     function() return iRC:GetConnectionRules().raceLock end,
@@ -1371,6 +1385,22 @@ raceRuleUI.level60Message, y = CreateSettingsCheckbox(connectionContent,
     L.ENABLE_GUILD_LEVEL60_MESSAGE, L.ENABLE_GUILD_LEVEL60_MESSAGE_DESC, y,
     function() return iRC:GetConnectionRules().enableGuildLevel60Message == true end,
     function(value) iRC:SetConnectionRule("enableGuildLevel60Message", value) end, nil, true)
+levelAnnouncementDropdown, y = CreateSettingsDropdown("iRCLevelAnnouncementTargetDropdown", connectionContent,
+    "First announced level", "Choose the first 10-level milestone announced in Guild Chat.", y,
+    function() return iRC:GetConnectionRules().guildLevelAnnouncementMinimum or 60 end,
+    function(value) iRC:SetGuildAnnouncementTarget("guildLevelAnnouncementMinimum", value) end,
+    function() return { 10, 20, 30, 40, 50, 60 } end,
+    function(value) return "Level " .. tostring(value) end, true)
+raceRuleUI.professionMessage, y = CreateSettingsCheckbox(connectionContent,
+    L.ENABLE_GUILD_PROFESSION_MESSAGE, L.ENABLE_GUILD_PROFESSION_MESSAGE_DESC, y,
+    function() return iRC:GetConnectionRules().enableGuildProfessionMessage == true end,
+    function(value) iRC:SetConnectionRule("enableGuildProfessionMessage", value) end, nil, true)
+professionAnnouncementDropdown, y = CreateSettingsDropdown("iRCProfessionAnnouncementTargetDropdown", connectionContent,
+    "First announced profession milestone", "Choose the first 75-skill milestone announced in Guild Chat.", y,
+    function() return iRC:GetConnectionRules().guildProfessionAnnouncementSkill or 300 end,
+    function(value) iRC:SetGuildAnnouncementTarget("guildProfessionAnnouncementSkill", value) end,
+    function() return { 75, 150, 225, 300 } end,
+    function(value) return tostring(value) end, true)
 raceRuleUI.deathMessage, y = CreateSettingsCheckbox(connectionContent,
     L.ENABLE_GUILD_DEATH_MESSAGE, L.ENABLE_GUILD_DEATH_MESSAGE_DESC, y,
     function() return iRC:GetConnectionRules().enableGuildDeathMessage == true end,
@@ -3053,6 +3083,7 @@ local function Refresh()
     RefreshAllManagementConnectionCards(connection)
     guildActivationCheck:Refresh()
     raceRuleUI.lock:Refresh()
+    raceRuleUI.classLock:Refresh()
     raceRuleUI.race:Refresh()
     raceRuleUI.language:Refresh()
     progressionModeDropdown:Refresh()
@@ -3061,6 +3092,9 @@ local function Refresh()
     if refreshGuildFoundTradeItemList then refreshGuildFoundTradeItemList() end
     guildMapRuleCheck:Refresh()
     raceRuleUI.level60Message:Refresh()
+    levelAnnouncementDropdown:Refresh()
+    raceRuleUI.professionMessage:Refresh()
+    professionAnnouncementDropdown:Refresh()
     raceRuleUI.deathMessage:Refresh()
     raceRuleUI.groups:Refresh()
     refreshingSameRaceLevel = true
@@ -3090,6 +3124,7 @@ local function Refresh()
     local homepageData = connection and connection.guildHomepageDescription or { text = "", timestamp = 0, editedBy = "" }
     local homepageIcon = connection and connection.guildHomepageIcon or { icon = 0 }
     local customIconEnabled = canEditHomepage and iRC:GetConnectionRules().raceLock == false
+        and iRC:GetConnectionRules().classLock ~= true
     for index, button in ipairs(homepageDescriptionUI.iconButtons) do
         button:SetEnabled(customIconEnabled and true or false)
         local selected = tonumber(homepageIcon.icon) == index
@@ -3207,6 +3242,7 @@ local function Refresh()
     guildActivationCheck:SetEnabled(isGuildMaster and true or false)
     local raceLockEnabled = guildActive and iRC:GetConnectionRules().raceLock == true
     raceRuleUI.lock:SetEnabled(isGuildMaster and guildActive and true or false)
+    raceRuleUI.classLock:SetEnabled(isGuildMaster and guildActive and true or false)
     if isGuildMaster and raceLockEnabled then
         UIDropDownMenu_EnableDropDown(raceRuleUI.race)
     else
@@ -3225,6 +3261,17 @@ local function Refresh()
     guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
     guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     raceRuleUI.level60Message:SetEnabled(isGuildMaster and guildActive and true or false)
+    if isGuildMaster and guildActive and iRC:GetConnectionRules().enableGuildLevel60Message then
+        UIDropDownMenu_EnableDropDown(levelAnnouncementDropdown)
+    else
+        UIDropDownMenu_DisableDropDown(levelAnnouncementDropdown)
+    end
+    raceRuleUI.professionMessage:SetEnabled(isGuildMaster and guildActive and true or false)
+    if isGuildMaster and guildActive and iRC:GetConnectionRules().enableGuildProfessionMessage then
+        UIDropDownMenu_EnableDropDown(professionAnnouncementDropdown)
+    else
+        UIDropDownMenu_DisableDropDown(professionAnnouncementDropdown)
+    end
     local deathMessageAvailable = iRC:IsOfficialHardcoreRealm()
     raceRuleUI.deathMessage:Show()
     connectionContent:SetHeight(math.abs(deathMessageBottomY) + 20)
@@ -3244,10 +3291,12 @@ local function Refresh()
     local rules = iRC:GetConnectionRules()
     SetRuleVisualState(guildActivationCheck, guildActive)
     SetRuleVisualState(raceRuleUI.lock, rules.raceLock)
+    SetRuleVisualState(raceRuleUI.classLock, rules.classLock)
     SetRuleVisualState(raceRuleUI.language, rules.raceLock and rules.nativeTongueOnly)
     SetRuleVisualState(guildFoundTradeExceptionsCheck, rules.guildFoundTradeExceptions)
     SetRuleVisualState(guildMapRuleCheck, rules.guildMapEnabled)
     SetRuleVisualState(raceRuleUI.level60Message, rules.enableGuildLevel60Message)
+    SetRuleVisualState(raceRuleUI.professionMessage, rules.enableGuildProfessionMessage)
     SetRuleVisualState(raceRuleUI.deathMessage, rules.enableGuildDeathMessage)
     SetRuleVisualState(raceRuleUI.groups, rules.raceLock and rules.sameRaceGroupsOnly)
     SetRuleVisualState(raceRuleUI.level60Exception, rules.raceLock and rules.sameRaceGroupsOnly and rules.allowLevel60MixedRaceGroups)
