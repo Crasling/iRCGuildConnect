@@ -2,8 +2,15 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Optional outgoing-chat roleplay filters
+--
+-- Transformations are personal, race-specific flavor settings. Links and other
+-- protected chat markup are preserved exactly while visible text is rewritten.
+
 local Roleplay = {}
 iRC.Roleplay = Roleplay
+
+-- Character settings and race gates ----------------------------------------
 
 function Roleplay:GetPlayerSettings()
     iRCCharDB = iRCCharDB or {}
@@ -229,6 +236,8 @@ local undeadWordReplacements = {
     { "wait", "linger" },
 }
 
+-- Text transformation -------------------------------------------------------
+
 local function caseInsensitivePattern(phrase)
     local pattern = {}
     for index = 1, #phrase do
@@ -301,6 +310,8 @@ function Roleplay:TransformUndeadSpeak(text)
 end
 
 local hookedEditBoxes = setmetatable({}, { __mode = "k" })
+
+-- Chat hooks ----------------------------------------------------------------
 
 local function transformEditBox(editBox)
     if not editBox or not editBox.GetText or not editBox.SetText then return end

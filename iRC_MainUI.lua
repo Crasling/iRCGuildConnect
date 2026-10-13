@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Main iRC window
+--
+-- This module builds the shared shell and its roster, log, management, guild
+-- overview, and leaderboard pages. Most long lists use reusable visible rows;
+-- their data continues to live in the feature modules that produce it.
+
 local UI = {}
 iRC.MainUI = UI
 local expandedGuildCards = {}
@@ -12,6 +18,8 @@ local GUILD_MEMBER_ROW_HEIGHT = 52
 local GUILD_MEMBER_ROW_SPACING = 56
 local MEMBER_MANAGEMENT_ROW_HEIGHT = 44
 local MEMBER_MANAGEMENT_ROW_SPACING = 48
+
+-- Guild-card and shared presentation helpers -------------------------------
 
 -- A Self-Found journey that transitions at the level cap is ultimately a
 -- Guild-Found ruleset, so present and filter it consistently as Guild-Found.
@@ -44,6 +52,30 @@ local function getGuildCardTag(group)
     if homepageTag == "PVP" then return "PvP", { 1.00, 0.38, 0.32 } end
     if homepageTag == "RP" then return "RP", { 0.72, 0.55, 1.00 } end
     return "Normal", { 0.72, 0.72, 0.72 }
+end
+
+local function coloredGuildTag(label, color)
+    if not label or label == "" then return nil end
+    color = color or { 0.72, 0.72, 0.72 }
+    local function channel(value)
+        return math.max(0, math.min(255, math.floor((tonumber(value) or 1) * 255 + 0.5)))
+    end
+    return string.format("|cff%02x%02x%02x[%s]|r", channel(color[1]), channel(color[2]),
+        channel(color[3]), tostring(label))
+end
+
+local function getGuildCardTags(group, includePrimary)
+    local tags = {}
+    if includePrimary ~= false then
+        local tag, color = getGuildCardTag(group)
+        local formatted = coloredGuildTag(tag, color)
+        if formatted then tags[#tags + 1] = formatted end
+    end
+    local language = tostring(group and group.guildPreferredLanguage or "")
+    if language ~= "" then
+        tags[#tags + 1] = coloredGuildTag(language, { 0.95, 0.76, 0.34 })
+    end
+    return table.concat(tags, " ")
 end
 
 local function getCurrentGuildStatsFilter()
@@ -180,6 +212,8 @@ local function createBackdrop(frame, color, border)
     frame:SetBackdropColor(unpack(color))
     frame:SetBackdropBorderColor(unpack(border))
 end
+
+-- Reusable controls and row templates --------------------------------------
 
 local function makeIRCActionButton(parent, width, height, text, destructive)
     local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
@@ -385,6 +419,9 @@ local function makeRaceCard(parent)
     card.race:SetTextColor(unpack(COLORS.gold))
     card.tag = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     card.tag:SetPoint("LEFT", card.race, "RIGHT", 9, 0)
+    card.tag:SetPoint("RIGHT", card, "RIGHT", -48, 0)
+    card.tag:SetJustifyH("LEFT")
+    card.tag:SetWordWrap(false)
     card.rank = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     card.rank:SetPoint("TOPRIGHT", -14, -16)
     card.rank:SetTextColor(unpack(COLORS.gold))
@@ -574,17 +611,27 @@ do
     end
 end
 
-local function getCharacterNavigationSettings()
+-- Account-wide navigation customization -----------------------------------
+
+local function getAccountNavigationSettings()
+    iRCDB = iRCDB or {}
     iRCCharDB = iRCCharDB or {}
-    if type(iRCCharDB.navigationMenu) ~= "table" then iRCCharDB.navigationMenu = {} end
-    local settings = iRCCharDB.navigationMenu
+    if type(iRCDB.navigationMenu) ~= "table" then
+        -- v0.5.27 stored this layout per character. The first character opened
+        -- after upgrading supplies the initial account-wide layout.
+        iRCDB.navigationMenu = type(iRCCharDB.navigationMenu) == "table"
+            and iRCCharDB.navigationMenu or {}
+    end
+    -- Access remains character-specific; only presentation preferences move.
+    iRCCharDB.navigationMenu = nil
+    local settings = iRCDB.navigationMenu
     if type(settings.order) ~= "table" then settings.order = {} end
     if type(settings.hidden) ~= "table" then settings.hidden = {} end
     return settings
 end
 
 local function getNavigationPageOrder()
-    local settings = getCharacterNavigationSettings()
+    local settings = getAccountNavigationSettings()
     local known, order = {}, {}
     for _, item in ipairs(NAVIGATION_PAGES) do known[item.id] = item end
     for _, id in ipairs(settings.order) do
@@ -619,11 +666,11 @@ local function getOrderedNavigationItems()
 end
 
 local function isNavigationPageHidden(id)
-    return getCharacterNavigationSettings().hidden[id] == true
+    return getAccountNavigationSettings().hidden[id] == true
 end
 
 local function setNavigationPageHidden(id, hidden)
-    getCharacterNavigationSettings().hidden[id] = hidden and true or nil
+    getAccountNavigationSettings().hidden[id] = hidden and true or nil
 end
 
 local function moveNavigationPage(id, direction, eligible)
@@ -639,7 +686,7 @@ local function moveNavigationPage(id, direction, eligible)
         if targetItem and targetItem.navigationSection == section
             and (not eligible or eligible(targetItem)) then
             order[index], order[target] = order[target], order[index]
-            getCharacterNavigationSettings().order = order
+            getAccountNavigationSettings().order = order
             return true
         end
         target = target + direction
@@ -682,6 +729,8 @@ local function currentGuildNavigationName()
     if not name or name == "" then return "Current Guild" end
     return #name > 24 and (name:sub(1, 21) .. "...") or name
 end
+
+-- Roster management helpers -------------------------------------------------
 
 local function getProfile(frame)
     if not frame.subjectName or iRC:NormalizeName(frame.subjectName) == iRC:NormalizeName(iRC:GetPlayerName()) then
@@ -910,6 +959,10 @@ local function createMemberProfessionSearch(main, frame)
     return search
 end
 
+-- One-time frame construction ----------------------------------------------
+
+-- Create builds every page once. The update functions below populate only the
+-- active page, while virtualized lists render just the rows inside the viewport.
 function UI:Create()
     if self.frame then return self.frame end
 
@@ -2714,7 +2767,7 @@ function UI:Create()
     navigationEditor.description:SetPoint("TOPRIGHT", navigationEditor, "TOPRIGHT", -48, -42)
     navigationEditor.description:SetJustifyH("LEFT")
     navigationEditor.description:SetTextColor(unpack(COLORS.gray))
-    navigationEditor.description:SetText("Character-only layout. Show or hide pages and move them within their section.")
+    navigationEditor.description:SetText("Account-wide layout. Show or hide pages and move them within their section.")
 
     local navigationEditorList = CreateFrame("Frame", nil, navigationEditor, "BackdropTemplate")
     navigationEditorList:SetPoint("TOPLEFT", navigationEditor, "TOPLEFT", 18, -74)
@@ -2878,8 +2931,8 @@ function UI:Create()
     local navigationEditorReset = makeIRCActionButton(navigationEditor, 145, 28, "Reset to Default", false)
     navigationEditorReset:SetPoint("RIGHT", navigationEditorDone, "LEFT", -8, 0)
     navigationEditorReset:SetScript("OnClick", function()
-        iRCCharDB = iRCCharDB or {}
-        iRCCharDB.navigationMenu = nil
+        iRCDB = iRCDB or {}
+        iRCDB.navigationMenu = nil
         navigationEditor:Refresh()
         frame.LayoutNavigation()
     end)
@@ -4099,6 +4152,9 @@ function UI:Create()
             iRC.Colors.Green)
         lines[#lines + 1] = infoLine("Average level", string.format("%.1f", tonumber(group.averageLevel) or 0))
         lines[#lines + 1] = infoLine("Guild deaths", group.guildDeaths or 0)
+        if tostring(group.guildPreferredLanguage or "") ~= "" then
+            lines[#lines + 1] = infoLine("Preferred language", group.guildPreferredLanguage)
+        end
         if group.rulesKnown and type(group.rules) == "table" then
             local progression = tostring(iRC:GetProgressionMode(group.rules) or "Standard")
                 :gsub("_", " "):lower():gsub("^%l", string.upper)
@@ -4623,6 +4679,8 @@ function UI:Create()
     return frame
 end
 
+-- Personal settings page ----------------------------------------------------
+
 local function ensurePersonalSettings(frame)
     if frame.personalSettings then return frame.personalSettings end
 
@@ -5017,6 +5075,8 @@ function UI:ConfirmDisableGuildConnection()
     frame.disableConfirm:Raise()
 end
 
+-- Guild-member list ---------------------------------------------------------
+
 function UI:RenderMemberRows()
     local frame = self.frame
     if not frame or frame.category ~= "Guild Members" then return end
@@ -5180,6 +5240,8 @@ local function memberManagementRowClick(row, button)
         frame:OpenMemberRemoval(row.managementMember, row.managementAction)
     end
 end
+
+-- Member-management lists ---------------------------------------------------
 
 function UI:RenderMemberManagementRows()
     local frame = self.frame
@@ -5354,6 +5416,8 @@ local GUILD_LOG_COLORS = {
     DEMOTE = { 1.00, 0.55, 0.20 }, LEAVE = { 1.00, 0.50, 0.50 }, KICK = { 1.00, 0.25, 0.20 }, NAME = COLORS.gold,
     LEVEL = COLORS.green, RETURN = COLORS.green, NOTE = COLORS.parchment, OFFICER_NOTE = COLORS.parchment,
 }
+
+-- Guild activity log --------------------------------------------------------
 
 local function formatGuildLogDate(timestamp)
     if not timestamp then return "Date unknown" end
@@ -5636,6 +5700,8 @@ local function updateGuildLog(frame)
     frame.contentSubtitle:SetText(#records > 0 and iRC:Text("GUILD_LOG_DESCRIPTION")
         or (query ~= "" and iRC:Text("GUILD_LOG_NO_SEARCH_RESULTS") or iRC:Text("GUILD_LOG_EMPTY")))
 end
+
+-- Rank and removal management ----------------------------------------------
 
 local function updateInactiveMembers(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
@@ -5941,6 +6007,8 @@ end
 local GUILD_HEALTH_CLASS_ORDER = {
     "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID",
 }
+
+-- Guild overview and rules --------------------------------------------------
 
 local function makeGuildHealthPanel(parent, title, width, height)
     local panel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
@@ -6682,6 +6750,8 @@ local function updateGuildRules(frame)
     end
 end
 
+-- Public guild leaderboard --------------------------------------------------
+
 local function formatNumber(value)
     local number = math.floor(tonumber(value) or 0)
     local sign = number < 0 and "-" or ""
@@ -6853,10 +6923,10 @@ local function setRaceCard(card, group, rank, forceExpanded)
     setGuildCardIcon(card.icon, group)
     card.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
     card.rank:SetText("#" .. rank)
-    local tag, tagColor = getGuildCardTag(group)
-    card.tag:SetText(tag and ("[" .. tag .. "]") or "")
-    if tagColor then card.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
-    card.tag:SetShown(tag ~= nil)
+    local tags = getGuildCardTags(group, true)
+    card.tag:SetText(tags)
+    card.tag:SetTextColor(1, 1, 1)
+    card.tag:SetShown(tags ~= "")
     card.average:SetText(group.activeLevel30 ~= nil and formatNumber(group.activeLevel30) or "—")
     card.members:SetText(formatNumber(group.activePlayers or 0))
     card.total:SetText(group.activeMembers ~= nil and formatNumber(group.activeMembers) or "—")
@@ -7001,13 +7071,13 @@ local function updateRacePodium(frame, rankedGroups)
         if group then
             setGuildCardIcon(entry.icon, group)
             entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
-            local tag, tagColor = getGuildCardTag(group)
-            local showTag = guildStatsFilter == "ALL" and tag ~= nil
+            local tags = getGuildCardTags(group, guildStatsFilter == "ALL")
+            local showTag = tags ~= ""
             entry.race:ClearAllPoints()
             entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, showTag and 7 or 0)
             entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, showTag and 7 or 0)
-            entry.tag:SetText(showTag and ("[" .. tag .. "]") or "")
-            if tagColor then entry.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
+            entry.tag:SetText(tags)
+            entry.tag:SetTextColor(1, 1, 1)
             entry.tag:SetShown(showTag)
             local selectedGroup, selectedRank = group, rank
             entry:SetScript("OnClick", function()
@@ -7156,6 +7226,8 @@ local function updateRaceOverview(frame)
     frame.contentSubtitle:SetText(iRC:Text("RL_GRID_OVERVIEW_DESC"))
     return #allGroups
 end
+
+-- Page refresh and window lifecycle ----------------------------------------
 
 function UI:Refresh()
     self.pendingRefresh = nil

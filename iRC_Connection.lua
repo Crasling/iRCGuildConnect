@@ -2,6 +2,16 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Guild connection protocol
+--
+-- This module owns the shared guild state carried on iRC's main addon prefix:
+-- activation, live member profiles, rules, permissions, homepage settings,
+-- enforcement incidents, and their startup/periodic synchronization. Feature
+-- modules such as Recruitment, Identity, and Professions parse their own
+-- packets after this file routes the message to them.
+
+-- Wire format and short-lived session state ---------------------------------
+
 local SEP = "\t"
 local WIRE_VERSION = "10"
 -- Warning bits changed from "disabled" to "enabled" in 0.5.9. Keep this
@@ -24,6 +34,8 @@ local pendingRulesBroadcast
 local profileDebugSummary = { count = 0, names = {}, scheduled = false }
 local rulesAckSummaries = {}
 iRC.ConnectionSessionStartedAt = time()
+
+-- Small transport and scheduling helpers -----------------------------------
 
 local function displayPlayerList(names)
     return (tostring(names or ""):gsub("[^,]+", function(name)
@@ -54,6 +66,11 @@ local function split(message)
     return values
 end
 
+-- Live member profiles ------------------------------------------------------
+
+-- Profiles use fixed field positions for wire compatibility. Some retired
+-- fields remain as zeroes/placeholders so released clients keep reading all
+-- later fields at the same indexes.
 local function profileWireParts(profile)
     local evidence = profile.selfFoundEvidence or {}
     return {
@@ -103,6 +120,8 @@ local function profileFromWire(parts, startIndex)
 end
 
 local function scheduleProfileUIRefresh()
+    -- Several HELLO replies can arrive together. Coalesce their UI work into
+    -- one refresh instead of rebuilding visible lists for every packet.
     if iRC:DeferLowTraffic("ui:profiles", scheduleProfileUIRefresh) then return end
     if profileUIRefreshPending then return end
     if not C_Timer or not C_Timer.After then
@@ -119,6 +138,8 @@ local function scheduleProfileUIRefresh()
 end
 
 local function summarizeProfileDebug(sender)
+    -- Debug mode reports a useful total instead of printing one line per guild
+    -- member during a presence poll in a large guild.
     if not iRC:GetSettings().debugMode then return end
     local key = iRC:NormalizeName(sender)
     if not profileDebugSummary.names[key] then
@@ -216,6 +237,8 @@ function iRC:SendHello(targetName)
 end
 
 local function scheduleHello(targetName, maximumDelay)
+    -- Randomized replies prevent every online member from answering a guild
+    -- presence request in the same frame. The key also collapses duplicates.
     local key = targetName and ("whisper:" .. iRC:NormalizeName(targetName)) or "guild"
     if pendingHello[key] then return false end
     if not C_Timer or not C_Timer.After then iRC:SendHello(targetName); return true end
@@ -258,6 +281,11 @@ function iRC:RequestGuildActivation(force)
     return true
 end
 
+-- Rule authority ------------------------------------------------------------
+
+-- Authority is derived from the live guild roster, not from names supplied by
+-- incoming packets. Test-admin overrides are deliberately limited to known
+-- test accounts.
 local function getRosterRank(name)
     if type(name) ~= "string" or not GetNumGuildMembers or not GetGuildRosterInfo then return nil end
     local wanted = iRC:NormalizeName(name)
@@ -303,6 +331,9 @@ local function rankHasDelegatedPermission(rankIndex, connection, memberName)
 end
 
 local function getRulesAuthority()
+    -- Elect the highest-authority recently seen iRC user. Equal ranks use the
+    -- normalized character name as a stable tie-breaker, ensuring only one
+    -- client performs routine relays.
     local connection = iRC:GetConnection()
     if not connection or connection.active ~= true then return nil end
     local ownName, now = iRC:GetPlayerName(), time()
@@ -329,6 +360,8 @@ local function getRulesAuthority()
     return bestName, bestRank
 end
 
+-- Packet fingerprints and compact settings ---------------------------------
+
 local function rulesBackupFingerprint(rules, timestampHex, timestampSource)
     rules = rules or {}
     return table.concat({
@@ -349,6 +382,9 @@ local function rulesBackupFingerprint(rules, timestampHex, timestampSource)
 end
 
 local function rulesBackupChecksum(value)
+    -- This Adler-style checksum detects damaged or mismatched packet contents.
+    -- It is an integrity fingerprint, not authentication; sender rank and guild
+    -- membership checks provide the protocol's trust boundary.
     local first, second = 1, 0
     for index = 1, #value do
         first = (first + value:byte(index)) % 65521
@@ -391,6 +427,8 @@ local TRADE_EXCEPTION_KEYS = {
 }
 
 local function tradeExceptionsMask(settings)
+    -- Booleans are packed into a bit mask to keep addon messages comfortably
+    -- below WoW's payload limit.
     local mask = 0
     for index, key in ipairs(TRADE_EXCEPTION_KEYS) do
         if settings and settings[key] == true then mask = mask + (2 ^ (index - 1)) end
@@ -457,6 +495,8 @@ local function memberPermissionsChecksum(name, mask, timestamp, source)
     return rulesBackupChecksum(table.concat({ tostring(name or ""), tostring(mask or 0),
         tostring(timestamp or 0), tostring(source or "") }, SEP))
 end
+
+-- Permission broadcasts -----------------------------------------------------
 
 function iRC:SendMemberPermissions(memberName, targetName, force)
     if not force and self:DeferLowTraffic("traffic:member-permissions:" .. tostring(memberName or "all"),
@@ -531,6 +571,11 @@ function iRC:SendRankPermissions(targetName, force)
     return true
 end
 
+-- Management conflict tracking ---------------------------------------------
+
+-- Management packets are last-write-wins by timestamp. These helpers handle
+-- the exceptional case where two different values share the same timestamp,
+-- allowing the Guild Master to choose rather than silently discarding a side.
 local function validBranchChecksum(value)
     value = tostring(value or ""):lower()
     return value == "root" or value:match("^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$") ~= nil
@@ -615,6 +660,11 @@ local function sendManagementConflict(target, kind, value, timestamp, source, ch
     }, SEP), "WHISPER", target)
 end
 
+-- Outgoing guild-management data -------------------------------------------
+
+-- A target name changes a normal guild broadcast into a direct bootstrap
+-- whisper. Unless force is true, low-traffic mode and broadcaster election
+-- spread these larger, non-urgent updates out.
 function iRC:SendGuildManagementSettings(targetName, force)
     if not force and self:DeferLowTraffic("traffic:management:" .. tostring(targetName or "guild"), function() iRC:SendGuildManagementSettings(targetName, force) end) then return false end
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
@@ -765,6 +815,8 @@ function iRC:SetGuildContactNote(name, note)
     return true
 end
 
+-- Local notification and Guild-Found settings ------------------------------
+
 function iRC:SetNewMemberWelcomeEnabled(enabled)
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("notifications") then return false end
     local connection = self:GetConnection()
@@ -885,6 +937,8 @@ function iRC:IsRulesetBroadcaster()
     return isSelf, name, rank
 end
 
+-- Ruleset synchronization ---------------------------------------------------
+
 function iRC:ScheduleConnectionRulesBroadcast()
     if not C_Timer or not C_Timer.After then return self:SendConnectionRules(nil, true) end
     local guildKey = self:GetGuildKey()
@@ -994,6 +1048,9 @@ function iRC:RequestConnectionRules()
 end
 
 function iRC:ForceGuildSync()
+    -- Manual sync intentionally touches every connection data family. Routine
+    -- traffic uses staggered timers below; this path is the explicit recovery
+    -- tool and therefore sends immediately outside combat.
     if self:IsLowTrafficMode() then
         self:Print(self.Colors.Yellow .. self:Text("FORCE_GUILD_SYNC_COMBAT") .. self.Colors.Reset)
         return false
@@ -1036,6 +1093,8 @@ function iRC:PollGuildPresence()
     if not self:IsGuildConnectionActive() or not self:HasGuildPermission("presence") or time() - lastPresencePollAt < 55 then return false end
     return self:RequestGuildPresence(true)
 end
+
+-- Enforcement audit and incident relay -------------------------------------
 
 local function cleanWireText(value, limit)
     return tostring(value or ""):gsub("[%c]", " "):sub(1, limit)
@@ -1091,6 +1150,8 @@ function iRC:RecordGuildFoundAudit(action, target)
 end
 
 function iRC:UploadGuildFoundAudit(targetName)
+    -- Only recent records created by this character are replayed. Uploads are
+    -- capped and rate-limited so officer login does not flood whispers.
     local targetRank = getRosterRank(targetName)
     if targetRank == nil or targetRank > 1 then return false end
     local key, now = self:NormalizeName(targetName), time()
@@ -1159,6 +1220,8 @@ function iRC:StoreOfficerIncident(record)
 end
 
 function iRC:UploadOfficerIncidentsToGM(targetName)
+    -- Rank 1 acts as the incident collector when the Guild Master is offline;
+    -- those records are handed directly to rank 0 when they next appear.
     local ownRankIndex
     if GetGuildInfo then
         local _, _, playerRankIndex = GetGuildInfo("player")
@@ -1190,7 +1253,12 @@ local function senderIsKnown(sender)
     return connection and connection.members[iRC:NormalizeName(sender)] ~= nil
 end
 
+-- Incoming packet dispatcher -----------------------------------------------
+
 local function isUnchangedManagementPacket(parts)
+    -- Periodic relays commonly repeat data already stored locally. Recognizing
+    -- exact repeats here avoids checksum work, writes, and unnecessary UI
+    -- refreshes farther down the dispatcher.
     local kind = parts[1]
     if kind ~= "GUILD_SETTINGS" and kind ~= "GF_TRADE_EXCEPTIONS"
         and kind ~= "GUILD_HOMEPAGE_DESC" then return false end
@@ -1235,10 +1303,17 @@ local function scheduleReceivedManagementUIRefresh()
 end
 
 local function handleMessage(prefix, message, distribution, sender)
+    -- Every branch below is a trust boundary. A packet must match its version,
+    -- expected channel, guild membership, permission/authority, timestamp, and
+    -- checksum requirements before it can change saved state.
     if prefix ~= iRC.Prefix or not iRC:IsInGuildConnection() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     local parts, kind = split(message), nil
     kind = parts[1]
+
+    -- These feature modules share the main prefix but own their schemas and
+    -- storage. Route them early so this already-large dispatcher stays focused
+    -- on connection state.
     if kind == "RECRUIT_STATUS" or kind == "RECRUIT_REQUEST" then
         if iRC.Recruitment and iRC:IsGuildMemberName(sender) then iRC.Recruitment:ReceiveSync(parts, sender) end
         return
@@ -1304,6 +1379,9 @@ local function handleMessage(prefix, message, distribution, sender)
         return
     end
     if not iRC:IsGuildConnectionActive() then return end
+
+    -- Presence, enforcement, and audit packets ------------------------------
+
     if kind == "HELLO" and parts[2] == WIRE_VERSION then
         local profile = profileFromWire(parts, 3)
         if profile and iRC:NormalizeName(profile.name) == iRC:NormalizeName(sender) then
@@ -1376,6 +1454,8 @@ local function handleMessage(prefix, message, distribution, sender)
             })
         end
     elseif kind == "GUILD_MASTER_RANK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        -- Permission packets are accepted only from the appropriate authority.
+        -- Each value is range-checked and tied to its timestamp by a checksum.
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
         local value, timestamp, checksum = tonumber(parts[3]), tonumber(parts[4]), tostring(parts[5] or ""):lower()
@@ -1507,6 +1587,8 @@ local function handleMessage(prefix, message, distribution, sender)
             if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
         end
     elseif kind == "GUILD_SETTINGS" and parts[2] == GUILD_SETTINGS_VERSION and iRC:IsGuildMemberName(sender) then
+        -- Notification settings have their own wire version because the mask's
+        -- meaning changed in an older release and cannot be guessed safely.
         local connection = iRC:GetConnection()
         local senderRank = getRulesRank(sender, connection)
         local senderIsGuildMaster = rankHasGuildMasterAuthority(senderRank, connection)
@@ -1566,6 +1648,8 @@ local function handleMessage(prefix, message, distribution, sender)
             end
         end
     elseif kind == "GUILD_HOMEPAGE_DESC" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        -- Homepage/contact packets form one management family. Newer valid
+        -- timestamps replace older values and trigger one deferred UI refresh.
         if iRC:DeferLowTraffic("traffic:homepage-description-receive:" .. iRC:NormalizeName(sender), function()
             handleMessage(prefix, message, distribution, sender)
         end) then return end
@@ -1753,6 +1837,8 @@ local function handleMessage(prefix, message, distribution, sender)
             end
         end
     elseif kind == "RULES_ACK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
+        -- An acknowledgement repeats the checksums for every rules extension.
+        -- This confirms that the receiver interpreted the exact same ruleset.
         local connection = iRC:GetConnection()
         local timestampHex, timestampSource = iRC:EnsureConnectionRulesTimestamp(connection)
         local expected = rulesBackupChecksum(rulesBackupFingerprint(iRC:GetConnectionRules(), timestampHex, timestampSource))
@@ -1807,6 +1893,9 @@ local function handleMessage(prefix, message, distribution, sender)
             iRC:DebugMsg(iRC:Text("RULES_CHECKSUM_ACK_MISMATCH", sender), 1)
         end
     elseif kind == "RULES" and parts[2] == WIRE_VERSION then
+        -- Rules reception has four phases: decode the base packet and optional
+        -- extensions, validate every checksum, decide timestamp/authority, then
+        -- commit atomically and acknowledge the accepted fingerprint.
         iRC:CheckForNewVersion(parts[19])
         local connection = iRC:GetConnection()
         local timestampHex = tostring(parts[14] or "0"):lower()
@@ -2116,6 +2205,8 @@ local function handleMessage(prefix, message, distribution, sender)
     end
 end
 
+-- Login, guild-change, and periodic synchronization -------------------------
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -2125,6 +2216,8 @@ local startupSyncScheduled = false
 local routineManagementRelayUntil = 0
 local routineManagementRelayGuildKey
 local function scheduleRoutineManagementRelays()
+    -- Management families are staggered five seconds apart. This keeps a login
+    -- or guild update from creating one large burst on the addon-message queue.
     local guildKey = iRC:GetGuildKey()
     if not guildKey or (guildKey == routineManagementRelayGuildKey and GetTime() < routineManagementRelayUntil) then return end
     routineManagementRelayGuildKey = guildKey
@@ -2142,6 +2235,8 @@ local function scheduleRoutineManagementRelays()
     end
 end
 local function scheduleStartupSync()
+    -- Startup waits for the shared traffic delay and retries briefly while the
+    -- Blizzard guild APIs finish populating after login or reload.
     if startupSyncScheduled then return end
     startupSyncScheduled = true
     C_Timer.After(iRC:GetStartupTrafficDelay(), function()

@@ -1,5 +1,6 @@
 -- Generated from censor-text/profanity-list (Unlicense).
 -- Source copied from Other/profanity-list-main; edit the source lists and regenerate this file.
+-- Keep hand-written logic below the generated table; do not edit entries here.
 local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
@@ -5262,12 +5263,14 @@ local unicodeCaseFolds = {
     { "Я", "я" },
 }
 
+-- Reduce punctuation and capitalization differences before whole-token lookup.
 local function normalize(value)
     local text = tostring(value or ""):lower()
     for _, pair in ipairs(unicodeCaseFolds) do text = text:gsub(pair[1], pair[2]) end
     return text
 end
 
+-- Callers decide whether a positive match should reject, hide, or warn.
 function iRC:ContainsProfanity(value)
     local text = normalize(value)
     if text == "" then return false end

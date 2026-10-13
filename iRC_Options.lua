@@ -3,6 +3,12 @@ local iRC = private and private.iRC
 if not iRC then return end
 local L = iRC.L
 
+-- Blizzard Settings panel and guild-management pages
+--
+-- Personal options are stored per character/account as appropriate. Synced
+-- guild controls write through Core/Connection and are shown read-only when
+-- the current character lacks the required permission.
+
 local ORANGE = iRC.ColorValues.Orange
 local CHECKBOX_TEMPLATE = InterfaceOptionsCheckButtonTemplate and "InterfaceOptionsCheckButtonTemplate" or "UICheckButtonTemplate"
 
@@ -67,6 +73,8 @@ local function BuildActiveRulesExplanation()
     for index, line in ipairs(lines) do lines[index] = "|cffffa31a•|r " .. line end
     return table.concat(lines, "\n\n")
 end
+
+-- Reusable settings controls ------------------------------------------------
 
 local function CreateSectionHeader(parent, text, yOffset)
     local header = CreateFrame("Frame", nil, parent, "BackdropTemplate")
@@ -621,6 +629,8 @@ local function CreateCompactManagementDropdown(frameName, parent, label, yOffset
     return dropdown, yOffset - rowHeight - 7
 end
 
+-- Synchronization status cards ---------------------------------------------
+
 local function FormatRulesetTime(timestamp)
     timestamp = tonumber(timestamp) or 0
     if timestamp <= 0 then return L.RULESET_METADATA_UNKNOWN end
@@ -782,6 +792,8 @@ contentArea:SetBackdrop({
 })
 contentArea:SetBackdropColor(0.08, 0.08, 0.10, 0.95)
 contentArea:SetBackdropBorderColor(0.60, 0.60, 0.70, 1)
+
+-- Panel construction and sidebar navigation --------------------------------
 
 local function CreateTabContent()
     local container = CreateFrame("Frame", nil, contentArea)
@@ -1465,6 +1477,8 @@ tradeExceptionContent:SetHeight(1)
 tradeExceptionScroll:SetScrollChild(tradeExceptionContent)
 local tradeExceptionDisplayRows = {}
 
+-- Guild rules and Guild-Found exceptions -----------------------------------
+
 local function GetActiveTradeExceptionGroups()
     local rules, settings = iRC:GetConnectionRules(), iRC:GetGuildFoundTradeExceptionSettings()
     if not rules.guildFoundTradeExceptions then return {} end
@@ -1853,6 +1867,8 @@ for index = 1, 5 do
     end)
     guildContactSuggestionButtons[index] = button
 end
+-- Guild homepage contacts ---------------------------------------------------
+
 local function updateGuildContactSuggestions(text)
     text = tostring(text or ""):gsub("^%s+", ""):lower()
     local matches, current = {}, tostring(iRC:GetConnectionRules().guildContacts or "")
@@ -2735,6 +2751,8 @@ do
     guildPermissionsContent:SetHeight(math.max(math.abs(permissionPageY) + 8, 300))
 end
 
+-- Notification and admin settings ------------------------------------------
+
 local function LayoutGuildNotificationCards(showConflict)
     local notificationHeight = showConflict and notificationConflictHeight or notificationBaseHeight
     notificationCard:SetHeight(notificationHeight)
@@ -3026,6 +3044,8 @@ local function RefreshGeneralNotificationAndAdminOptions()
     LayoutGuildNotificationCards(welcomeConflict ~= nil)
     slider:SetValue(iRC:GetSettings().mainWindowScale or 1)
 end
+
+-- Refresh and embedded-panel lifecycle -------------------------------------
 
 local function Refresh()
     if diagnosticsEnabledCheck then diagnosticsEnabledCheck:Refresh() end

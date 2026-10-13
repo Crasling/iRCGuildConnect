@@ -2,6 +2,12 @@ local addonName, private = ...
 local iRC = LibStub("AceAddon-3.0"):NewAddon("iRCGuildConnect")
 private.iRC = iRC
 
+-- Shared addon foundation
+--
+-- Core owns persistent state, connection lookup, permission checks, common
+-- formatting, and the central traffic queues. Feature modules attach
+-- themselves to this single iRC object as they load.
+
 iRC.Name = addonName or "iRC"
 iRC.LDBroker = LibStub("LibDataBroker-1.1", true)
 iRC.LDBIcon = LibStub("LibDBIcon-1.0", true)
@@ -33,6 +39,8 @@ iRC.TestAdminNames = {
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
+-- Client and runtime compatibility -----------------------------------------
+
 function iRC:IsOfficialHardcoreRealm()
     local hardcoreRule = Enum and Enum.GameRule and Enum.GameRule.HardcoreRuleset
     return hardcoreRule ~= nil and C_GameRules and C_GameRules.IsGameRuleActive
@@ -85,6 +93,8 @@ end
 
 -- Keep automatic addon traffic away from the busy login frame. Each caller
 -- gets its own delay so independent startup packets do not form a new burst.
+-- Low-traffic and window behavior ------------------------------------------
+
 function iRC:GetStartupTrafficDelay()
     return 3 + math.random() * 5
 end
@@ -196,6 +206,10 @@ function iRC:LeaveLowTrafficMode()
     end)
 end
 
+-- Addon-message traffic queues ---------------------------------------------
+
+-- Performance mode serializes bursts and replaces stale state packets with
+-- newer ones. Urgent presence and control messages retain higher priority.
 function iRC:IsPerformanceMode()
     return true
 end
@@ -460,7 +474,7 @@ local INCOMING_SCOPE_KINDS = {
         RECRUIT_REQUEST = true, RECRUIT_STATUS = true, RECRUITMENT_PERMISSION = true,
         ROSTER_HISTORY_PERMISSION = true, RULES = true, RULES_ACK = true, RULES_REQUEST = true,
     },
-    ["guild-map"] = { MAP_POS = true },
+    ["guild-map"] = { MAP_LAYER = true, MAP_POS = true },
     ["chat-icons"] = { ICON_REQ = true, ICON_STATUS = true },
     ["race-grid"] = {
         CACHE_DATA = true, CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
@@ -474,6 +488,8 @@ local INCOMING_SCOPE_KINDS = {
     ["race-admin"] = { ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true },
     ["race-admin-channel"] = { ADMIN_PRESENCE_REQUEST = true },
 }
+
+-- Incoming traffic filtering ------------------------------------------------
 
 local function incomingTrafficPolicy(kind)
     if kind:find("_REQUEST$", 1, false) then return 3, 10, 1 end
@@ -549,6 +565,8 @@ local monitoredPrefixes = {
     iRCConnV1 = true, iRCGridV1 = true, iRCLayerV1 = true, iRCAdminV1 = true,
     iRCIconV1 = true, iRCGFRoster = true,
 }
+
+-- Lightweight diagnostics --------------------------------------------------
 
 function iRC:RecordTrafficBytes(direction, bytes, prefix, message)
     if not self.TrafficMonitorEnabled then return end
@@ -774,6 +792,8 @@ iRC.DefaultConnectionRules = {
     guildContacts = "",
 }
 
+-- Defaults and rules normalization -----------------------------------------
+
 local function normalizeProgressionRules(rules)
     if rules.guildFoundOnly == true then
         rules.selfFoundOnly = false
@@ -867,6 +887,8 @@ for _, race in ipairs(iRC.GuildRaceTBCOrder) do GuildRaceLookup[race] = true end
 iRC.GuildClassOrder = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 local GuildClassLookup = {}
 for _, class in ipairs(iRC.GuildClassOrder) do GuildClassLookup[class] = true end
+
+-- Messages, localization, and shared UI helpers ----------------------------
 
 function iRC:Print(message)
     print(self.Colors.iRC .. "[iRC]: " .. self.Colors.Reset .. tostring(message))
@@ -1086,6 +1108,8 @@ function iRC:StyleSearchBox(editBox, placeholder)
     return editBox
 end
 
+-- Safe values and identity normalization -----------------------------------
+
 function iRC:IsSecretValue(value)
     local checker = _G and _G.issecretvalue
     return type(checker) == "function" and checker(value) == true
@@ -1129,6 +1153,8 @@ function iRC:IsAttentionVerificationState(state)
         and state ~= "inactive"
         and state ~= "optional"
 end
+
+-- Local Self-Found evidence -------------------------------------------------
 
 function iRC:GetSelfFoundState()
     iRCCharDB = iRCCharDB or {}
@@ -1265,6 +1291,8 @@ function iRC:GetSelfFoundEvidence()
     end
     return evidence
 end
+
+-- Saved variables and guild connection lookup ------------------------------
 
 function iRC:GetPlayerName()
     if self:IsForeverClient() and UnitName then
@@ -1483,6 +1511,8 @@ function iRC:GetConnection()
     connection.guildHomepageTag.timestamp = math.max(0,
         math.floor(tonumber(connection.guildHomepageTag.timestamp) or 0))
     connection.guildHomepageTag.editedBy = tostring(connection.guildHomepageTag.editedBy or "")
+    connection.guildPreferredLanguage = tostring(connection.guildPreferredLanguage or "")
+        :gsub("[%c|]", " "):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 32)
     connection.guildHomepageClassBreakdown = connection.guildHomepageClassBreakdown
         or { mode = "ALL", minLevel = 1, maxLevel = 60, timestamp = 0, editedBy = "" }
     local classBreakdown = connection.guildHomepageClassBreakdown
@@ -1568,6 +1598,8 @@ function iRC:GetConnection()
     currentConnectionCache, currentConnectionRoot = connection, iRCDB
     return connection
 end
+
+-- Guild permissions and authority ------------------------------------------
 
 function iRC:RecordManagementConnectionStatus(category, createdBy, createdAt, relayedBy, receivedAt)
     local connection = self:GetConnection()
@@ -2042,6 +2074,8 @@ function iRC:SetGuildRace(race)
     return true
 end
 
+-- Connection activation and guild homepage state ---------------------------
+
 function iRC:IsGuildConnectionActive()
     local connection = self:GetConnection()
     return connection and connection.active == true or false
@@ -2285,6 +2319,8 @@ function iRC:SetGuildHomepageTag(tag)
     return true
 end
 
+-- Rules, notification batching, and player-name helpers --------------------
+
 function iRC:GetConnectionRules()
     local connection = self:GetConnection()
     return connection and connection.rules or self.DefaultConnectionRules
@@ -2458,6 +2494,8 @@ function iRC:OpenWhisper(name, initialMessage)
     end
     return false
 end
+
+-- Progression-mode rules ----------------------------------------------------
 
 function iRC:MarkGuildFoundRequired(connection)
     connection = connection or self:GetConnection()
@@ -2734,7 +2772,7 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRCCharDB.guildFoundGuilds = nil
         iRCCharDB.persistenceVersion = nil
         local settings = iRC:GetSettings()
-        if iRC:IsTestAdmin() then settings.testGuildMasterOverride = true end
+        if iRC:IsTestAdmin() then settings.testGuildMasterOverride = false end
     elseif event == "PLAYER_LOGIN" then
         iRC.StartupTrafficReadyAt = (GetTime and GetTime() or 0) + 3
         iRC:DebugMsg(iRC:Text("DEBUG_MODE"), 3)

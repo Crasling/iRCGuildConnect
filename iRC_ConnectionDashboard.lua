@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Verification and incident dashboard
+--
+-- The dashboard presents cached roster/profile state through virtualized rows.
+-- It does not own verification data; Guild, Identity, and RaceLockedSync remain
+-- the sources of truth.
+
 local Dashboard = {}
 iRC.ConnectionDashboard = Dashboard
 
@@ -14,6 +20,8 @@ local COLUMN_X = { 14, 139, 254, 309, 499, 624 }
 local COLUMN_WIDTH = { 115, 105, 45, 180, 115, 75 }
 local OVERVIEW_COLUMN_X = { 14, 164, 324, 484 }
 local OVERVIEW_COLUMN_WIDTH = { 136, 146, 146, 224 }
+
+-- Member-state presentation helpers ----------------------------------------
 
 local function displayMemberName(name)
     if type(name) ~= "string" then return "Unknown" end
@@ -117,6 +125,8 @@ local function makeSummaryCard(parent)
     card.value:SetPoint("BOTTOM", 0, 8)
     return card
 end
+
+-- Frame construction --------------------------------------------------------
 
 function Dashboard:Create()
     if self.frame then return self.frame end
@@ -687,6 +697,8 @@ function Dashboard:Create()
     return frame
 end
 
+-- Sorting, filtering, and virtualized rows ---------------------------------
+
 local function setHeaders(frame, values, sortKeys, defaultKey, columnX, columnWidth, headerY)
     columnX, columnWidth = columnX or COLUMN_X, columnWidth or COLUMN_WIDTH
     if frame.embedded then
@@ -1063,6 +1075,8 @@ materializeVerificationRow = function(data)
     data.verificationMember, data.verificationContext, data.frame = nil, nil, nil
 end
 
+-- Attention reminders -------------------------------------------------------
+
 function Dashboard:GetNeedsAttentionCount()
     if not iRC:IsGuildConnectionActive() then return 0 end
     local rules = iRC:GetConnectionRules() or {}
@@ -1141,6 +1155,8 @@ function Dashboard:ScheduleAttentionReminderCheck()
         Dashboard:CheckAttentionReminder(false)
     end)
 end
+
+-- Data refresh and view selection ------------------------------------------
 
 function Dashboard:Refresh()
     self.pendingRefresh = nil
@@ -1428,6 +1444,8 @@ function Dashboard:Refresh()
     frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll(), math.max(0, count * LIST_ROW_SPACING - frame.scroll:GetHeight())))
     self:RenderVisibleRows()
 end
+
+-- Standalone and embedded lifecycle ----------------------------------------
 
 function Dashboard:Open()
     if not iRC:CanOpenPanel() then return false end

@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Guild world-map pins and layer discovery
+--
+-- Positions use guild addon messages. Layer numbers are inferred from creature
+-- GUIDs, reconciled through iRCComms/LayerSwap-compatible data, and kept
+-- separate from raw internal zone identifiers.
+
 local GuildMap = { positions = {}, pins = {}, pool = {} }
 iRC.GuildMap = GuildMap
 
@@ -11,6 +17,7 @@ local POSITION_LIFETIME = 90
 local POSITION_UPDATE_INTERVAL = 5
 local POSITION_HEARTBEAT = 20
 local DEFAULT_PIN_SIZE = 12
+local PIN_OUTLINE_SIZE = 2
 local CLUSTER_MINIMUM_DISTANCE = 18
 local MAX_CLUSTER_TOOLTIP_MEMBERS = 5
 local LOCAL_LAYER_LIFETIME = 300
@@ -29,10 +36,13 @@ local initialized, mapInitialized, mapInitializationArmed, mapInitializationPend
 local mapTicker
 local layerPanelTicker
 local pinMenu
+
+-- Layer observation and persistent registry --------------------------------
 local mapControls
 local layerPanel
 local groupMemberTooltipHooked
 local lastSentMapId, lastSentXWire, lastSentYWire, lastPositionSentAt
+local lastSentMapLayerSignature, lastMapLayerSentAt
 local lastDisplayedMapId
 local lastGroupedMembers = {}
 local localLayer
@@ -374,6 +384,8 @@ function GuildMap:BroadcastLocalLayer(force)
     return true
 end
 
+-- Movable current-layer panel ----------------------------------------------
+
 local function saveLayerPanelPosition()
     if not layerPanel then return end
     local point, _, relativePoint, x, y = layerPanel:GetPoint(1)
@@ -579,6 +591,10 @@ function GuildMap:UpdateLocalLayerDisplay()
     end
 end
 
+-- Layer-number agreement ----------------------------------------------------
+
+-- A candidate is assigned only after local evidence and the short iRCComms
+-- lookup complete. Tokens make callbacks from an older scan harmless.
 local function finalizeLocalLayerAssignment(token)
     local candidate = pendingLocalLayer
     if not candidate or candidate.token ~= token then return false end
@@ -905,6 +921,8 @@ function GuildMap:ReceiveLayerState(parts, sender)
 end
 
 local layerSwapZones = {}
+-- LayerSwap-compatible receive path ----------------------------------------
+
 local function throttleLayerSwapMessage(senderKey, messageKey)
     local now = GetTime and GetTime() or 0
     if now - lastLayerSwapThrottleCleanup >= 60 then
@@ -1019,6 +1037,8 @@ function GuildMap:ReceiveLayerTransition(parts, sender)
     self:UpdatePins(true)
     return true
 end
+
+-- Pin tooltips and context menu --------------------------------------------
 
 local function hidePinMenu()
     if pinMenu then pinMenu:Hide() end
@@ -1190,6 +1210,8 @@ local function showPinMenu(pin)
     pinMenu:Show()
 end
 
+-- Pin pool and rendering ----------------------------------------------------
+
 local function enabled()
     return iRC:IsGuildConnectionActive() and iRC:GetConnectionRules().guildMapEnabled == true
 end
@@ -1357,7 +1379,7 @@ local function configureSinglePin(pin, member, size)
     pin.border:Show()
     pin.center:Show()
     pin.center:ClearAllPoints()
-    local inset = math.min(2, math.max(1, math.floor((size - 1) / 2)))
+    local inset = math.min(PIN_OUTLINE_SIZE, math.max(1, math.floor((size - 1) / 2)))
     pin.center:SetPoint("TOPLEFT", inset, -inset)
     pin.center:SetPoint("BOTTOMRIGHT", -inset, inset)
     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile or ""]
@@ -1392,7 +1414,7 @@ local function configureClusterPin(pin, members, size)
             dot.border:SetPoint("CENTER", pin, "CENTER", offsets[index][1], offsets[index][2])
             dot.border:Show()
             dot.center:ClearAllPoints()
-            local innerSize = math.max(1, size - 4)
+            local innerSize = math.max(1, size - PIN_OUTLINE_SIZE * 2)
             dot.center:SetSize(innerSize, innerSize)
             dot.center:SetPoint("CENTER", dot.border, "CENTER")
             local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.classFile or ""]
@@ -1514,6 +1536,8 @@ function GuildMap:UpdatePins(cachedOnly)
     for name in pairs(self.pins) do if not shown[name] then clearPin(name) end end
 end
 
+-- Position transmission ----------------------------------------------------
+
 function GuildMap:BroadcastPosition(force)
     -- Forever can protect map/unit position data during combat. Resume one
     -- current position broadcast after combat instead of touching secret data.
@@ -1535,6 +1559,19 @@ function GuildMap:BroadcastPosition(force)
     if sent then
         lastSentMapId, lastSentXWire, lastSentYWire = mapId, xWire, yWire
         lastPositionSentAt = now
+        local layer = self:GetLocalLayer()
+        if layer and layer.mapId == mapId then
+            local layerSignature = tostring(mapId) .. ":" .. tostring(layer.number)
+            if force or layerSignature ~= lastSentMapLayerSignature
+                or now - (lastMapLayerSentAt or 0) >= 60 then
+                local layerMessage = table.concat({
+                    "MAP_LAYER", POSITION_VERSION, tostring(mapId), tostring(layer.number),
+                }, "\t")
+                if iRC:SendAddonTraffic(iRC.Prefix, layerMessage, "GUILD") then
+                    lastSentMapLayerSignature, lastMapLayerSentAt = layerSignature, now
+                end
+            end
+        end
     end
     return sent
 end
@@ -1560,6 +1597,8 @@ local function scheduleNextPosition()
         scheduleNextPosition()
     end)
 end
+
+-- Blizzard map integration and lifecycle ----------------------------------
 
 local function initializeMap()
     if mapInitialized or not WorldMapFrame or not WorldMapFrame.ScrollContainer
@@ -1807,6 +1846,21 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if prefix ~= iRC.Prefix or not enabled() or not iRC:IsGuildMemberName(sender)
             or iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
         if not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, "guild-map") then return end
+        local layerVersion, layerMapId, layerNumber = tostring(message or "")
+            :match("^MAP_LAYER\t([^\t]+)\t(%d+)\t(%d+)$")
+        if layerVersion then
+            layerMapId, layerNumber = tonumber(layerMapId), tonumber(layerNumber)
+            if layerVersion ~= POSITION_VERSION or not layerMapId or layerMapId <= 0
+                or not layerNumber or layerNumber < 1 or layerNumber > 99 then return end
+            local senderKey = iRC:NormalizeName(sender)
+            local entry = layerUsers[senderKey] or {}
+            entry.name, entry.mapId, entry.number = sender, layerMapId, layerNumber
+            entry.seenAt = GetTime and GetTime() or 0
+            entry.transitioning, entry.transitioningUntil, entry.stale = nil, nil, nil
+            layerUsers[senderKey] = entry
+            GuildMap:UpdatePins(true)
+            return
+        end
         local version, mapId, xWire, yWire = tostring(message or ""):match("^MAP_POS\t([^\t]+)\t(%d+)\t(%d+)\t(%d+)$")
         mapId, xWire, yWire = tonumber(mapId), tonumber(xWire), tonumber(yWire)
         if version ~= POSITION_VERSION or not mapId or not xWire or not yWire or xWire > 10000 or yWire > 10000 then return end

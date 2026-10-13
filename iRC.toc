@@ -1,10 +1,10 @@
 ## Interface: 16001
-## Title: |cffff9716iRC: Guild Connect |cFF00FF00v0.5.27|r
-## Version: 0.5.27
+## Title: |cffff9716iRC: Guild Connect |cFF00FF00v0.5.28|r
+## Version: 0.5.28
 ## Notes: |cffff9716Guild connection for shared rules, verification, guild statistics, and community tools.|nConnect guilds, coordinate rules, and discover communities.|r
 ## Author: Crasling
 ## IconTexture: Interface\AddOns\iRC\Images\Logo_iRC
-## Category: Social
+## Category: Guild
 ## X-Curse-Project-ID: 1682904
 ## DefaultState: Enabled
 ## LoadOnDemand: 0

@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Race/Guild-Found verification snapshots
+--
+-- The sync records Self-Found history, money checkpoints, deaths, and explicit
+-- officer overrides. Data is scoped to the connected guild and shared only
+-- with guild members over the dedicated roster prefix.
+
 local Sync = {}
 iRC.RaceLockedSync = Sync
 local IRC_ROSTER = "iRCGFRoster"
@@ -13,6 +19,8 @@ local playedTicker, playedRequestToken
 local playedSuppressedChatFrames = {}
 local localHistory
 local sentDebugSummary = { count = 0 }
+
+-- Hidden /played capture ----------------------------------------------------
 
 local function hideAutomaticTimePlayed(_, event)
     if event == "TIME_PLAYED_MSG" and playedRequestToken then return true end
@@ -49,6 +57,8 @@ function Sync:RequestHiddenTimePlayed()
     end)
     return true
 end
+
+-- Wire validation and status lookup ----------------------------------------
 
 local function shortName(name)
     return type(name) == "string" and name:match("^([^-]+)") or nil
@@ -176,6 +186,8 @@ end
 -- Keep a second, lightly sealed copy under an intentionally generic key. This
 -- is not cryptographic protection (SavedVariables are player-owned), but it
 -- detects casual edits that only change the plainly readable snapshot.
+-- Local money evidence ------------------------------------------------------
+
 local function snapshotSalt()
     local identity = iRC:NormalizeName(iRC:GetPlayerName()) or ""
     local value = 7919
@@ -300,6 +312,8 @@ function Sync:GetLocalRawStatus()
     local clean, tamperAt = history.moneyDiscrepancyAt == nil, history.moneyDiscrepancyAt or 0
     return verified, clean, tamperAt
 end
+
+-- Stored member state and officer overrides --------------------------------
 
 local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, moneyAfter, moneyBeforeAt, moneyAfterAt,
     playedBefore, playedAfter, playedBeforeAt, playedAfterAt)
@@ -458,6 +472,8 @@ function Sync:DescribeStatus(name, compact, status, goldOnly)
     end
     return text
 end
+
+-- Incoming and outgoing roster sync ----------------------------------------
 
 function Sync:ReceiveRoster(message, sender)
     if not connection() or not iRC:IsGuildMemberName(sender) or type(message) ~= "string" or #message > 255 then return end

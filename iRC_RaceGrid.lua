@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Public guild leaderboard, cache exchange, admin probe, and layer routing
+--
+-- These data families share the hidden iRCComms channel but use independent
+-- prefixes and wire versions. Updating one route therefore does not force an
+-- unrelated protocol migration.
+
 local RaceGrid = {}
 iRC.RaceGrid = RaceGrid
 
@@ -34,6 +40,8 @@ local PREFIX_SCOPES = {
     [ADMIN_PREFIX] = "race-admin",
 }
 
+-- Protocol validation and channel transport --------------------------------
+
 local function validatePacketProtocol(prefix, message, sender, distribution)
     local packetKind, packetVersion = tostring(message or ""):match("^([A-Z][A-Z0-9_]*)\t([^\t]*)")
     local protocol = PACKET_PROTOCOLS[packetKind]
@@ -49,7 +57,6 @@ local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
 local REPORT_MAX_AGE = 5 * 86400
-local RECENT_REPORT_WINDOW = 60
 local CACHE_REQUEST_WINDOW = 5
 local CACHE_OPEN_REQUEST_COOLDOWN = 30
 local CACHE_TRANSFER_TIMEOUT = 15
@@ -218,6 +225,8 @@ local function payloadChecksum(value)
     end
     return string.format("%04x%04x", second, first)
 end
+
+-- Server-wide report cache and activity samples ----------------------------
 
 local function getServerStore()
     local realm
@@ -419,6 +428,8 @@ local function rememberAdminVersion(name, version, guildName, confirmedProbe)
     end
 end
 
+-- Admin online-user probe ---------------------------------------------------
+
 local function getAdminRosterAPI()
     if C_ChatInfo and C_ChatInfo.GetChannelRosterInfo then return C_ChatInfo.GetChannelRosterInfo end
     return GetChannelRosterInfo
@@ -603,6 +614,8 @@ local function hasRestoredServerChannel()
     return false
 end
 
+-- Channel membership and layer messages ------------------------------------
+
 function RaceGrid:IsEnabled()
     return true
 end
@@ -744,6 +757,14 @@ function RaceGrid:Disable()
     if LeaveChannelByName and getChannelId() then LeaveChannelByName(CHANNEL_NAME) end
 end
 
+-- Local guild report construction ------------------------------------------
+
+local function cleanGuildLanguage(value)
+    value = tostring(value or ""):gsub("[%c|]", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if value == "" or value == "-" then return "" end
+    return value:sub(1, 32)
+end
+
 function RaceGrid:GetLocalReport()
     local profile = iRC:GetLocalProfile()
     local reports = self:BuildOwnGuildReports()
@@ -765,6 +786,7 @@ function RaceGrid:GetLocalReport()
         guildDescriptionEditedBy = guild.guildDescriptionEditedBy,
         guildHomepageIcon = guild.guildHomepageIcon,
         guildHomepageTag = guild.guildHomepageTag,
+        guildPreferredLanguage = guild.guildPreferredLanguage,
         classBreakdownMode = guild.classBreakdownMode,
         classBreakdownMinLevel = guild.classBreakdownMinLevel,
         classBreakdownMaxLevel = guild.classBreakdownMaxLevel,
@@ -786,6 +808,7 @@ function RaceGrid:StoreGuildReport(report, silent)
         and report.guildHomepageTag ~= "RP" then
         report.guildHomepageTag = "NORMAL"
     end
+    report.guildPreferredLanguage = cleanGuildLanguage(report.guildPreferredLanguage)
     report.classBreakdownMinLevel = math.max(1,
         math.min(60, math.floor(tonumber(report.classBreakdownMinLevel) or 1)))
     report.classBreakdownMaxLevel = math.max(report.classBreakdownMinLevel,
@@ -805,6 +828,9 @@ function RaceGrid:StoreGuildReport(report, silent)
         report.guildDescription = old.guildDescription
         report.guildDescriptionTimestamp = old.guildDescriptionTimestamp
         report.guildDescriptionEditedBy = old.guildDescriptionEditedBy
+    end
+    if old and report.guildPreferredLanguage == "" then
+        report.guildPreferredLanguage = cleanGuildLanguage(old.guildPreferredLanguage)
     end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
@@ -829,6 +855,51 @@ function RaceGrid:MarkLocalReportDirty()
     cachedOwnGuildReports, cachedOwnGuildConnection = nil, nil
 end
 
+-- Forever does not expose Preferred Online Language through its guild APIs.
+-- Read the visible Blizzard dropdown when its panel has been loaded, then keep
+-- the last observed value with the guild connection for future reports.
+function RaceGrid:ObserveGuildPreferredLanguage()
+    local connection = iRC:GetConnection()
+    if not connection then return "" end
+    local settingsFrame = _G.CommunitiesFrameGuildPreferredPlaySettingsFrame
+        or (_G.CommunitiesFrame and _G.CommunitiesFrame.GuildPreferredPlaySettingsFrame)
+    local dropdown = settingsFrame and settingsFrame.LocaleDropdown
+    local language = ""
+    if dropdown then
+        local textRegions = {
+            dropdown.Text, dropdown.text, dropdown.SelectedText,
+            _G.CommunitiesFrameGuildPreferredPlaySettingsFrameText,
+        }
+        for _, textRegion in pairs(textRegions) do
+            if language == "" and textRegion and type(textRegion.GetText) == "function" then
+                local ok, value = pcall(textRegion.GetText, textRegion)
+                if ok then language = cleanGuildLanguage(value) end
+            end
+        end
+        if language == "" and type(dropdown.GetText) == "function" then
+            local ok, value = pcall(dropdown.GetText, dropdown)
+            if ok then language = cleanGuildLanguage(value) end
+        end
+        if language == "" and type(dropdown.GetRegions) == "function" then
+            local ok, regions = pcall(function() return { dropdown:GetRegions() } end)
+            if ok then
+                for _, region in ipairs(regions) do
+                    if language == "" and region and type(region.GetText) == "function" then
+                        local textOk, value = pcall(region.GetText, region)
+                        if textOk then language = cleanGuildLanguage(value) end
+                    end
+                end
+            end
+        end
+    end
+    if language ~= "" and language ~= connection.guildPreferredLanguage then
+        connection.guildPreferredLanguage = language
+        self:MarkLocalReportDirty()
+        iRC:DebugMsg("Guild Preferred Online Language detected: " .. language .. ".", 3)
+    end
+    return cleanGuildLanguage(connection.guildPreferredLanguage)
+end
+
 -- Verification participation remains useful metadata, but guild statistics
 -- themselves count the complete current roster.
 function RaceGrid:GetRosterParticipation(member)
@@ -840,6 +911,7 @@ end
 function RaceGrid:BuildOwnGuildReports()
     local connection = iRC:GetConnection()
     if not connection or not iRC:IsGuildConnectionActive() then return {} end
+    local guildPreferredLanguage = self:ObserveGuildPreferredLanguage()
     if cachedOwnGuildReports and cachedOwnGuildConnection == connection then return cachedOwnGuildReports end
     local profile = iRC:GetLocalProfile()
     -- Ordinary members do not know the Guild Master's selected guild race
@@ -889,6 +961,7 @@ function RaceGrid:BuildOwnGuildReports()
         guildHomepageIcon = math.max(0, math.min(#iRC.GuildHomepageIcons,
             math.floor(tonumber(connection.guildHomepageIcon.icon) or 0))),
         guildHomepageTag = iRC:GetGuildHomepageTag(),
+        guildPreferredLanguage = guildPreferredLanguage,
         classBreakdownMode = classBreakdownMode,
         classBreakdownMinLevel = classBreakdownMinLevel,
         classBreakdownMaxLevel = classBreakdownMaxLevel,
@@ -951,6 +1024,8 @@ function RaceGrid:IsExternalBroadcaster()
     return true
 end
 
+-- Report serialization and publication ------------------------------------
+
 local function serializeGuildReport(report, includeDescription)
     local fields = {
         "GUILD_REPORT", WIRE_VERSION, tostring(report.name or ""), tostring(report.guid or ""),
@@ -1006,6 +1081,7 @@ local function serializeGuildReport(report, includeDescription)
             or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
         fields[#fields + 1] = rules.classLock == true and "1" or "0"
         fields[#fields + 1] = iRC:NormalizeGuildClass(rules.guildClass)
+        fields[#fields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
     end
     return table.concat(fields, SEP)
 end
@@ -1013,6 +1089,7 @@ end
 function RaceGrid:BroadcastReport(fromClick)
     if iRC:DeferLowTraffic("traffic:guild-statistics", function() RaceGrid:BroadcastReport(false) end) then return false end
     if not self:IsEnabled() then return false end
+    self:ObserveGuildPreferredLanguage()
     if fromClick ~= true and not localReportDirty then return false end
     self:EnsureChannel()
     if not getChannelId() then
@@ -1059,6 +1136,7 @@ function RaceGrid:BroadcastReport(fromClick)
         or report.guildHomepageTag == "PVP" and "PVP" or report.guildHomepageTag == "RP" and "RP" or "NORMAL"
     classBreakdownFields[#classBreakdownFields + 1] = report.rules and report.rules.classLock == true and "1" or "0"
     classBreakdownFields[#classBreakdownFields + 1] = iRC:NormalizeGuildClass(report.rules and report.rules.guildClass)
+    classBreakdownFields[#classBreakdownFields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
     send(GRID_PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel30,
         report.activeMembers, report.activePlayers, report.members), 3)
@@ -1096,6 +1174,8 @@ function RaceGrid:Refresh()
         end)
     end
 end
+
+-- Incoming report parsing and deferred work --------------------------------
 
 local function parseGuildReport(parts)
     if parts[1] ~= "GUILD_REPORT" or parts[2] ~= WIRE_VERSION then return nil end
@@ -1196,6 +1276,7 @@ local function parseGuildReport(parts)
         end
         if rules.classLock and rules.raceLock then return nil end
     end
+    local guildPreferredLanguage = cleanGuildLanguage(parts[descriptionStart + 18])
     return {
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
@@ -1209,6 +1290,7 @@ local function parseGuildReport(parts)
         guildDescriptionEditedBy = guildDescriptionEditedBy,
         guildHomepageIcon = guildHomepageIcon,
         guildHomepageTag = guildHomepageTag,
+        guildPreferredLanguage = guildPreferredLanguage,
         classBreakdownMode = classBreakdownMode,
         classBreakdownMinLevel = classBreakdownMinLevel,
         classBreakdownMaxLevel = classBreakdownMaxLevel,
@@ -1353,6 +1435,10 @@ function RaceGrid:ClearCachedReportsForTesting()
     return removed
 end
 
+-- Cached-report offer/request protocol -------------------------------------
+
+-- Peers advertise timestamps first. The requester chooses only newer data and
+-- asks one sender for the payload, avoiding repeated copies of the same report.
 local function cleanCacheState()
     local now = GetTime()
     for sender, request in pairs(cacheRequestBySender) do
@@ -1434,10 +1520,10 @@ local function requestBestCacheOffers(requestId)
     for guildKey, offer in pairs(request.offers) do
         local localReport = getServerStore().guildReports[guildKey]
         local localTimestamp = localReport and (tonumber(localReport.timestamp) or 0) or 0
-        local recentlyReceived = localReport and (tonumber(localReport.lastSeen) or 0) > time() - RECENT_REPORT_WINDOW
-        local localCacheHop = localReport and math.max(0, math.min(1, math.floor(tonumber(localReport.cacheHop) or 0))) or 1
+        -- A report timestamp identifies the snapshot. A lower cache hop does
+        -- not make the same snapshot newer and previously caused it to be
+        -- downloaded again whenever the short recent-receive window expired.
         local shouldRequest = offer.timestamp > localTimestamp
-            or (not recentlyReceived and offer.timestamp == localTimestamp and (offer.cacheHop or 1) < localCacheHop)
         if shouldRequest then
             request.selected[guildKey] = offer
             requested = requested + 1
@@ -1456,6 +1542,12 @@ function RaceGrid:RequestGuildCache()
     if iRC:DeferLowTraffic("traffic:guild-cache-request", function() RaceGrid:RequestGuildCache() end) then return false end
     if not self:IsEnabled() or not iRC:IsGuildConnectionActive() then return false end
     cleanCacheState()
+    for _, request in pairs(cacheRequests) do
+        if type(request) == "table" and GetTime() - (request.startedAt or 0) <= CACHE_TRANSFER_TIMEOUT then
+            iRC:DebugMsg("Cached Guild Leaderboard request skipped because another request is still active.", 3)
+            return false
+        end
+    end
     local requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
     cacheRequests[requestId] = { startedAt = GetTime(), offers = {}, selected = {} }
     if not send(GRID_PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId }, SEP), "GUILD") then
@@ -1533,6 +1625,13 @@ local function handleCacheMessage(parts, sender, distribution)
         if not offered or iRC:NormalizeName(offered.requester) ~= iRC:NormalizeName(sender) then return true end
         local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]
         if not snapshot or snapshot.timestamp ~= timestamp or snapshot.checksum ~= checksum then return true end
+        local now = GetTime()
+        if snapshot.servedAt and now - snapshot.servedAt <= CACHE_TRANSFER_TIMEOUT then
+            iRC:DebugMsg("Duplicate cached Guild Leaderboard transfer request ignored for "
+                .. guildName .. " from " .. iRC:FormatPlayerName(sender) .. ".", 3)
+            return true
+        end
+        snapshot.servedAt = now
         local payload = snapshot.payload
         local hex = bytesToHex(payload)
         local total = math.ceil(#hex / CACHE_CHUNK_SIZE)
@@ -1745,6 +1844,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         end
         local classLockFlag = tostring(parts[17] or "0")
         local guildClass = iRC:NormalizeGuildClass(parts[18])
+        local guildPreferredLanguage = cleanGuildLanguage(parts[19])
         local validClassLock = (classLockFlag == "0" or classLockFlag == "1")
             and (classLockFlag ~= "1" or guildClass ~= "")
         if reportTimestamp and (mode == "ALL" or mode == "RANGE" or mode == "MAX")
@@ -1765,6 +1865,9 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                     report.rules = report.rules or {}
                     report.rules.classLock = classLockFlag == "1" and guildClass ~= ""
                     report.rules.guildClass = guildClass
+                    if guildPreferredLanguage ~= "" then
+                        report.guildPreferredLanguage = guildPreferredLanguage
+                    end
                     if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
                     break
                 end
@@ -1790,6 +1893,8 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_RECEIVED", report.guildName, report.activeLevel30 or 0,
         report.activeMembers or 0, report.activePlayers, report.members), 3)
 end
+
+-- Leaderboard aggregation ---------------------------------------------------
 
 function iRC:GetGlobalRaceOverview()
     local serverStore = getServerStore()

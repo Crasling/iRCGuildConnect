@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Guild profession discovery and recipe synchronization
+--
+-- iRC users publish compact skill summaries and chunked known-recipe lists.
+-- Profession links from members without iRC can also be imported after the
+-- local player explicitly opens the linked profession window.
+
 local Professions = {}
 iRC.Professions = Professions
 local ORDER = {
@@ -21,6 +27,8 @@ local linkedProfessionHandled = false
 local sharingReadyAt = 0
 local CHUNK_SIZE, MAX_CHUNKS = 165, 64
 local PROFESSION_LINK_LIFETIME = 3600
+
+-- Wire and local-data helpers ----------------------------------------------
 
 local function professionDebug(key, message, level)
     local now = GetTime and GetTime() or 0
@@ -119,6 +127,8 @@ function Professions:CollectSkills()
     end
     return data
 end
+
+-- Outgoing summaries and recipe chunks -------------------------------------
 
 function Professions:SendSummary(force)
     local data = self:CollectSkills()
@@ -263,6 +273,8 @@ local function rememberGuildProfessionLinks(message, sender)
         if oldestLink then guildProfessionLinks[oldestLink] = nil end
     end
 end
+
+-- Linked profession import -------------------------------------------------
 
 local function hookProfessionLinks()
     if professionLinkHooked then return end
@@ -496,6 +508,8 @@ function Professions:CollectOpenRecipes()
     for _, id in ipairs(changed) do sendRecipeChunks(id, data) end
 end
 
+-- Incoming guild data -------------------------------------------------------
+
 local function validSender(sender, guid)
     if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(sender) then return nil end
     local connection = iRC:GetConnection()
@@ -610,6 +624,8 @@ function Professions:DescribeRecipes(data)
 end
 
 local eventFrame = CreateFrame("Frame")
+-- Event registration --------------------------------------------------------
+
 local function registerSupportedEvent(event)
     if C_EventUtils and C_EventUtils.IsEventValid and not C_EventUtils.IsEventValid(event) then return false end
     return pcall(eventFrame.RegisterEvent, eventFrame, event)

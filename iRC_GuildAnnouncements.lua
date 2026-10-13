@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Guild milestones and chat identity icons
+--
+-- Rule-controlled announcements are sent to guild chat. The separate public
+-- icon protocol lets nearby iRC users decorate names without exposing private
+-- guild profile data.
+
 local Announcements = {}
 iRC.GuildAnnouncements = Announcements
 local ICON_PREFIX = "iRCIconV1"
@@ -31,6 +37,8 @@ local DEFAULT_ICON_PRIORITY = {
 }
 
 local rosterReference, rosterGuildKey, rosterRanks, rosterMembers = nil, nil, {}, {}
+
+-- Icon eligibility ----------------------------------------------------------
 
 -- Death is a Hardcore identity state, not a general "currently unable to act"
 -- state. Keeping this check in one place prevents ordinary realm deaths from
@@ -166,6 +174,8 @@ function Announcements:GetDefaultChatIcon(name)
     end
 end
 
+-- Public icon request/reply protocol ---------------------------------------
+
 local function sendIconWire(message, target)
     return iRC:SendAddonTraffic(ICON_PREFIX, message, "WHISPER", target)
 end
@@ -268,6 +278,8 @@ local ICON_HELP = {
     violation = { "CHAT_ICON_VIOLATION_TITLE", "CHAT_ICON_VIOLATION_DESC" },
 }
 
+-- Chat rendering ------------------------------------------------------------
+
 local function iconLink(kind, icon)
     return string.format("|Haddon:iRCIcon:%s|h|T%s:0:0|t|h", kind, icon)
 end
@@ -355,6 +367,8 @@ local function hookChatTooltip(chatFrame)
     end)
     chatFrame:HookScript("OnHyperlinkLeave", hideChatIconTooltip)
 end
+
+-- Guild announcements -------------------------------------------------------
 
 local function canAnnounce(ruleKey)
     if not SendChatMessage or not iRC:IsGuildConnectionActive() or iRC:IsGuildConnectionBootstrap() then return false end
@@ -477,6 +491,8 @@ frame:RegisterEvent("PLAYER_UNGHOST")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 local deathStateSharePending = false
+-- Lifecycle hooks -----------------------------------------------------------
+
 local function shareCurrentDeathState()
     if not iRC:IsOfficialHardcoreRealm() then return end
     if deathStateSharePending then return end

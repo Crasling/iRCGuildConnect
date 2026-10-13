@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Active gameplay safeguards for guild rules
+--
+-- This module reacts to trade, mail, auction-house, language, and group state.
+-- It blocks unsafe actions locally and reports confirmed group violations, but
+-- never performs guild kicks or rank changes.
+
 local Enforcement = {}
 iRC.Enforcement = Enforcement
 
@@ -46,6 +52,8 @@ groupWarningFrame.text:SetAllPoints(groupWarningFrame)
 groupWarningFrame.text:SetJustifyH("CENTER")
 groupWarningFrame.text:SetTextColor(1, 0.10, 0.10)
 groupWarningFrame:Hide()
+
+-- Native-language enforcement ----------------------------------------------
 
 local function isRuleEnabled(key)
     local rules = iRC:GetConnectionRules()
@@ -100,6 +108,8 @@ local function installLanguageHooks()
     end
     languageHooksInstalled = true
 end
+
+-- Self-Found and economy restrictions --------------------------------------
 
 function Enforcement:UpdateSelfFoundWarning()
     local rules = iRC:GetConnectionRules()
@@ -395,6 +405,8 @@ function Enforcement:CloseRestrictedAuctionHouse()
     if C_Timer and C_Timer.After then C_Timer.After(0.1, closeAuctionHouse) else closeAuctionHouse() end
 end
 
+-- Group-rule protection and incident reporting -----------------------------
+
 local function canSafelyLeaveGroup()
     if InCombatLockdown and InCombatLockdown() then return false end
     if UnitAffectingCombat and UnitAffectingCombat("player") then return false end
@@ -614,6 +626,8 @@ function Enforcement:CheckGroup()
     end
     clearUnsafeGroupWarning()
 end
+
+-- Event-driven refresh ------------------------------------------------------
 
 function Enforcement:Refresh()
     if iRC.RaceLockedSync then iRC.RaceLockedSync:RefreshMoneyMonitoring() end

@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Recruitment search, review, and invitation workflow
+--
+-- Searches run one class at a time through Blizzard's /who service. Results are
+-- virtualized for large lists, while accepted/rejected status is synchronized
+-- between authorized guild recruiters.
+
 local Recruitment = {}
 iRC.Recruitment = Recruitment
 
@@ -20,6 +26,8 @@ local lastSyncRequestAt = 0
 local STATUS_PRIORITY = { CLEAR = 0, CONTACTED = 1, DECLINED = 2, ACCEPTED = 3, BLOCKED = 4, ANTISPAM = 5 }
 local VALID_SEARCH_CLASSES = { ALL = true }
 for _, classFile in ipairs(CLASS_ORDER) do VALID_SEARCH_CLASSES[classFile] = true end
+
+-- Input normalization and saved state --------------------------------------
 
 local function localizedClassName(classFile)
     return LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classFile]
@@ -206,6 +214,8 @@ local function makeEdit(parent, width, height, multiline)
     return box
 end
 
+-- Recruiter status synchronization ----------------------------------------
+
 local function sendStatus(record, status, target)
     if not record then return false end
     return iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "RECRUIT_STATUS", WIRE_VERSION,
@@ -309,6 +319,8 @@ function Recruitment:RequestSync()
     lastSyncRequestAt = time()
     return iRC:SendAddonTraffic(iRC.Prefix, table.concat({ "RECRUIT_REQUEST", WIRE_VERSION }, "\t"), "GUILD")
 end
+
+-- Serialized /who scanning -------------------------------------------------
 
 local function whoInfo(index)
     local values, ok
@@ -553,6 +565,8 @@ function Recruitment:StartScan()
     return true
 end
 
+-- Invitation and whisper sequence -----------------------------------------
+
 function Recruitment:Invite(info)
     if not info or info.historyRecord or info.guild ~= "" or not iRC:HasGuildPermission("recruitment") then return false end
     if iRC:IsLowTrafficMode() then
@@ -685,6 +699,8 @@ function Recruitment:UpdateScanButton()
     panel.scan:SetBackdropColor(0.075, 0.055, 0.035, 0.98)
     panel.scan:SetBackdropBorderColor(0.72, 0.43, 0.08, 1)
 end
+
+-- Virtualized result list ---------------------------------------------------
 
 function Recruitment:RenderVisibleRows()
     local panel = self.panel
@@ -870,6 +886,8 @@ function Recruitment:Refresh()
                 or "No recruitment results yet.")))
     panel.empty:SetShown(#visible == 0 and (view ~= "search" or not self.scanActive))
 end
+
+-- Panel construction and lifecycle -----------------------------------------
 
 function Recruitment:Create(parent)
     if self.panel then return self.panel end
@@ -1267,6 +1285,8 @@ end
 function Recruitment:Hide()
     if self.panel then self.panel:Hide() end
 end
+
+-- Chat-system response handling --------------------------------------------
 
 local function recruitmentResponse(message)
     if iRC:IsSecretValue(message) or type(message) ~= "string" or message == "" then return end

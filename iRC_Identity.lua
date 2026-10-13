@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Character identity links and guild-history normalization
+--
+-- Personal main/alt choices stay private until explicitly linked. Confirmed
+-- guild identity assignments and sanitized roster events can be synchronized
+-- so every authorized client presents the same member history.
+
 local Identity = {}
 iRC.Identity = Identity
 local warnedTogether = {}
@@ -28,6 +34,8 @@ local SYNCED_EVENT_TYPES = {
     JOIN = true, REJOIN = true, LEAVE = true, KICK = true, PROMOTE = true, DEMOTE = true,
     LEVEL = true, NAME = true, NOTE = true, OFFICER_NOTE = true, RETURN = true,
 }
+
+-- Guild-log deduplication and compaction -----------------------------------
 
 local function cleanWireText(value, limit)
     return tostring(value or ""):gsub("[%c]", " "):gsub("%s+", " "):sub(1, limit or 80)
@@ -254,6 +262,8 @@ local function findRecentGuildLogEvent(store, eventType, name, occurredAt)
     return nil, nil
 end
 
+-- Persistent identity store -------------------------------------------------
+
 local function guildStore(create)
     local guildKey = iRC:GetGuildKey()
     if not guildKey then return nil end
@@ -344,6 +354,8 @@ local function trimGuildLog(store)
         if removed and removed.id then store.guildLogIds[removed.id] = nil end
     end
 end
+
+-- Personal character identity ---------------------------------------------
 
 function Identity:GetStore()
     return guildStore(true)
@@ -536,6 +548,8 @@ function Identity:GetLinkedCharacters(name)
     return result
 end
 
+-- Guild-managed assignments -------------------------------------------------
+
 local function applyManagedAssignment(store, memberName, mainName, role, updatedAt, source)
     local memberKey = characterKey(memberName)
     if not store or not memberKey then return false end
@@ -587,6 +601,8 @@ function Identity:GetFormerMembers()
     table.sort(result, function(a, b) return (a.departedAt or 0) > (b.departedAt or 0) end)
     return result
 end
+
+-- Guild event history -------------------------------------------------------
 
 local function addGuildLog(store, eventType, name, text, classFile)
     local log = store and store.guildLog
@@ -786,6 +802,8 @@ function Identity:GetMemberActivity(name, limit)
     end
     return result
 end
+
+-- History and link-request synchronization ---------------------------------
 
 function Identity:BroadcastGuildLog(record, targetName)
     if not record or not iRC:IsGuildConnectionActive() or not iRC:HasGuildPermission("rosterHistory") then return false end
@@ -991,6 +1009,8 @@ function Identity:BroadcastPersonalIdentity(targetName, preserveTimestamp)
         cleanWireText(ownName, 80), cleanWireText(store.characters[store.main], 80), role }, "\t")
     return iRC:SendAddonTraffic(iRC.Prefix, payload, targetName and "WHISPER" or "GUILD", targetName)
 end
+
+-- Incoming identity protocol -----------------------------------------------
 
 function Identity:ReceiveSync(parts, sender)
     if parts[2] ~= IDENTITY_WIRE_VERSION then return false end
@@ -1262,6 +1282,8 @@ function Identity:ReceiveSync(parts, sender)
     if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
     return true
 end
+
+-- Roster reconciliation -----------------------------------------------------
 
 function Identity:ScanRoster()
     local store = guildStore(true)

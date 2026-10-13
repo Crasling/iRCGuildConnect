@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Diagnostic capture and report builder
+--
+-- Diagnostics are opt-in and bounded. This module collects sanitized event,
+-- API, cache, traffic, and timing information that can be pasted into a bug
+-- report without including private guild content.
+
 local Diagnostics = {}
 iRC.Diagnostics = Diagnostics
 
@@ -31,6 +37,8 @@ Diagnostics.eventNames = eventNames
 
 local noisyEvents = { UNIT_AURA = true, GLOBAL_MOUSE_DOWN = true, UPDATE_MOUSEOVER_UNIT = true }
 local captureFrame = CreateFrame("Frame")
+
+-- Bounded trace collection --------------------------------------------------
 
 local function Header()
     return string.format("%s v%s // Client %s // Build %s // TOC %s // Locale %s // Project %s",
@@ -122,6 +130,8 @@ function Diagnostics:RecordSlowOperation(label, elapsed)
     if #rows > 100 then table.remove(rows, 1) end
     self:Trace("SLOW", label, string.format("%.2fms", elapsed))
 end
+
+-- Human-readable reports ----------------------------------------------------
 
 function Diagnostics:BuildLogReport()
     local lines = { Header(), "", "-- Event and sync trace --" }
@@ -294,6 +304,8 @@ function Diagnostics:BuildBugReport(memberName)
         self:BuildCacheReport(), "", self:BuildPerformanceReport(), "", self:BuildApiReport(), "",
         self:BuildEventReport(), "", self:BuildAddOnReport(), "", self:BuildLogReport() }, "\n")
 end
+
+-- Optional Blizzard taint logging ------------------------------------------
 
 function Diagnostics:GetTaintLogState()
     return GetCVar and (tonumber(GetCVar("taintLog")) or 0) or 0

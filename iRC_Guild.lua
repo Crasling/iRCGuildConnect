@@ -2,6 +2,12 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- Guild roster cache and verification state
+--
+-- The Blizzard roster is normalized once, then reused by management pages,
+-- presence enforcement, race/class summaries, and member cards. Targeted
+-- invalidation keeps large guilds from rebuilding every row on each refresh.
+
 local AllianceRaces = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
 local HordeRaces = { ORC = true, SCOURGE = true, TAUREN = true, TROLL = true, BLOODELF = true }
 local IRC_PRESENCE_TIMEOUT = 90
@@ -18,6 +24,8 @@ local memberRowsDirty = {}
 local memberRowsRevision = 0
 local rosterUpdateTicket
 local lastVisibleRosterRefreshAt = 0
+
+-- Cached display-row invalidation ------------------------------------------
 
 local function bumpMemberRowsRevision()
     memberRowsRevision = memberRowsRevision + 1
@@ -43,6 +51,8 @@ function iRC:InvalidateGuildMemberRow(name)
     end
 end
 
+-- Presence enforcement scheduling -----------------------------------------
+
 function iRC:ResetPresenceNotificationChecks()
     reportedPresenceMismatches, pendingPresenceChecks = {}, {}
     presenceConnection, reviewTicket, reviewAt, selectedOfficer = nil, nil, nil, nil
@@ -65,6 +75,8 @@ local function memberKey(name, guid)
     if guid and guid ~= "" then return "guid:" .. guid end
     return "name:" .. iRC:NormalizeName(name)
 end
+
+-- Blizzard roster snapshots ------------------------------------------------
 
 function iRC:InvalidateGuildRosterSnapshot()
     guildRosterSnapshotValid = false
@@ -234,6 +246,8 @@ function iRC:GetGuildRosterSnapshot()
     guildRosterSnapshotValid = #snapshot > 0 or not inGuildConnection
     return guildRosterSnapshot, snapshotChanged
 end
+
+-- Member verification and warning election --------------------------------
 
 function iRC:GetMemberAttentionSince(name, verification, connection)
     if connection == nil then connection = self:GetConnection() end
@@ -612,6 +626,8 @@ function iRC:GetGuildMemberClassCheck(class, connection)
         mismatch = expected ~= "" and actual ~= "" and actual ~= expected,
     }
 end
+
+-- UI-ready roster rows and summaries ---------------------------------------
 
 local function buildGuildRosterRows(self, roster, connection)
     local now = time()

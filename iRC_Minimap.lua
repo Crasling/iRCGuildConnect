@@ -2,10 +2,16 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
+-- LibDataBroker / minimap launcher
+--
+-- This deliberately contains no main-window logic. It exposes the standard
+-- broker object and forwards clicks to the UI module.
+
 local Minimap = {}
 iRC.Minimap = Minimap
 local objectName = "iRC_MinimapButton"
 
+-- Visibility follows the personal minimap setting maintained by Core.
 function Minimap:UpdateVisibility()
     if not iRC.LDBIcon then return end
     if iRC:GetSettings().minimapButton.hide then
@@ -15,6 +21,7 @@ function Minimap:UpdateVisibility()
     end
 end
 
+-- LibDBIcon owns the actual movable button after the broker is created.
 local function createDataObject()
     if not iRC.LDBroker or not iRC.LDBIcon then return end
     iRC.MinimapDataObject = iRC.LDBroker:NewDataObject(objectName, {
@@ -40,6 +47,7 @@ local function createDataObject()
 end
 
 local registered = false
+-- Registration waits until saved variables and the broker libraries are ready.
 local function register()
     if registered or not iRC.LDBIcon then return end
     createDataObject()
