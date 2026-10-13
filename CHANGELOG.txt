@@ -8,8 +8,10 @@ v0.5.27 - Large Guild Performance & Class-Locked Rules
 [ADDED] Confirmed linked characters show purple [Alt] or light-blue [BankAlt] chat labels with the main's class-colored name, level, and guild rank on hover; a Personal Settings toggle controls their visibility
 [ADDED] Guild Notifications can announce configurable 10-level milestones and primary-profession milestones every 75 skill points from a selected starting milestone; defaults are level 60 and skill 300 and settings synchronize with the Guild Master's ruleset
 [ADDED] Class-Locked guild rules use the native Guild Master's class, flag mismatched members through verification and bundled officer warnings, and appear in a dedicated Guild Leaderboard tab with a class tag and icon
+[ADDED] Guild Member CSV exports include received profession skill ranks and known recipes for each member
 [CHANGED] Personal Settings dropdowns and sliders use matching dark-gold iRC controls instead of Blizzard templates
 [CHANGED] Guild Settings is renamed Guild Notifications and remains visibly disabled until at least one guild enforcement rule is active
+[CHANGED] Announcement cards use a more compact layout and disable unavailable milestone arrows with a greyed-out state
 [CHANGED] More than three simultaneous enforcement notices are summarized per officer or guild channel, and bulk individual whispers are suppressed to prevent large-roster chat floods
 [PERFORMANCE] Guild Members, Verification, Member Management, and bulk member workflows render only visible roster rows for responsive scrolling in guilds with up to 1,000 members
 [PERFORMANCE] Unchanged roster events and tab changes reuse cached member, connection, Guild Report, Guild Map, and Guild-Found data instead of repeatedly rebuilding full-guild results

@@ -3800,21 +3800,66 @@ function UI:Create()
         end
         return tostring(math.floor(days + 0.5)) .. " days ago", string.format("%.2f", days)
     end
+    local function cleanExportText(value)
+        return tostring(value or ""):gsub("[%c]+", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+    end
+    local function professionExportFields(member, professionMembers)
+        local data = professionMembers and professionMembers[iRC:NormalizeName(member.name)]
+        if not data or (member.guid and member.guid ~= "" and data.guid and data.guid ~= ""
+            and data.guid ~= member.guid) then return "", "" end
+        local professions, recipeGroups = {}, {}
+        for _, option in ipairs(iRC.Professions:GetOptions()) do
+            local professionID, professionName = option[1], option[2]
+            local rank = type(data.skills) == "table" and tonumber(data.skills[professionID])
+            if rank then
+                professions[#professions + 1] = professionName .. " " .. tostring(math.floor(rank))
+                local recipeNames, seen = {}, {}
+                local professionRecipes = type(data.recipes) == "table"
+                    and type(data.recipes[professionID]) == "table" and data.recipes[professionID] or {}
+                for _, recipe in ipairs(professionRecipes) do
+                    local token = tostring(recipe or "")
+                    local recipeName
+                    if token:sub(1, 1) == "S" then
+                        local spellID = tonumber(token:sub(2))
+                        recipeName = spellID and iRC:GetSpellName(spellID) or nil
+                        if not recipeName and spellID then recipeName = "Spell #" .. tostring(spellID) end
+                    elseif token:sub(1, 1) == "N" then
+                        recipeName = token:sub(2)
+                    else
+                        recipeName = token
+                    end
+                    recipeName = cleanExportText(recipeName)
+                    if recipeName ~= "" and not seen[recipeName] then
+                        seen[recipeName] = true
+                        recipeNames[#recipeNames + 1] = recipeName
+                    end
+                end
+                if #recipeNames > 0 then
+                    table.sort(recipeNames, function(a, b) return a:lower() < b:lower() end)
+                    recipeGroups[#recipeGroups + 1] = professionName .. ": " .. table.concat(recipeNames, " | ")
+                end
+            end
+        end
+        return table.concat(professions, "; "), table.concat(recipeGroups, "; ")
+    end
     function exportReport:Generate()
         self.title:SetText("Guild Member CSV Export")
+        local connection = iRC:GetConnection()
+        local professionMembers = connection and connection.professionMembers or nil
         local roster = {}
         for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do roster[#roster + 1] = member end
         table.sort(roster, function(a, b)
             return iRC:NormalizeName(a.name) < iRC:NormalizeName(b.name)
         end)
         local lines = {
-            "Name,Class,Level,Rank,Status,Last Online,Last Online Days,Identity,Main Character",
+            "Name,Class,Level,Rank,Status,Last Online,Last Online Days,Identity,Main Character,Professions,Known Recipes",
         }
         for _, member in ipairs(roster) do
             local lastOnline, lastOnlineDays = lastOnlineText(member)
             local identity = iRC.Identity and iRC.Identity:GetIdentityLabel(member.name) or ""
             local mainName = iRC.Identity and iRC.Identity:GetMainCharacterName(member.name) or ""
             if identity == "Main" then mainName = member.name end
+            local professions, recipes = professionExportFields(member, professionMembers)
             lines[#lines + 1] = table.concat({
                 csvField(iRC:FormatPlayerName(member.name)),
                 csvField(member.className or member.classFile or "Unknown"),
@@ -3825,6 +3870,8 @@ function UI:Create()
                 csvField(lastOnlineDays),
                 csvField(identity),
                 csvField(mainName ~= "" and iRC:FormatPlayerName(mainName) or ""),
+                csvField(professions),
+                csvField(recipes),
             }, ",")
         end
         self.output:SetText(csvDocument(lines))
@@ -6420,7 +6467,7 @@ local function updateGuildRules(frame)
         {
             section = "Announcements",
             title = "Level Announcements",
-            description = "Send a guild-chat announcement at every 10-level milestone from the selected starting level.",
+            description = "Announce every 10-level milestone from the selected starting level.",
             active = rules.enableGuildLevel60Message == true,
             activeLabel = "ENABLED",
             inactiveLabel = "DISABLED",
@@ -6433,7 +6480,7 @@ local function updateGuildRules(frame)
         {
             section = "Announcements",
             title = "Profession Announcements",
-            description = "Send a guild-chat announcement every 75 skill points in a primary profession, starting at the selected milestone.",
+            description = "Announce every 75-skill milestone from the selected starting skill.",
             active = rules.enableGuildProfessionMessage == true,
             activeLabel = "ENABLED",
             inactiveLabel = "DISABLED",
@@ -6534,32 +6581,43 @@ local function updateGuildRules(frame)
         row.title:SetText(entry.title)
         row.description:SetText(entry.description)
         local hasSetting = type(entry.settingOptions) == "table" and #entry.settingOptions > 0
-        local rowHeight = hasSetting and 68 or 44
+        local rowHeight = hasSetting and 56 or 44
         row:SetHeight(rowHeight)
         row.description:ClearAllPoints()
         row.description:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -1)
-        row.description:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -127, hasSetting and 27 or 4)
+        row.description:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -127, hasSetting and 21 or 4)
         row.stateBackground:ClearAllPoints()
-        row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -9, hasSetting and 11 or 0)
+        row.stateBackground:SetPoint("RIGHT", row, "RIGHT", -9, hasSetting and 8 or 0)
         if hasSetting then
             local settingEditable = canEdit and connectionActive and entry.available ~= false and entry.active == true
             local currentEntry = entry
+            local selected = 1
+            for optionIndex, option in ipairs(currentEntry.settingOptions) do
+                if option == currentEntry.settingValue then selected = optionIndex break end
+            end
             row.setting:SetText(entry.settingText and entry.settingText(entry.settingValue) or tostring(entry.settingValue))
             row.setting:SetTextColor(settingEditable and 0.78 or 0.42, settingEditable and 0.78 or 0.42,
                 settingEditable and 0.78 or 0.42)
             row.setting:Show()
-            row.settingPrevious:SetEnabled(settingEditable)
-            row.settingNext:SetEnabled(settingEditable)
-            row.settingPrevious:SetAlpha(settingEditable and 1 or 0.4)
-            row.settingNext:SetAlpha(settingEditable and 1 or 0.4)
+            local function styleSettingArrow(button, enabled)
+                button:SetEnabled(enabled)
+                button:SetAlpha(enabled and 1 or 0.65)
+                button.text:SetTextColor(enabled and COLORS.gold[1] or 0.42,
+                    enabled and COLORS.gold[2] or 0.42, enabled and COLORS.gold[3] or 0.42)
+                button:SetBackdropColor(enabled and 0.08 or 0.045, enabled and 0.06 or 0.045,
+                    enabled and 0.035 or 0.045, enabled and 0.98 or 0.72)
+                button:SetBackdropBorderColor(enabled and 0.52 or 0.22, enabled and 0.38 or 0.22,
+                    enabled and 0.17 or 0.22, enabled and 1 or 0.72)
+            end
+            local previousEnabled = settingEditable and selected > 1
+            local nextEnabled = settingEditable and selected < #currentEntry.settingOptions
+            styleSettingArrow(row.settingPrevious, previousEnabled)
+            styleSettingArrow(row.settingNext, nextEnabled)
             local function changeSetting(direction)
-                if not settingEditable then return end
-                local selected = 1
-                for optionIndex, option in ipairs(currentEntry.settingOptions) do
-                    if option == currentEntry.settingValue then selected = optionIndex break end
-                end
-                selected = math.max(1, math.min(#currentEntry.settingOptions, selected + direction))
-                if currentEntry.setTarget(currentEntry.settingOptions[selected]) ~= false then UI:Refresh() end
+                if not settingEditable or direction < 0 and not previousEnabled
+                    or direction > 0 and not nextEnabled then return end
+                local targetIndex = selected + direction
+                if currentEntry.setTarget(currentEntry.settingOptions[targetIndex]) ~= false then UI:Refresh() end
             end
             row.settingPrevious:SetScript("OnClick", function() changeSetting(-1) end)
             row.settingNext:SetScript("OnClick", function() changeSetting(1) end)
