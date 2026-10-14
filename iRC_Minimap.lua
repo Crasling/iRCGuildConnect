@@ -28,6 +28,7 @@ local function createDataObject()
         type = "data source",
         text = iRC.DisplayName,
         icon = iRC.IconPath,
+        iconCoords = { 0.14, 0.86, 0.10, 0.82 },
         OnClick = function(_, button)
             if button == "LeftButton" then
                 if not iRC:CanOpenPanel() then return end

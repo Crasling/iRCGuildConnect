@@ -57,6 +57,9 @@ local REPORT_INTERVAL = 120
 local REFRESH_COOLDOWN = 300
 local STALE_AFTER = 900
 local REPORT_MAX_AGE = 5 * 86400
+-- Ignore repeat public broadcasts briefly after refreshing the same guild.
+-- Cache selection no longer uses this window, but the live channel receiver does.
+local RECENT_REPORT_WINDOW = 60
 local CACHE_REQUEST_WINDOW = 5
 local CACHE_OPEN_REQUEST_COOLDOWN = 30
 local CACHE_TRANSFER_TIMEOUT = 15

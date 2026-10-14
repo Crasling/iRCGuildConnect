@@ -2,13 +2,15 @@
 iRC - Changelog
 ================================================================================
 
-v0.5.28 - In Development
+v0.5.28 - Guild Language & Map Layers
 --------------------------------------------------------------------------------
 [ADDED] Guild Leaderboard cards show the guild's native Preferred Online Language as a secondary tag after iRC observes the setting in Blizzard's Guild Preferred Play Settings panel
 [CHANGED] The addon category is Guild instead of Social
 [CHANGED] Left-menu page order and visibility are account-wide, with automatic migration from the first character's v0.5.27 layout; page access remains character-specific
+[CHANGED] Updated the addon logo and adjusted its minimap framing so the mark fills the button and remains vertically centered
 [FIXED] Guild Leaderboard cache refreshes ignore identical completed snapshots, overlapping requests, and duplicate transfer requests instead of repeatedly downloading the same report packages
 [FIXED] Guild Map position updates include a compact companion layer number when known, so pins do not depend on hidden-channel roster discovery or delayed layer whispers
+[FIXED] Receiving a public Guild Report no longer errors when applying the recent-report duplicate window
 
 v0.5.27 - Large Guild Performance & Class-Locked Rules
 --------------------------------------------------------------------------------
