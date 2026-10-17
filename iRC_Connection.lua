@@ -923,10 +923,16 @@ function iRC:SendGuildFoundTradeExceptions(targetName, force)
     return true
 end
 
-function iRC:IsRulesetBroadcaster()
+function iRC:IsRulesetBroadcasterName(candidateName)
     if self:IsGuildConnectionBootstrap() then return false end
     local name, rank = getRulesAuthority()
-    local isSelf = name ~= nil and self:NormalizeName(name) == self:NormalizeName(self:GetPlayerName())
+    local isCandidate = name ~= nil and candidateName ~= nil
+        and self:NormalizeName(name) == self:NormalizeName(candidateName)
+    return isCandidate, name, rank
+end
+
+function iRC:IsRulesetBroadcaster()
+    local isSelf, name, rank = self:IsRulesetBroadcasterName(self:GetPlayerName())
     -- A newly loaded officer has not received the other clients' profiles yet.
     -- Give the actual active authority time to answer before permitting a
     -- non-Guild-Master fallback broadcaster to elect itself.
@@ -1137,9 +1143,7 @@ function iRC:GetGuildFoundAuditRecords()
 end
 
 function iRC:RecordGuildFoundAudit(action, target)
-    local pureGuildFound = self:GetProgressionMode() == "GUILD_FOUND"
-    if ((UnitLevel("player") or 0) < 60 and not pureGuildFound) or not self:IsGuildFoundRequired()
-        or not GUILD_FOUND_AUDIT_ACTIONS[action] then return false end
+    if not self:IsGuildFoundEconomyActive() or not GUILD_FOUND_AUDIT_ACTIONS[action] then return false end
     local occurredAt = time()
     local player = self:GetPlayerName()
     local id = table.concat({ self:NormalizeName(player), occurredAt, action, cleanWireText(target, 40) }, ":")
@@ -1152,13 +1156,12 @@ end
 function iRC:UploadGuildFoundAudit(targetName)
     -- Only recent records created by this character are replayed. Uploads are
     -- capped and rate-limited so officer login does not flood whispers.
-    local targetRank = getRosterRank(targetName)
-    if targetRank == nil or targetRank > 1 then return false end
+    if not self:GuildMemberHasPermission(targetName, "incidents") then return false end
     local key, now = self:NormalizeName(targetName), time()
     if guildFoundAuditUploadAt[key] and now - guildFoundAuditUploadAt[key] < 300 then return false end
     guildFoundAuditUploadAt[key] = now
     local records, sentCount = self:GetGuildFoundAuditRecords(), 0
-    for index = #records, math.max(1, #records - 19), -1 do
+    for index = #records, 1, -1 do
         local record = records[index]
         if record.player and self:NormalizeName(record.player) == self:NormalizeName(self:GetPlayerName())
             and now - (tonumber(record.occurredAt) or 0) <= 604800 then
@@ -1167,6 +1170,7 @@ function iRC:UploadGuildFoundAudit(targetName)
                 record.action, cleanWireText(record.target, 80),
             }, SEP), "WHISPER", targetName)
             sentCount = sentCount + 1
+            if sentCount >= 20 then break end
         end
     end
     if sentCount > 0 then self:DebugMsg(self:Text("GUILDFOUND_AUDIT_HISTORY_SENT", sentCount, self:FormatPlayerName(targetName)), 3) end
@@ -1389,7 +1393,10 @@ local function handleMessage(prefix, message, distribution, sender)
             summarizeProfileDebug(sender)
             iRC:UploadOfficerIncidentsToGM(sender)
             iRC:UploadGuildFoundAudit(sender)
-            if iRC.RaceLockedSync then iRC.RaceLockedSync:RelayOverrides(sender) end
+            if iRC.RaceLockedSync then
+                iRC.RaceLockedSync:RelayOverrides(sender)
+                if iRC.RaceLockedSync.RelayWitnesses then iRC.RaceLockedSync:RelayWitnesses(sender) end
+            end
         end
     elseif kind == "PRESENCE_REQUEST" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
         if parts[3] == "OFFICER_POLL" then
@@ -1427,7 +1434,12 @@ local function handleMessage(prefix, message, distribution, sender)
             send(iRC.Prefix, table.concat({ "GROUP_VIOLATION_ACK", WIRE_VERSION, violationId }, SEP), "WHISPER", sender)
         end
     elseif kind == "GROUP_VIOLATION_ACK" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) then
-        if iRC.MarkGroupViolationReported then iRC:MarkGroupViolationReported(parts[3]) end
+        if iRC:GuildMemberHasPermission(sender, "presence") then
+            if iRC.MarkGroupViolationReported then iRC:MarkGroupViolationReported(parts[3]) end
+        else
+            iRC:DebugMsg("Rejected group-violation acknowledgement from unauthorized member "
+                .. iRC:FormatPlayerName(sender) .. ".", 2)
+        end
     elseif kind == "GF_AUDIT" and parts[2] == WIRE_VERSION and iRC:IsGuildMemberName(sender) and iRC:HasGuildPermission("incidents") then
         local occurredAt, action = tonumber(parts[4]), parts[5]
         if occurredAt and occurredAt <= time() + 300 and occurredAt >= time() - 604800
@@ -1479,9 +1491,9 @@ local function handleMessage(prefix, message, distribution, sender)
             and timestamp >= math.floor(tonumber(connection.rankPermissionsTimestamp) or 0) then
             local values, count = {}, 0
             for value in wire:gmatch("[^,]+") do
-                value = tonumber(value)
-                if not value or value < 0 or value > 9 then count = -99; break end
-                count = count + 1; values[count] = math.floor(value)
+                local parsedValue = tonumber(value)
+                if not parsedValue or parsedValue < 0 or parsedValue > 9 then count = -99; break end
+                count = count + 1; values[count] = math.floor(parsedValue)
             end
             if count == 6 then
                 for index, key in ipairs({ "verification", "presence", "incidents", "tradeExceptions", "notifications", "homepage" }) do

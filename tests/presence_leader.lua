@@ -85,6 +85,15 @@ connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t9\
 assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t9\t"), "presence request returns HELLO")
 assert(messages[#messages][3] == "WHISPER" and messages[#messages][4] == "Member-Soulseeker", "presence response targets the requester directly")
 
+local acknowledgedViolation
+function iRC:MarkGroupViolationReported(violationId) acknowledgedViolation = violationId end
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix,
+    "GROUP_VIOLATION_ACK\t9\tordinary-member-ack", "WHISPER", "Member-Soulseeker")
+assert(acknowledgedViolation == nil, "ordinary guild members cannot acknowledge officer incidents")
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix,
+    "GROUP_VIOLATION_ACK\t9\tauthorized-officer-ack", "WHISPER", "Aofficer-Soulseeker")
+assert(acknowledgedViolation == "authorized-officer-ack", "presence-authorized officers can acknowledge incidents")
+
 -- Rules and activation bootstrap fall through every guild rank. The lowest
 -- online rank index with a fresh iRC client is authoritative.
 roster[2].online = false

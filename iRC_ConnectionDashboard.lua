@@ -514,8 +514,24 @@ function Dashboard:Create()
         return string.format("%dm %ds", minutes, remainingSeconds)
     end
 
+    local function discrepancyReasonText(reason)
+        local keys = {
+            INBOX_BLOCK_BYPASS = "GF_REASON_INBOX_BLOCK_BYPASS",
+            MONEY_MISMATCH = "GF_REASON_MONEY_MISMATCH",
+            SNAPSHOT_MISMATCH = "GF_REASON_SNAPSHOT_MISMATCH",
+            PLAYED_GAP = "GF_REASON_PLAYED_GAP",
+            PLAYED_ROLLBACK = "GF_REASON_PLAYED_ROLLBACK",
+            TRADE_BLOCK_BYPASS = "GF_REASON_TRADE_BLOCK_BYPASS",
+            TRADE_EXCEPTION_MONEY = "GF_REASON_TRADE_EXCEPTION_MONEY",
+            MAIL_BLOCK_BYPASS = "GF_REASON_MAIL_BLOCK_BYPASS",
+        }
+        if not reason or reason == "" then return iRC:Text("GF_REASON_LEGACY") end
+        return keys[reason] and iRC:Text(keys[reason]) or tostring(reason)
+    end
+
     local function appendGoldDiscrepancyDetails(lines, status)
         local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
+        lines[#lines + 1] = iRC:Text("GF_REPORT_EVIDENCE_REASON", discrepancyReasonText(status.discrepancyReason))
         lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_CLIENT_INACTIVE") .. iRC.Colors.Reset
         if status.moneyBefore == nil or status.moneyAfter == nil then
             lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
@@ -564,7 +580,8 @@ function Dashboard:Create()
         local level = member and tonumber(member.level) or 0
         local reportProgression = iRC:GetProgressionMode()
         if member and level < 60 and reportProgression ~= "SELF_FOUND_OR_GUILD_FOUND" and reportProgression ~= "GUILD_FOUND" then
-            frame.memberReport:SetSize(640, status and 290 or 190)
+            frame.memberReport:SetSize(640, status and status.tamperAt and status.tamperAt > 0 and 430
+                or status and 290 or 190)
             reportTitle:SetText(iRC:Text("SF_REPORT_TITLE"))
             local liveState = member.verification and member.verification.state
             local hasSelfFoundStatus = iRC:IsLiveAddonState(liveState)
@@ -601,7 +618,7 @@ function Dashboard:Create()
             reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
             reportBody:SetText(iRC:Text("GF_REPORT_NO_DATA", displayMemberName(targetName)))
         else
-            frame.memberReport:SetSize(640, status.tamperAt and status.tamperAt > 0 and 405 or 290)
+            frame.memberReport:SetSize(640, status.tamperAt and status.tamperAt > 0 and 430 or 290)
             reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
             local lines = {
                 iRC:Text("GF_REPORT_MEMBER", displayMemberName(targetName)),

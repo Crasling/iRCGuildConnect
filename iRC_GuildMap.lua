@@ -561,6 +561,12 @@ function GuildMap:GetLocalLayer()
     return localLayer
 end
 
+local function shouldShowLayerPanel()
+    if iRC:GetSettings().showLayerPanel == false then return false end
+    local insideInstance = IsInInstance and IsInInstance()
+    return insideInstance ~= true
+end
+
 function GuildMap:UpdateLocalLayerDisplay()
     local layer = self:GetLocalLayer()
     if mapControls and mapControls.layerLabel then
@@ -587,7 +593,7 @@ function GuildMap:UpdateLocalLayerDisplay()
         layerPanel.value:SetText(layer and tostring(layer.number) or (waiting and "..." or "--"))
         layerPanel.value:SetTextColor(layer and 0.30 or (waiting and 1 or 0.72),
             layer and 1 or (waiting and 0.82 or 0.72), layer and 0.35 or (waiting and 0.35 or 0.72))
-        layerPanel:SetShown(iRC:GetSettings().showLayerPanel ~= false)
+        layerPanel:SetShown(shouldShowLayerPanel())
     end
 end
 

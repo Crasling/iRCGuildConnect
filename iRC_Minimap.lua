@@ -9,7 +9,8 @@ if not iRC then return end
 
 local Minimap = {}
 iRC.Minimap = Minimap
-local objectName = "iRC_MinimapButton"
+-- LibDBIcon uses this registration name as the AddOn Compartment label.
+local objectName = "iRC"
 
 -- Visibility follows the personal minimap setting maintained by Core.
 function Minimap:UpdateVisibility()

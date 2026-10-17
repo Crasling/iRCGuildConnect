@@ -2,6 +2,18 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.29 - Guild Found Safeguards
+--------------------------------------------------------------------------------
+[ADDED] iRC is available from Blizzard's AddOns button
+[CHANGED] The Layer panel hides automatically inside instances
+[FIXED] Chat icons and linked-main tooltips no longer cause interface errors
+[FIXED] Guild Found officer decisions now stay consistent between authorized officers
+[FIXED] Large Guild Found verification lists now share correctly
+[FIXED] Only authorized officers can confirm reported group violations
+[FIXED] Guild Found audits now work correctly for hybrid characters, Personal Bank Alts, and delegated reviewers
+[FIXED] Approved trade exceptions are recorded once and blocked trade, mail, or inbox actions are flagged for review
+[IMPROVED] Guild Found keeps money and played-time discrepancies until an officer reviews them
+
 v0.5.28 - Guild Language & Map Layers
 --------------------------------------------------------------------------------
 [ADDED] Guild Leaderboard cards show the guild's native Preferred Online Language as a secondary tag after iRC observes the setting in Blizzard's Guild Preferred Play Settings panel

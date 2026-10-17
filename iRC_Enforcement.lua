@@ -27,6 +27,12 @@ local pendingGroupLeaveConfirmation
 local observedGroupRestrictions
 local initialGroupProtectionPending = true
 local restrictedTradeCancelled = false
+local approvedTradeExceptionRecorded = false
+local protectedTradeEvidence
+local restrictedMailEvidence
+local inboxHooksInstalled = {}
+local restrictedInboxBypassKey
+local protectedInboxEvidence
 local lastMailRestrictionReason
 local lastTradeRestrictionReason
 local lastInboxRestrictionKey
@@ -63,12 +69,7 @@ local function isRuleEnabled(key)
 end
 
 local function isGuildFoundEconomyActive()
-    local progressionMode = iRC:GetProgressionMode()
-    local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(iRC:GetPlayerName())
-    local eligible = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
-        or (UnitLevel("player") or 0) >= 60
-        or personalBank
-    return iRC:IsGuildFoundRequired() and eligible and (personalBank or not iRC:GetSelfFoundState())
+    return iRC:IsGuildFoundEconomyActive()
 end
 
 local function getNativeLanguage()
@@ -238,6 +239,40 @@ local function getTradeAcceptButton()
     return _G.TradeFrameTradeButton or (_G.TradeFrame and (_G.TradeFrame.TradeButton or _G.TradeFrame.AcceptButton))
 end
 
+local function flagProtectedInteraction(reason, evidence)
+    if not iRC.RaceLockedSync or not iRC.RaceLockedSync.FlagMonitoringDiscrepancy then return false end
+    local currentMoney = GetMoney and GetMoney() or nil
+    local flagged = iRC.RaceLockedSync:FlagMonitoringDiscrepancy(reason,
+        evidence and evidence.money, currentMoney, evidence and evidence.startedAt)
+    if flagged then iRC:DebugMsg(iRC:Text("GUILD_FOUND_MONITORING_DISCREPANCY", reason), 2) end
+    return flagged
+end
+
+local function captureProtectedTradeEvidence()
+    if not isTradeWindowOpen() or not isGuildFoundEconomyActive() then
+        protectedTradeEvidence = nil
+        return
+    end
+    local partnerName = getTradePartnerName()
+    local button = getTradeAcceptButton()
+    if not partnerName or not button then return end
+    local restricted = button.iRCRestricted == true
+    local exception = button.iRCApprovedException
+    if not restricted and not exception then
+        protectedTradeEvidence = nil
+        return
+    end
+    if not protectedTradeEvidence or protectedTradeEvidence.partner ~= partnerName then
+        protectedTradeEvidence = {
+            partner = partnerName,
+            money = GetMoney and GetMoney() or nil,
+            startedAt = time(),
+        }
+    end
+    protectedTradeEvidence.restricted = restricted
+    protectedTradeEvidence.exception = exception
+end
+
 function Enforcement:UpdateTradeRestriction()
     local button = getTradeAcceptButton()
     if not button or not button.SetEnabled then return end
@@ -245,11 +280,13 @@ function Enforcement:UpdateTradeRestriction()
         if button.iRCRestricted then button:SetEnabled(true) end
         button.iRCRestricted, button.iRCApprovedException = nil, nil
         lastTradeRestrictionReason = nil
+        protectedTradeEvidence = nil
         return
     end
     if not isGuildFoundEconomyActive() then
         if button.iRCRestricted then button:SetEnabled(true) end
-        button.iRCRestricted, lastTradeRestrictionReason = nil, nil
+        button.iRCRestricted, button.iRCApprovedException, lastTradeRestrictionReason = nil, nil, nil
+        protectedTradeEvidence = nil
         return
     end
 
@@ -262,9 +299,10 @@ function Enforcement:UpdateTradeRestriction()
     if allowed then
         if button.iRCRestricted then button:SetEnabled(true) end
         button.iRCRestricted, lastTradeRestrictionReason = nil, nil
-        if exceptionNote then button.iRCApprovedException = exceptionNote end
+        button.iRCApprovedException = exceptionNote
     else
         button.iRCRestricted = true
+        button.iRCApprovedException = nil
         button:SetEnabled(false)
         local restrictionKey = tostring(partnerName or "") .. ":" .. tostring(reason or "")
         if restrictionKey ~= lastTradeRestrictionReason then
@@ -274,6 +312,25 @@ function Enforcement:UpdateTradeRestriction()
                 partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
         end
     end
+    captureProtectedTradeEvidence()
+end
+
+function Enforcement:RecordApprovedTradeException(playerAccepted)
+    if playerAccepted ~= true and playerAccepted ~= 1 then return false end
+    self:UpdateTradeRestriction()
+    local button = getTradeAcceptButton()
+    local note = button and button.iRCApprovedException
+    if approvedTradeExceptionRecorded or not note then return false end
+    local partnerName = getTradePartnerName()
+    if not partnerName then return false end
+    if protectedTradeEvidence then
+        protectedTradeEvidence.playerAccepted = true
+        protectedTradeEvidence.exception = note
+    end
+    approvedTradeExceptionRecorded = true
+    iRC:RecordGuildFoundAudit("TRADE_EXCEPTION_APPROVED",
+        partnerName .. " (" .. tostring(note) .. ")")
+    return true
 end
 
 function Enforcement:UpdateMailRestriction()
@@ -282,6 +339,7 @@ function Enforcement:UpdateMailRestriction()
     if not isGuildFoundEconomyActive() then
         if button.iRCMailRestricted then button:SetEnabled(true) end
         button.iRCMailRestricted = nil
+        restrictedMailEvidence = nil
         lastMailRestrictionReason = nil
         return
     end
@@ -290,6 +348,7 @@ function Enforcement:UpdateMailRestriction()
     if not recipient then
         if button.iRCMailRestricted then button:SetEnabled(true) end
         button.iRCMailRestricted = nil
+        restrictedMailEvidence = nil
         lastMailRestrictionReason = nil
         return
     end
@@ -297,9 +356,17 @@ function Enforcement:UpdateMailRestriction()
     if allowed then
         if button.iRCMailRestricted then button:SetEnabled(true) end
         button.iRCMailRestricted = nil
+        restrictedMailEvidence = nil
     else
         button.iRCMailRestricted = true
         button:SetEnabled(false)
+        if not restrictedMailEvidence or restrictedMailEvidence.recipient ~= recipient then
+            restrictedMailEvidence = {
+                recipient = recipient,
+                money = GetMoney and GetMoney() or nil,
+                startedAt = time(),
+            }
+        end
     end
     if not allowed and reason ~= lastMailRestrictionReason then
         lastMailRestrictionReason = reason
@@ -344,6 +411,47 @@ local function getInboxRestriction(index)
     return true, sender
 end
 
+local function currentInboxIndex(index)
+    return tonumber(index)
+        or (_G.OpenMailFrame and (_G.OpenMailFrame.openMailID or _G.OpenMailFrame.mailIndex))
+        or (_G.InboxFrame and _G.InboxFrame.openMailID)
+end
+
+local function recordRestrictedInboxBypass(action, index)
+    index = currentInboxIndex(index)
+    local blocked, sender = index and getInboxRestriction(index)
+    if not blocked and protectedInboxEvidence and protectedInboxEvidence.index == index then
+        blocked, sender = true, protectedInboxEvidence.sender
+    end
+    if not blocked then return end
+    local key = tostring(index) .. ":" .. tostring(sender or "")
+    if restrictedInboxBypassKey == key then return end
+    restrictedInboxBypassKey = key
+    local currentMoney = GetMoney and GetMoney() or nil
+    flagProtectedInteraction("INBOX_BLOCK_BYPASS", {
+        money = protectedInboxEvidence and protectedInboxEvidence.money or currentMoney,
+        startedAt = protectedInboxEvidence and protectedInboxEvidence.startedAt or time(),
+    })
+    iRC:RecordGuildFoundAudit("INBOX_BLOCKED", tostring(sender or "") .. " (" .. action .. ")")
+end
+
+function Enforcement:InstallInboxAPIGuards()
+    if not hooksecurefunc then return end
+    for _, functionName in ipairs({ "TakeInboxMoney", "TakeInboxItem", "AutoLootMailItem" }) do
+        local hookedName = functionName
+        if not inboxHooksInstalled[hookedName] and type(_G[hookedName]) == "function" then
+            local hooked = pcall(hooksecurefunc, hookedName, function(index)
+                recordRestrictedInboxBypass(hookedName, index)
+            end)
+            if hooked then
+                inboxHooksInstalled[hookedName] = true
+            else
+                iRC:DebugMsg("Guild Found could not monitor the modern " .. hookedName .. " mail API.", 2)
+            end
+        end
+    end
+end
+
 function Enforcement:IsInboxMailRestricted(index)
     return getInboxRestriction(index)
 end
@@ -375,6 +483,17 @@ function Enforcement:UpdateInboxRestriction()
         setControlRestricted(_G["OpenMailAttachmentButton" .. slot], blocked)
     end
     local restrictionKey = blocked and tostring(index) .. ":" .. tostring(sender or "") or nil
+    if blocked and (not protectedInboxEvidence or protectedInboxEvidence.key ~= restrictionKey) then
+        protectedInboxEvidence = {
+            key = restrictionKey,
+            index = tonumber(index),
+            sender = sender,
+            money = GetMoney and GetMoney() or nil,
+            startedAt = time(),
+        }
+    elseif not blocked then
+        protectedInboxEvidence = nil
+    end
     if restrictionKey and restrictionKey ~= lastInboxRestrictionKey then
         self:ShowInboxRestriction(index, sender)
     end
@@ -383,6 +502,7 @@ end
 
 function Enforcement:InstallMailAPIGuards()
     -- Restrict Blizzard's controls instead of replacing protected global APIs.
+    self:InstallInboxAPIGuards()
     self:InstallMailRecipientGuard()
     self:UpdateMailRestriction()
     self:UpdateInboxRestriction()
@@ -654,6 +774,9 @@ frame:RegisterEvent("PLAYER_ALIVE")
 frame:RegisterEvent("PLAYER_CONTROL_GAINED")
 frame:RegisterEvent("TRADE_SHOW")
 frame:RegisterEvent("TRADE_UPDATE")
+if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("TRADE_ACCEPT_UPDATE") then
+    frame:RegisterEvent("TRADE_ACCEPT_UPDATE")
+end
 frame:RegisterEvent("TRADE_CLOSED")
 frame:RegisterEvent("AUCTION_HOUSE_SHOW")
 frame:RegisterEvent("MAIL_SHOW")
@@ -661,7 +784,7 @@ frame:RegisterEvent("MAIL_INBOX_UPDATE")
 frame:RegisterEvent("MAIL_SEND_INFO_UPDATE")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
-frame:SetScript("OnEvent", function(_, event, unit)
+frame:SetScript("OnEvent", function(_, event, unit, targetAccepted)
     if event == "PLAYER_LOGIN" then
         initialGroupProtectionPending = true
         protectExistingGroup(true)
@@ -693,9 +816,32 @@ frame:SetScript("OnEvent", function(_, event, unit)
             iRC.SelfFoundAuraReady = true
         end
     elseif event == "TRADE_CLOSED" then
+        local evidence = protectedTradeEvidence
+        protectedTradeEvidence = nil
+        if evidence and evidence.playerAccepted and (evidence.restricted or evidence.exception)
+            and C_Timer and C_Timer.After then
+            C_Timer.After(0.5, function()
+                local currentMoney = GetMoney and GetMoney() or nil
+                if evidence.money ~= nil and currentMoney ~= nil and evidence.money ~= currentMoney then
+                    flagProtectedInteraction(evidence.exception and "TRADE_EXCEPTION_MONEY" or "TRADE_BLOCK_BYPASS", evidence)
+                end
+            end)
+        end
         restrictedTradeCancelled = false
+        approvedTradeExceptionRecorded = false
         lastTradeRestrictionReason = nil
-        pendingGuildFoundTradePartners = {}
+    elseif event == "TRADE_ACCEPT_UPDATE" then
+        Enforcement:UpdateTradeRestriction()
+        captureProtectedTradeEvidence()
+        if protectedTradeEvidence then
+            protectedTradeEvidence.playerAccepted = unit == true or unit == 1
+            protectedTradeEvidence.targetAccepted = targetAccepted == true or targetAccepted == 1
+            if protectedTradeEvidence.playerAccepted and protectedTradeEvidence.restricted
+                and not protectedTradeEvidence.violationRecorded then
+                protectedTradeEvidence.violationRecorded = flagProtectedInteraction("TRADE_BLOCK_BYPASS", protectedTradeEvidence)
+            end
+        end
+        Enforcement:RecordApprovedTradeException(unit)
     elseif event == "TRADE_SHOW" or event == "TRADE_UPDATE" then
         Enforcement:CheckTradeRestriction()
         Enforcement:UpdateTradeRestriction()
@@ -712,8 +858,13 @@ frame:SetScript("OnEvent", function(_, event, unit)
         Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_SEND_SUCCESS" then
+        if restrictedMailEvidence then flagProtectedInteraction("MAIL_BLOCK_BYPASS", restrictedMailEvidence) end
+        restrictedMailEvidence = nil
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_CLOSED" then
+        restrictedMailEvidence = nil
+        restrictedInboxBypassKey = nil
+        protectedInboxEvidence = nil
         lastMailRestrictionReason = nil
         lastInboxRestrictionKey = nil
     elseif event == "UNIT_AURA" and unit ~= "player" then

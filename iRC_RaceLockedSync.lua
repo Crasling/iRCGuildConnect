@@ -11,11 +11,12 @@ if not iRC then return end
 local Sync = {}
 iRC.RaceLockedSync = Sync
 local IRC_ROSTER = "iRCGFRoster"
-local lastBroadcast, pendingRelays = {}, {}
+local lastBroadcast, pendingRelays, pendingWitnessRelays, lastWitnessUpload = {}, {}, {}, {}
 local moneyReady = false
 local moneyValidationAllowedAt = 0
 local moneyWatchdog
 local playedTicker, playedRequestToken
+local playedSampleGetTime
 local playedSuppressedChatFrames = {}
 local localHistory
 local sentDebugSummary = { count = 0 }
@@ -147,14 +148,15 @@ function Sync:GetStatus(name, snapshot)
             entry.playedAfter = history.playedAfterDiscrepancy
             entry.playedBeforeAt = history.playedBeforeDiscrepancyAt
             entry.playedAfterAt = history.playedAfterDiscrepancyAt
+            entry.discrepancyReason = history.discrepancyReason
         end
     end
     local effectiveVerified = entry.gmVerified
     local effectiveClean = entry.gmClean
     if effectiveVerified == nil then effectiveVerified = entry.verified end
-    -- A decision only clears evidence that existed before it. A later gold
-    -- discrepancy must require a fresh review instead of inheriting an older
-    -- Clean override.
+    -- A decision only clears evidence that existed before it. A later
+    -- monitoring discrepancy requires a fresh review instead of inheriting
+    -- an older Clean override.
     local discrepancyAt = tonumber(entry.tamperAt) or 0
     local decisionAt = tonumber(entry.gmTimestamp) or 0
     if effectiveClean == nil or discrepancyAt > 0 and decisionAt <= discrepancyAt then
@@ -172,6 +174,8 @@ function Sync:GetStatus(name, snapshot)
         moneyBeforeAt = entry.moneyBeforeAt, moneyAfterAt = entry.moneyAfterAt,
         playedBefore = entry.playedBefore, playedAfter = entry.playedAfter,
         playedBeforeAt = entry.playedBeforeAt, playedAfterAt = entry.playedAfterAt,
+        discrepancyReason = entry.discrepancyReason,
+        witnessedBy = entry.witnessedBy, witnessedAt = entry.witnessedAt,
         gmVerified = entry.gmVerified, gmClean = entry.gmClean,
         cleanDecisionSuperseded = entry.gmClean ~= nil and discrepancyAt > 0 and decisionAt <= discrepancyAt,
     }
@@ -217,6 +221,43 @@ local function writeMoneySnapshot(history, value)
     history.rk = sealSnapshot(value)
 end
 
+local function discrepancyReason(value)
+    if type(value) ~= "string" then return nil end
+    value = value:upper():gsub("[^A-Z0-9_]", ""):sub(1, 32)
+    return value ~= "" and value or nil
+end
+
+local function markDiscrepancy(history, reason, moneyBefore, moneyAfter, moneyBeforeAt)
+    local now = time()
+    local previousAt = tonumber(history.moneyDiscrepancyAt) or 0
+    local beforeValue, afterValue = tonumber(moneyBefore), tonumber(moneyAfter)
+    history.moneyDiscrepancyAt = math.max(now, previousAt + 1)
+    -- A continuity or item-only violation can have identical money values.
+    -- Preserve an earlier real money delta so both pieces of evidence remain
+    -- visible instead of replacing it with an uninformative zero difference.
+    if previousAt <= 0 or beforeValue ~= afterValue or history.moneyBeforeDiscrepancy == nil then
+        history.moneyBeforeDiscrepancy = beforeValue
+        history.moneyAfterDiscrepancy = afterValue
+        history.moneyBeforeDiscrepancyAt = tonumber(moneyBeforeAt) or tonumber(history.moneyLastLoggedAt) or 0
+        history.moneyAfterDiscrepancyAt = now
+    end
+    history.discrepancyReason = discrepancyReason(reason) or "MONEY_MISMATCH"
+    history.moneyDiscrepancyNoticeAt = nil
+    return history.moneyDiscrepancyAt
+end
+
+function Sync:FlagMonitoringDiscrepancy(reason, moneyBefore, moneyAfter, moneyBeforeAt)
+    if not self:IsMoneyMonitoringActive() then return false end
+    local history = localHistory()
+    local current = GetMoney and GetMoney() or nil
+    markDiscrepancy(history, reason, moneyBefore ~= nil and moneyBefore or current,
+        moneyAfter ~= nil and moneyAfter or current, moneyBeforeAt)
+    self:SaveCurrentMoney("MONITORING_DISCREPANCY_" .. (discrepancyReason(reason) or "UNKNOWN"))
+    self:Broadcast()
+    if C_Timer and C_Timer.After then C_Timer.After(6, function() Sync:Broadcast() end) end
+    return true
+end
+
 function Sync:ObserveSelfFound()
     local history = localHistory()
     if iRC:GetSelfFoundState() then
@@ -225,11 +266,7 @@ function Sync:ObserveSelfFound()
 end
 
 function Sync:IsGuildFoundSubject()
-    if not iRC:IsGuildConnectionActive() or not iRC:IsGuildFoundRequired() then return false end
-    local progression = iRC:GetProgressionMode()
-    return progression == "GUILD_FOUND" or progression == "SELF_FOUND_OR_GUILD_FOUND"
-        or (UnitLevel("player") or 0) >= 60
-        or (iRC.Identity and iRC.Identity:IsPersonalBank(iRC:GetPlayerName()))
+    return iRC:IsGuildFoundEconomyActive()
 end
 
 function Sync:IsMoneyMonitoringActive()
@@ -283,13 +320,8 @@ function Sync:ValidateMoney()
     local baseline = sealedSnapshot or openSnapshot
     if monitoringActive and history.moneyMonitoringActive == true and baseline ~= nil
         and (snapshotMismatch or baseline ~= current) then
-        local discrepancyAt = time()
-        history.moneyDiscrepancyAt = discrepancyAt
-        history.moneyBeforeDiscrepancy = baseline
-        history.moneyAfterDiscrepancy = current
-        history.moneyBeforeDiscrepancyAt = tonumber(history.moneyLastLoggedAt) or 0
-        history.moneyAfterDiscrepancyAt = discrepancyAt
-        history.moneyDiscrepancyNoticeAt = nil
+        markDiscrepancy(history, snapshotMismatch and "SNAPSHOT_MISMATCH" or "MONEY_MISMATCH",
+            baseline, current, history.moneyLastLoggedAt)
     end
     -- Existing installations have no sealed value yet. The first login after
     -- upgrading establishes it without treating the migration as tampering.
@@ -316,23 +348,54 @@ end
 -- Stored member state and officer overrides --------------------------------
 
 local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, moneyAfter, moneyBeforeAt, moneyAfterAt,
-    playedBefore, playedAfter, playedBeforeAt, playedAfterAt)
+    playedBefore, playedAfter, playedBeforeAt, playedAfterAt, reason)
     local entry = entryFor(name)
     if not entry then return end
-    entry.verified, entry.clean, entry.tamperAt = verified, clean, tamperAt
-    if tonumber(tamperAt) and tonumber(tamperAt) > 0 then
+    local incomingAt = tonumber(tamperAt) or 0
+    local retainedAt = tonumber(entry.tamperAt) or 0
+    entry.verified = verified
+    -- Raw discrepancy evidence is monotonic. A later clean self-report may
+    -- update progression evidence, but only an authorized officer decision
+    -- can resolve a discrepancy already witnessed by another client.
+    if incomingAt > 0 and incomingAt >= retainedAt then
+        entry.clean, entry.tamperAt = false, incomingAt
         entry.moneyBefore, entry.moneyAfter = tonumber(moneyBefore), tonumber(moneyAfter)
         entry.moneyBeforeAt, entry.moneyAfterAt = tonumber(moneyBeforeAt), tonumber(moneyAfterAt)
         entry.playedBefore, entry.playedAfter = tonumber(playedBefore), tonumber(playedAfter)
         entry.playedBeforeAt, entry.playedAfterAt = tonumber(playedBeforeAt), tonumber(playedAfterAt)
-    else
+        entry.discrepancyReason = discrepancyReason(reason) or entry.discrepancyReason
+    elseif retainedAt <= 0 then
+        entry.clean, entry.tamperAt = clean, incomingAt
         entry.moneyBefore, entry.moneyAfter = nil, nil
         entry.moneyBeforeAt, entry.moneyAfterAt = nil, nil
         entry.playedBefore, entry.playedAfter = nil, nil
         entry.playedBeforeAt, entry.playedAfterAt = nil, nil
+        entry.discrepancyReason = nil
     end
     entry.source, entry.lastSeen = source, time()
     if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(name) end
+end
+
+local function storeWitness(name, tamperAt, witness, moneyBefore, moneyAfter, moneyBeforeAt, moneyAfterAt,
+    playedBefore, playedAfter, playedBeforeAt, playedAfterAt, reason)
+    local entry = entryFor(name)
+    local incomingAt = tonumber(tamperAt) or 0
+    if not entry or incomingAt <= 0 or incomingAt < (tonumber(entry.tamperAt) or 0) then return false end
+    -- Witness packets are negative evidence only. They never change progression
+    -- eligibility and can never make a member clean or verified.
+    entry.clean, entry.tamperAt = false, incomingAt
+    entry.moneyBefore = tonumber(moneyBefore) or entry.moneyBefore
+    entry.moneyAfter = tonumber(moneyAfter) or entry.moneyAfter
+    entry.moneyBeforeAt = tonumber(moneyBeforeAt) or entry.moneyBeforeAt
+    entry.moneyAfterAt = tonumber(moneyAfterAt) or entry.moneyAfterAt
+    entry.playedBefore = tonumber(playedBefore) or entry.playedBefore
+    entry.playedAfter = tonumber(playedAfter) or entry.playedAfter
+    entry.playedBeforeAt = tonumber(playedBeforeAt) or entry.playedBeforeAt
+    entry.playedAfterAt = tonumber(playedAfterAt) or entry.playedAfterAt
+    entry.discrepancyReason = discrepancyReason(reason) or entry.discrepancyReason
+    entry.witnessedBy, entry.witnessedAt = shortName(witness), time()
+    if iRC.InvalidateGuildMemberRow then iRC:InvalidateGuildMemberRow(name) end
+    return true
 end
 
 local function storeOverride(name, verified, clean, stamp, source, direct)
@@ -361,6 +424,37 @@ local function relayPayload(entry)
         .. "," .. tostring(entry.gmTimestamp) .. "," .. tostring(entry.overrideSource or "")
 end
 
+local function witnessPayload(entry)
+    return table.concat({
+        "W:" .. tostring(entry.name or ""), tostring(entry.tamperAt or 0),
+        tostring(entry.moneyBefore or ""), tostring(entry.moneyAfter or ""),
+        tostring(entry.moneyBeforeAt or ""), tostring(entry.moneyAfterAt or ""),
+        tostring(entry.playedBefore or ""), tostring(entry.playedAfter or ""),
+        tostring(entry.playedBeforeAt or ""), tostring(entry.playedAfterAt or ""),
+        tostring(discrepancyReason(entry.discrepancyReason) or ""),
+    }, ",")
+end
+
+local function discrepancyIsUnresolved(entry)
+    local discrepancyAt = tonumber(entry and entry.tamperAt) or 0
+    local decisionAt = tonumber(entry and entry.gmTimestamp) or 0
+    return discrepancyAt > 0 and not (entry.gmClean == true and decisionAt > discrepancyAt)
+end
+
+local function queueWitnessRelay(name)
+    if not iRC:HasGuildPermission("verification") or not iRC:IsRulesetBroadcaster() then return end
+    local key = iRC:NormalizeName(name)
+    if pendingWitnessRelays[key] then return end
+    local token = {}
+    pendingWitnessRelays[key] = token
+    C_Timer.After(1.5 + math.random() * 2, function()
+        if pendingWitnessRelays[key] ~= token then return end
+        pendingWitnessRelays[key] = nil
+        local entry = entryFor(name)
+        if entry and discrepancyIsUnresolved(entry) then send(IRC_ROSTER, witnessPayload(entry)) end
+    end)
+end
+
 local function queueRelay(name)
     local db, entry = connection(), entryFor(name)
     if not db or not entry or not entry.gmTimestamp then return end
@@ -386,7 +480,9 @@ function Sync:RelayOverrides(targetName)
     local function flush()
         if #payload <= 2 then return end
         if send(IRC_ROSTER, payload, targetName) then sent = true end
-        payload = "O:"
+        -- Relayed rows include their original source as a fifth field, so
+        -- every chunk must retain the R: schema after a 255-byte split.
+        payload = "R:"
     end
     local rows = {}
     for _, entry in pairs(db.guildFoundRoster or {}) do
@@ -413,6 +509,36 @@ function Sync:RelayOverrides(targetName)
         end
     end
     flush()
+    return sent
+end
+
+function Sync:RelayWitnesses(targetName)
+    if not targetName or not iRC:HasGuildPermission("verification")
+        or not iRC:GuildMemberHasPermission(targetName, "verification") then return false end
+    local localBroadcaster = iRC:IsRulesetBroadcaster()
+    local targetBroadcaster = iRC.IsRulesetBroadcasterName and iRC:IsRulesetBroadcasterName(targetName)
+    -- Ordinary officers upload to the elected broadcaster; the broadcaster
+    -- then becomes the single source that hydrates other reviewing officers.
+    if not localBroadcaster and not targetBroadcaster then return false end
+    if iRC:DeferLowTraffic("traffic:verification-witnesses:" .. iRC:NormalizeName(targetName),
+        function() Sync:RelayWitnesses(targetName) end) then return false end
+    local db = connection()
+    if not db then return false end
+    local targetKey, now = iRC:NormalizeName(targetName), GetTime()
+    if lastWitnessUpload[targetKey] and now - lastWitnessUpload[targetKey] < 60 then return false end
+    lastWitnessUpload[targetKey] = now
+    local rows = {}
+    for _, entry in pairs(db.guildFoundRoster or {}) do
+        if type(entry) == "table" and entry.name and discrepancyIsUnresolved(entry)
+            and iRC:IsGuildMemberName(entry.name) then
+            rows[#rows + 1] = entry
+        end
+    end
+    table.sort(rows, function(a, b) return (tonumber(a.tamperAt) or 0) > (tonumber(b.tamperAt) or 0) end)
+    local sent = false
+    for index = 1, math.min(20, #rows) do
+        if send(IRC_ROSTER, witnessPayload(rows[index]), targetName) then sent = true end
+    end
     return sent
 end
 
@@ -448,7 +574,7 @@ function Sync:SetGoldOverride(name, clean)
     if clean ~= nil and type(clean) ~= "boolean" then return false end
     local entry = entryFor(name)
     if not entry then return false end
-    -- A gold review must not alter an existing eligibility decision.
+    -- A monitoring review must not alter an existing eligibility decision.
     return self:SetOverride(name, entry.gmVerified, clean, true)
 end
 
@@ -464,6 +590,10 @@ function Sync:DescribeStatus(name, compact, status, goldOnly)
         if status.source and status.source ~= "" then details[#details + 1] = iRC:Text("RL_REPORT_SOURCE", status.source) end
         if status.lastSeen and status.lastSeen > 0 then details[#details + 1] = iRC:Text("RL_LAST_REPORT", date("%Y-%m-%d %H:%M", status.lastSeen)) end
         if status.tamperAt and status.tamperAt > 0 then details[#details + 1] = iRC:Text("RL_DISCREPANCY_SEEN", date("%Y-%m-%d %H:%M", status.tamperAt)) end
+        if status.discrepancyReason then details[#details + 1] = iRC:Text("RL_DISCREPANCY_REASON", status.discrepancyReason) end
+        if status.witnessedBy then
+            details[#details + 1] = iRC:Text("RL_DISCREPANCY_WITNESS", status.witnessedBy)
+        end
         if status.gmTimestamp then
             details[#details + 1] = iRC:Text(status.directOverride and "RL_GM_DIRECT" or "RL_GM_RELAY")
             details[#details + 1] = iRC:Text("RL_DECISION_TIME", date("%Y-%m-%d %H:%M", status.gmTimestamp))
@@ -495,20 +625,23 @@ function Sync:ReceiveRoster(message, sender)
         local playedBeforeAt = number(fields[14], time() + 300)
         local playedAfterAt = number(fields[15], time() + 300)
         storeSelf(name, readBool(fields[2]), readBool(fields[3]), tamperAt, "iRC", moneyBefore, moneyAfter,
-            moneyBeforeAt, moneyAfterAt, playedBefore, playedAfter, playedBeforeAt, playedAfterAt)
+            moneyBeforeAt, moneyAfterAt, playedBefore, playedAfter, playedBeforeAt, playedAfterAt, fields[16])
         -- Confirm receipt only from a rank authorized to review verification.
         -- The reporting player does not see the discrepancy notice until this
         -- acknowledgement proves that an officer actually received the report.
         if tamperAt > 0 and iRC:HasGuildPermission("verification") then
             send(IRC_ROSTER, "A:" .. tostring(tamperAt), sender)
+            queueWitnessRelay(name)
         end
-        local stamp = number(fields[7], time() + 300)
-        if validBool(fields[5]) and validBool(fields[6]) and stamp and stamp > 0
-            and storeOverride(name, readBool(fields[5]), readBool(fields[6]), stamp, "iRC relay", false) then
-            pendingRelays[iRC:NormalizeName(name)] = nil
-        else
-            queueRelay(name)
+        -- A member self-report is authoritative only for its raw evidence.
+        -- Never accept embedded officer decisions from the subject itself;
+        -- request the saved decision from the elected ruleset broadcaster.
+        local embeddedStamp = number(fields[7], time() + 300)
+        if embeddedStamp and embeddedStamp > 0 then
+            iRC:DebugMsg("Ignored officer decision embedded in Guild Found self-report from "
+                .. iRC:FormatPlayerName(sender) .. ".", 2)
         end
+        queueRelay(name)
     elseif marker == "A:" then
         local acknowledgedAt = number(fields[1], time() + 300)
         local senderRank = iRC:GetGuildMemberRankIndex(sender)
@@ -537,6 +670,18 @@ function Sync:ReceiveRoster(message, sender)
             end
         end
     elseif marker == "R:" then
+        -- The original source is carried for audit attribution, but the
+        -- actual sender must also have verification authority or be the
+        -- currently elected relay. Otherwise a member could forge an
+        -- authorized officer's name in the source field. Authorized officers
+        -- remain valid during brief differences in clients' election views.
+        local authorizedSender = iRC:GuildMemberHasPermission(sender, "verification")
+            or iRC.IsRulesetBroadcasterName and iRC:IsRulesetBroadcasterName(sender)
+        if not authorizedSender then
+            iRC:DebugMsg("Rejected Guild Found override relay from unauthorized member "
+                .. iRC:FormatPlayerName(sender) .. ".", 2)
+            return
+        end
         if #fields % 5 ~= 0 then return end
         for index = 1, #fields, 5 do
             local name, stamp, source = fields[index], number(fields[index + 3], time() + 300), fields[index + 4]
@@ -547,6 +692,18 @@ function Sync:ReceiveRoster(message, sender)
                 pendingRelays[iRC:NormalizeName(name)] = nil
             end
         end
+    elseif marker == "W:" then
+        -- An authorized officer may preserve evidence they already witnessed,
+        -- but this packet cannot grant eligibility or clear a discrepancy.
+        if not iRC:GuildMemberHasPermission(sender, "verification") or #fields ~= 11 then return end
+        local name, tamperAt = fields[1], number(fields[2], time() + 300)
+        if not tamperAt or tamperAt <= 0 then return end
+        local stored = storeWitness(name, tamperAt, sender,
+            number(fields[3], 1000000000000000), number(fields[4], 1000000000000000),
+            number(fields[5], time() + 300), number(fields[6], time() + 300),
+            number(fields[7], 1000000000), number(fields[8], 1000000000),
+            number(fields[9], time() + 300), number(fields[10], time() + 300), fields[11])
+        if stored and iRC:IsRulesetBroadcaster() then queueWitnessRelay(name) end
     else return end
     iRC:DebugMsg(iRC:Text("IRC_GF_SYNC_RECEIVED", IRC_ROSTER, sender), 3)
     refresh()
@@ -582,16 +739,20 @@ function Sync:Broadcast(targetName)
     storeSelf(name, verified, clean, tamperAt, "iRC", history.moneyBeforeDiscrepancy, history.moneyAfterDiscrepancy,
         history.moneyBeforeDiscrepancyAt, history.moneyAfterDiscrepancyAt,
         history.playedBeforeDiscrepancy, history.playedAfterDiscrepancy,
-        history.playedBeforeDiscrepancyAt, history.playedAfterDiscrepancyAt)
+        history.playedBeforeDiscrepancyAt, history.playedAfterDiscrepancyAt, history.discrepancyReason)
     if self:IsMoneyMonitoringActive() then
         local entry = entryFor(name)
         local msg = "S:" .. name .. "," .. wireBool(verified) .. "," .. wireBool(clean) .. "," .. tostring(tamperAt)
         if entry.gmTimestamp or entry.moneyBefore ~= nil or entry.moneyAfter ~= nil then
-            msg = msg .. "," .. wireBool(entry.gmVerified) .. "," .. wireBool(entry.gmClean) .. "," .. tostring(entry.gmTimestamp or 0)
+            -- Reserve the legacy override fields so older clients can still
+            -- parse the following evidence, but never relay officer authority
+            -- through a member-owned self-report.
+            msg = msg .. ",-,-,0"
                 .. "," .. tostring(entry.moneyBefore or "") .. "," .. tostring(entry.moneyAfter or "")
                 .. "," .. tostring(entry.moneyBeforeAt or "") .. "," .. tostring(entry.moneyAfterAt or "")
                 .. "," .. tostring(entry.playedBefore or "") .. "," .. tostring(entry.playedAfter or "")
                 .. "," .. tostring(entry.playedBeforeAt or "") .. "," .. tostring(entry.playedAfterAt or "")
+                .. "," .. tostring(discrepancyReason(entry.discrepancyReason) or "")
         end
         send(IRC_ROSTER, msg, targetName)
     end
@@ -642,6 +803,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_MONEY" then
         if moneyReady then Sync:SaveCurrentMoney(event) else Sync:ValidateMoney() end
     elseif event == "PLAYER_LOGOUT" then
+        local history = localHistory()
+        if playedSampleGetTime and GetTime and tonumber(history.playedTotal) then
+            history.playedExpectedAtExit = math.max(0, math.floor(history.playedTotal
+                + math.max(0, GetTime() - playedSampleGetTime)))
+            history.playedExpectedAtExitAt = time()
+        end
         Sync:SaveCurrentMoney(event)
     elseif event == "MAIL_SHOW" or event == "MAIL_CLOSED"
         or event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED"
@@ -664,7 +831,21 @@ frame:SetScript("OnEvent", function(_, event, ...)
             return
         end
         local history, now = localHistory(), time()
-        history.playedTotal = math.max(0, math.floor(tonumber(totalPlayed) or 0))
+        local currentPlayed = math.max(0, math.floor(tonumber(totalPlayed) or 0))
+        local expectedAtExit = tonumber(history.playedExpectedAtExit)
+        local previousPlayed = tonumber(history.playedTotal)
+        local continuityFlagged = false
+        if expectedAtExit and currentPlayed > expectedAtExit + 120 then
+            local currentMoney = GetMoney and GetMoney() or nil
+            markDiscrepancy(history, "PLAYED_GAP", currentMoney, currentMoney, history.playedExpectedAtExitAt)
+            continuityFlagged = true
+        elseif previousPlayed and currentPlayed + 5 < previousPlayed then
+            local currentMoney = GetMoney and GetMoney() or nil
+            markDiscrepancy(history, "PLAYED_ROLLBACK", currentMoney, currentMoney, history.playedRecordedAt)
+            continuityFlagged = true
+        end
+        history.playedExpectedAtExit, history.playedExpectedAtExitAt = nil, nil
+        history.playedTotal = currentPlayed
         history.playedLevel = math.max(0, math.floor(tonumber(levelPlayed) or 0))
         history.playedRecordedAt = now
         if tonumber(history.moneyDiscrepancyAt) and history.moneyDiscrepancyAt > 0
@@ -677,8 +858,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
         history.playedPreviousTotal = history.playedTotal
         history.playedPreviousRecordedAt = now
+        playedSampleGetTime = GetTime and GetTime() or nil
         playedRequestToken = nil
         C_Timer.After(0, restorePlayedChatFrames)
+        if continuityFlagged then
+            Sync:Broadcast()
+            C_Timer.After(6, function() Sync:Broadcast() end)
+        end
     elseif event == "UNIT_AURA" or event == "PLAYER_LEVEL_UP" then
         if event == "UNIT_AURA" and ... ~= "player" then return end
         Sync:ObserveSelfFound()

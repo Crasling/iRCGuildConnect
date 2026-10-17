@@ -1340,7 +1340,9 @@ function iRC:GetSettings()
             if startupSettings[key] == nil then startupSettings[key] = value end
         end
         startupSettings.shareGlobalRaceGrid = true
-        startupSettings.minimapButton = startupSettings.minimapButton or { hide = false, minimapPos = -30 }
+        startupSettings.minimapButton = startupSettings.minimapButton
+            or { hide = false, minimapPos = -30, showInCompartment = true }
+        startupSettings.minimapButton.showInCompartment = true
         return startupSettings
     end
     local settings = ensureAccountSettingsStore()
@@ -1359,6 +1361,9 @@ function iRC:GetSettings()
     if settings.minimapButton.minimapPos == nil then
         settings.minimapButton.minimapPos = -30
     end
+    -- Keep iRC available from Blizzard's shared AddOns button even when the
+    -- separate movable minimap icon is hidden.
+    settings.minimapButton.showInCompartment = true
     return settings
 end
 
@@ -2537,6 +2542,17 @@ function iRC:IsGuildFoundProgressionApplicable(level, selfFound, rules)
     if progression == "SELF_FOUND_OR_GUILD_FOUND" then return selfFound ~= true end
     return progression == "SELF_FOUND" and (tonumber(level) or 0) >= 60
         and self:GetMaxLevelProgressionMode(rules) == "GUILD_FOUND"
+end
+
+-- Keep every Guild-Found subsystem on the same applicability decision. The
+-- hybrid rule protects characters that are not currently Self-Found, while a
+-- confirmed Personal Bank is protected immediately at any level.
+function iRC:IsGuildFoundEconomyActive(level, selfFound, rules)
+    if not self:IsGuildConnectionActive() or not self:IsGuildFoundRequired() then return false end
+    if self.Identity and self.Identity:IsPersonalBank(self:GetPlayerName()) then return true end
+    if level == nil then level = UnitLevel and UnitLevel("player") or 0 end
+    if selfFound == nil then selfFound = self:GetSelfFoundState() end
+    return self:IsGuildFoundProgressionApplicable(level, selfFound, rules)
 end
 
 function iRC:SetProgressionMode(mode)
