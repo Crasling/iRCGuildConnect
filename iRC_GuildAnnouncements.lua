@@ -301,6 +301,7 @@ local function altIdentityLink(author)
     return string.format("|Haddon:iRCIdentity:%s:%s|h|cff%s[%s]|r|h", kind, mainName, color, kind)
 end
 
+local hookedChatFrames = {}
 local activeTooltipChatFrame
 local tooltipMouseWasEnabled
 local function hideChatIconTooltip(chatFrame)
@@ -313,69 +314,63 @@ local function hideChatIconTooltip(chatFrame)
     end
     tooltipMouseWasEnabled = nil
 end
-local function showChatLinkTooltip(chatFrame, link)
-    local identityKind, mainName
-    if type(link) == "string" then
-        identityKind, mainName = link:match("^addon:iRCIdentity:(%w+):(.+)$")
-    end
-    if mainName and mainName ~= "" and GameTooltip then
-        activeTooltipChatFrame = chatFrame
-        GameTooltip.iRCChatIconOwner = chatFrame
+
+local function hookChatTooltip(chatFrame)
+    if not chatFrame or not chatFrame.HookScript or hookedChatFrames[chatFrame] then return end
+    hookedChatFrames[chatFrame] = true
+    local function onHyperlinkEnter(self, link)
+        local identityKind, mainName
+        if type(link) == "string" then
+            identityKind, mainName = link:match("^addon:iRCIdentity:(%w+):(.+)$")
+        end
+        if mainName and mainName ~= "" and GameTooltip then
+            activeTooltipChatFrame = self
+            GameTooltip.iRCChatIconOwner = self
+            if tooltipMouseWasEnabled == nil and GameTooltip.IsMouseEnabled then
+                tooltipMouseWasEnabled = GameTooltip:IsMouseEnabled()
+            end
+            GameTooltip:EnableMouse(false)
+            GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+            local bankAlt = identityKind == "BankAlt"
+            GameTooltip:SetText(bankAlt and "Personal Bank Alt" or "Alt character",
+                bankAlt and 0.40 or 0.70, bankAlt and 0.80 or 0.55, 1.00)
+            local member = getRosterMember(mainName)
+            local classColor = member and member.classFile and RAID_CLASS_COLORS
+                and RAID_CLASS_COLORS[member.classFile]
+            GameTooltip:AddLine(mainName, classColor and classColor.r or 1,
+                classColor and classColor.g or 1, classColor and classColor.b or 1, true)
+            if member then
+                GameTooltip:AddLine("Level " .. tostring(member.level or "?") .. " "
+                    .. tostring(member.className or "Unknown") .. "  -  "
+                    .. tostring(member.rankName or "Unknown rank"), 0.78, 0.78, 0.78, true)
+            else
+                GameTooltip:AddLine("Main character", 0.78, 0.78, 0.78, true)
+            end
+            GameTooltip:Show()
+            return
+        end
+        local kind = type(link) == "string" and link:match("^addon:iRCIcon:(%w+)$")
+        local help = kind and ICON_HELP[kind]
+        if not help or not GameTooltip then
+            hideChatIconTooltip(self)
+            return
+        end
+        activeTooltipChatFrame = self
+        GameTooltip.iRCChatIconOwner = self
         if tooltipMouseWasEnabled == nil and GameTooltip.IsMouseEnabled then
             tooltipMouseWasEnabled = GameTooltip:IsMouseEnabled()
         end
         GameTooltip:EnableMouse(false)
-        GameTooltip:SetOwner(chatFrame, "ANCHOR_CURSOR")
-        local bankAlt = identityKind == "BankAlt"
-        GameTooltip:SetText(bankAlt and "Personal Bank Alt" or "Alt character",
-            bankAlt and 0.40 or 0.70, bankAlt and 0.80 or 0.55, 1.00)
-        local member = getRosterMember(mainName)
-        local classColor = member and member.classFile and RAID_CLASS_COLORS
-            and RAID_CLASS_COLORS[member.classFile]
-        GameTooltip:AddLine(mainName, classColor and classColor.r or 1,
-            classColor and classColor.g or 1, classColor and classColor.b or 1, true)
-        if member then
-            GameTooltip:AddLine("Level " .. tostring(member.level or "?") .. " "
-                .. tostring(member.className or "Unknown") .. "  -  "
-                .. tostring(member.rankName or "Unknown rank"), 0.78, 0.78, 0.78, true)
-        else
-            GameTooltip:AddLine("Main character", 0.78, 0.78, 0.78, true)
-        end
+        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+        GameTooltip:SetText(iRC:Text(help[1]), 1, 0.72, 0.22)
+        GameTooltip:AddLine(iRC:Text(help[2]), 1, 1, 1, true)
         GameTooltip:Show()
-        return
     end
-    local kind = type(link) == "string" and link:match("^addon:iRCIcon:(%w+)$")
-    local help = kind and ICON_HELP[kind]
-    if not help or not GameTooltip then
-        hideChatIconTooltip(chatFrame)
-        return
+    local enterOK = pcall(chatFrame.HookScript, chatFrame, "OnHyperlinkEnter", onHyperlinkEnter)
+    local leaveOK = pcall(chatFrame.HookScript, chatFrame, "OnHyperlinkLeave", hideChatIconTooltip)
+    if not (enterOK and leaveOK) then
+        iRC:DebugMsg("Chat icon tooltip hooks were blocked for this chat frame.", 2)
     end
-    activeTooltipChatFrame = chatFrame
-    GameTooltip.iRCChatIconOwner = chatFrame
-    if tooltipMouseWasEnabled == nil and GameTooltip.IsMouseEnabled then
-        tooltipMouseWasEnabled = GameTooltip:IsMouseEnabled()
-    end
-    GameTooltip:EnableMouse(false)
-    GameTooltip:SetOwner(chatFrame, "ANCHOR_CURSOR")
-    GameTooltip:SetText(iRC:Text(help[1]), 1, 0.72, 0.22)
-    GameTooltip:AddLine(iRC:Text(help[2]), 1, 1, 1, true)
-    GameTooltip:Show()
-end
-
-local chatTooltipHooksInstalled = false
-local function installChatTooltipHooks()
-    if chatTooltipHooksInstalled then return true end
-    if type(hooksecurefunc) ~= "function" then return false end
-
-    -- Forever keeps Blizzard chat frames in a separate execution partition.
-    -- Securely hook the shared handlers instead of attaching scripts directly.
-    local enterOK = pcall(hooksecurefunc, "ChatFrame_OnHyperlinkEnter", showChatLinkTooltip)
-    local leaveOK = pcall(hooksecurefunc, "ChatFrame_OnHyperlinkLeave", hideChatIconTooltip)
-    chatTooltipHooksInstalled = enterOK and leaveOK
-    if not chatTooltipHooksInstalled then
-        iRC:DebugMsg("Chat icon tooltips could not hook Blizzard's shared hyperlink handlers.", 2)
-    end
-    return chatTooltipHooksInstalled
 end
 
 -- Guild announcements -------------------------------------------------------
@@ -489,6 +484,7 @@ local function addGuildAnnouncementIcon(chatFrame, _, message, author, ...)
     if badge then message = iconLink(badgeKind, badge) .. " " .. message end
     if identity then message = identity .. " " .. message end
     if not icon and not badge and not identity then return false end
+    hookChatTooltip(chatFrame)
     return false, message, author, ...
 end
 
@@ -518,7 +514,6 @@ local function shareCurrentDeathState()
 end
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
-        installChatTooltipHooks()
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
             C_ChatInfo.RegisterAddonMessagePrefix(ICON_PREFIX)
         end

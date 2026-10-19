@@ -415,13 +415,36 @@ function Identity:RemoveCharacter(name)
     return true
 end
 
+-- Personal identity relationships are trusted only after both the character
+-- and the selected Main have confirmed them. Pending account-wide choices
+-- remain editable in Personal Settings but must not affect roster labels,
+-- grouping, enforcement, exports, or chat presentation.
+local function isConfirmedPersonalIdentity(store, key)
+    local mainKey = store and store.main
+    return key ~= nil and mainKey ~= nil
+        and store.characters[key] ~= nil and store.characters[mainKey] ~= nil
+        and store.confirmedCharacters[key] == true
+        and store.confirmedCharacters[mainKey] == true
+end
+
+local function isConfirmedSharedAssignment(store, key, assignment)
+    if not store or not key or not assignment then return false end
+    if assignment.managed == true then return true end
+    if assignment.role == "MAIN" then return assignment.mainKey == key end
+    local mainKey = assignment.mainKey
+    local mainAssignment = mainKey and store.identityAssignments[mainKey]
+    return mainAssignment ~= nil and mainAssignment.role == "MAIN"
+        and mainAssignment.mainKey == mainKey
+end
+
 function Identity:IsPersonalBank(name)
     local store, key = guildStore(false), characterKey(name)
-    local assignment = store and store.identityAssignments[key]
-    if assignment and assignment.role == "BANK" then return true end
-    if store and key and store.characters[key] ~= nil and store.personalBanks[key] == true
-        and store.confirmedCharacters[key] == true then return true end
-    return false
+    if not store or not key then return false end
+    if store.characters[key] then
+        return isConfirmedPersonalIdentity(store, key) and store.personalBanks[key] == true
+    end
+    local assignment = store.identityAssignments[key]
+    return isConfirmedSharedAssignment(store, key, assignment) and assignment.role == "BANK"
 end
 
 function Identity:SetPersonalBank(name, enabled)
@@ -454,9 +477,11 @@ end
 function Identity:IsAlt(name)
     local store, key = guildStore(false), characterKey(name)
     if not store or not key then return false end
-    if store.characters[key] then return store.main ~= key end
+    if store.characters[key] then
+        return isConfirmedPersonalIdentity(store, key) and store.main ~= key
+    end
     local assignment = store.identityAssignments[key]
-    return assignment ~= nil and assignment.mainKey ~= key
+    return isConfirmedSharedAssignment(store, key, assignment) and assignment.mainKey ~= key
         and (assignment.role == "ALT" or assignment.role == "BANK")
 end
 
@@ -482,12 +507,14 @@ function Identity:GetMainCharacterName(name)
     local store, key = guildStore(false), characterKey(name)
     if not store or not key then return nil end
     if store.characters[key] then
-        return store.main and store.characters[store.main] or nil
+        return isConfirmedPersonalIdentity(store, key) and store.characters[store.main] or nil
     end
     local assignment = store.identityAssignments[key]
-    if assignment then return assignment.mainName end
-    for _, linked in pairs(store.identityAssignments) do
-        if linked.mainKey == key then return linked.mainName or iRC:FormatPlayerName(name) end
+    if isConfirmedSharedAssignment(store, key, assignment) then return assignment.mainName end
+    for linkedKey, linked in pairs(store.identityAssignments) do
+        if linked.mainKey == key and isConfirmedSharedAssignment(store, linkedKey, linked) then
+            return linked.mainName or iRC:FormatPlayerName(name)
+        end
     end
 end
 
@@ -504,22 +531,19 @@ function Identity:GetIdentityLabel(name)
     local store, key = guildStore(false), characterKey(name)
     if not store or not key then return nil end
     if store.characters[key] then
-        if store.confirmedCharacters[key] ~= true then
-            return (store.personalBanks[key] and "Pending Personal Bank Alt of " or "Pending Alt of ")
-                .. (store.characters[store.main] or "unknown")
-        end
+        if not isConfirmedPersonalIdentity(store, key) then return nil end
         if store.main == key then return "Main" end
         if store.personalBanks[key] then return "Personal Bank Alt of " .. (store.characters[store.main] or "unknown") end
         return "Alt of " .. (store.characters[store.main] or "unknown")
     end
     local assignment = store.identityAssignments[key]
-    if assignment then
+    if isConfirmedSharedAssignment(store, key, assignment) then
         if assignment.mainKey == key then return "Main" end
         if assignment.role == "BANK" then return "Personal Bank Alt of " .. assignment.mainName end
         return "Alt of " .. assignment.mainName
     end
-    for _, linked in pairs(store.identityAssignments) do
-        if linked.mainKey == key then return "Main" end
+    for linkedKey, linked in pairs(store.identityAssignments) do
+        if linked.mainKey == key and isConfirmedSharedAssignment(store, linkedKey, linked) then return "Main" end
     end
 end
 
@@ -531,13 +555,23 @@ end
 function Identity:GetLinkedCharacters(name)
     local store, key, result = guildStore(false), characterKey(name), {}
     if not store or not key then return result end
-    local characters = store.characters[key] and store.characters or nil
+    local characters
+    if store.characters[key] then
+        if not isConfirmedPersonalIdentity(store, key) then return result end
+        characters = {}
+        for linkedKey, linkedName in pairs(store.characters) do
+            if isConfirmedPersonalIdentity(store, linkedKey) then
+                characters[linkedKey] = linkedName
+            end
+        end
+    end
     if not characters then
         local assignment = store.identityAssignments[key]
+        if assignment and not isConfirmedSharedAssignment(store, key, assignment) then return result end
         local mainKey = assignment and assignment.mainKey or key
         characters = {}
         for assignedKey, linked in pairs(store.identityAssignments) do
-            if linked.mainKey == mainKey then
+            if linked.mainKey == mainKey and isConfirmedSharedAssignment(store, assignedKey, linked) then
                 characters[assignedKey] = linked.name
                 characters[mainKey] = linked.mainName
             end
@@ -988,8 +1022,11 @@ function Identity:BroadcastIdentityRemoval(targetName)
     end
     local updatedAt = math.max(time(), (tonumber(store.identityMemberUpdatedAt[ownKey]) or 0) + 1)
     store.identityMemberUpdatedAt[ownKey] = updatedAt
+    store.identityAssignments[ownKey] = nil
     local payload = table.concat({ "IDENT_MEMBER", IDENTITY_WIRE_VERSION, tostring(updatedAt),
         cleanWireText(ownName, 80), "", "REMOVE" }, "\t")
+    if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
     return iRC:SendAddonTraffic(iRC.Prefix, payload, targetName and "WHISPER" or "GUILD", targetName)
 end
 
@@ -998,6 +1035,15 @@ function Identity:BroadcastPersonalIdentity(targetName, preserveTimestamp)
     if not store or not store.main or not store.characters[store.main] or not iRC:IsGuildConnectionActive() then return false end
     local ownName, ownKey = iRC:FormatPlayerName(iRC:GetPlayerName()), characterKey(iRC:GetPlayerName())
     if not store.characters[ownKey] then return false end
+    if not isConfirmedPersonalIdentity(store, ownKey) then
+        -- Do not publish half-confirmed relationships. A general broadcast
+        -- also retracts any older visible assignment for this character;
+        -- targeted identity requests simply receive no unconfirmed data.
+        if targetName then return false end
+        iRC:DebugMsg("Identity share withheld for " .. ownName
+            .. ": the selected Main is still awaiting confirmation; retracting any previous shared identity.", 3)
+        return self:BroadcastIdentityRemoval()
+    end
     if ownKey ~= store.main and not iRC:IsGuildMemberName(store.characters[store.main]) then return false end
     for id, request in pairs(store.identityLinkRequests) do
         if characterKey(request.target) == ownKey then store.identityLinkRequests[id] = nil end
@@ -1043,7 +1089,10 @@ function Identity:ReceiveSync(parts, sender)
             or (role == "MAIN" and memberKey ~= mainKey) then return false end
         local store = guildStore(true)
         local current = store.identityAssignments[memberKey]
-        if current and (tonumber(current.updatedAt) or 0) >= timestamp then return false end
+        local lastUpdated = math.max(tonumber(store.identityMemberUpdatedAt[memberKey]) or 0,
+            tonumber(current and current.updatedAt) or 0)
+        if lastUpdated >= timestamp then return false end
+        store.identityMemberUpdatedAt[memberKey] = timestamp
         if role == "REMOVE" then
             store.identityAssignments[memberKey] = nil
             for id, request in pairs(store.identityLinkRequests) do

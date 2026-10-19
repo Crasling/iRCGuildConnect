@@ -2,6 +2,13 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.30 - Roster & Identity Improvements
+--------------------------------------------------------------------------------
+[CHANGED] Removed the unreliable language tag from Guild Leaderboard cards
+[FIXED] Inactive member totals now match the full-day ranges shown in Member Management
+[FIXED] Chat icons and linked character tags once again show their tooltips when hovered
+[FIXED] Pending Main, Alt, and Bank Alt links remain hidden until they are confirmed
+
 v0.5.29 - Guild Found Safeguards
 --------------------------------------------------------------------------------
 [ADDED] iRC is available from Blizzard's AddOns button

@@ -71,10 +71,6 @@ local function getGuildCardTags(group, includePrimary)
         local formatted = coloredGuildTag(tag, color)
         if formatted then tags[#tags + 1] = formatted end
     end
-    local language = tostring(group and group.guildPreferredLanguage or "")
-    if language ~= "" then
-        tags[#tags + 1] = coloredGuildTag(language, { 0.95, 0.76, 0.34 })
-    end
     return table.concat(tags, " ")
 end
 
@@ -296,9 +292,6 @@ local function rankIdentityPresentation(name)
     mainName = iRC:FormatPlayerName(mainName)
     if label:find("Personal Bank Alt", 1, true) then
         return "Personal Bank", { 0.40, 0.80, 1.00 }, "Personal Bank Alt of " .. mainName
-    end
-    if label:find("Pending", 1, true) then
-        return "Pending Alt", { 1.00, 0.72, 0.22 }, "Pending Alt of " .. mainName
     end
     return "Alt", { 0.70, 0.55, 1.00 }, "Alt of " .. mainName
 end
@@ -5110,8 +5103,6 @@ function UI:RenderMemberRows()
             memberTag, tagColor = "Personal Bank", { 0.40, 0.80, 1.00 }
         elseif identityLabel == "Main" then
             memberTag, tagColor = "Main", { 0.30, 1.00, 0.35 }
-        elseif identityLabel and identityLabel:find("^Pending") then
-            memberTag, tagColor = "Pending Alt", { 1.00, 0.72, 0.22 }
         elseif identityLabel then
             memberTag, tagColor = "Alt", { 0.70, 0.55, 1.00 }
         elseif profile.selfFound == true then
@@ -6214,11 +6205,15 @@ updateGuildOverview = function(frame)
         recencyTotal = recencyTotal + 1
         local bucket, weight
         local days = activity and activity.lastOnlineDays or tonumber(member.lastOnlineDays)
-        if memberOnline or days and days <= 7 then bucket, weight = 1, 1
-        elseif days and days <= 13 then bucket, weight = 2, 0.8
-        elseif days and days <= 29 then bucket, weight = 3, 0.5
-        elseif days and days <= 59 then bucket, weight = 4, 0.2
-        elseif days then bucket, weight = 5, 0
+        -- Use completed days here, matching the thresholds used when a
+        -- retention row opens Inactive Members. The roster also supplies an
+        -- hour component, which must not move a 29-day member into 30-59.
+        local fullDays = days and math.floor(math.max(0, days)) or nil
+        if memberOnline or fullDays and fullDays <= 7 then bucket, weight = 1, 1
+        elseif fullDays and fullDays <= 13 then bucket, weight = 2, 0.8
+        elseif fullDays and fullDays <= 29 then bucket, weight = 3, 0.5
+        elseif fullDays and fullDays <= 59 then bucket, weight = 4, 0.2
+        elseif fullDays then bucket, weight = 5, 0
         else bucket = 6 end
         retention[bucket] = retention[bucket] + 1
         if bucket <= 3 then
