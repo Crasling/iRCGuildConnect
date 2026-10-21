@@ -2,6 +2,11 @@
 iRC - Changelog
 ================================================================================
 
+v0.5.31 - Guild Map Improvements
+--------------------------------------------------------------------------------
+[IMPROVED] Guild map pins now work smoothly with Open Map
+[FIXED] Members on the same layer now show the same layer number
+
 v0.5.30 - Roster & Identity Improvements
 --------------------------------------------------------------------------------
 [CHANGED] Removed the unreliable language tag from Guild Leaderboard cards

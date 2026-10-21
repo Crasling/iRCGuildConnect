@@ -20,6 +20,7 @@ local DEFAULT_PIN_SIZE = 12
 local PIN_OUTLINE_SIZE = 2
 local CLUSTER_MINIMUM_DISTANCE = 18
 local MAX_CLUSTER_TOOLTIP_MEMBERS = 5
+local OPEN_MAP_REFRESH_INTERVAL = 0.05
 local LOCAL_LAYER_LIFETIME = 300
 local LAYER_TRANSITION_LIFETIME = 15
 local LAYER_ID_LIFETIME = 3600
@@ -41,9 +42,12 @@ local pinMenu
 local mapControls
 local layerPanel
 local groupMemberTooltipHooked
+local openMapCallbacksRegistered
 local lastSentMapId, lastSentXWire, lastSentYWire, lastPositionSentAt
 local lastSentMapLayerSignature, lastMapLayerSentAt
 local lastDisplayedMapId
+local lastOpenMapCanvasScale
+local lastOpenMapRefreshAt = 0
 local lastGroupedMembers = {}
 local localLayer
 local pendingLocalLayer
@@ -214,8 +218,11 @@ local function rememberLayerId(ids, zoneUID, seenAt)
     return not existed
 end
 
-local function layerScope(serverId, instanceId, mapId)
-    return tostring(serverId or 0) .. ":" .. tostring(instanceId or 0) .. ":" .. tostring(mapId or 0)
+local function layerScope(serverId, _, mapId)
+    -- LayerSwap's raw route identity is serverId-zoneUID. The creature GUID's
+    -- instance field is observation metadata and can differ between NPCs on
+    -- the same outdoor layer, so it must not create another number registry.
+    return tostring(serverId or 0) .. ":" .. tostring(mapId or 0)
 end
 
 local function pruneLayerNumbers(numbers)
@@ -275,6 +282,29 @@ local function allocateLayerNumber(zoneUID, serverId, instanceId, mapId)
     while number < 99 and used[number] do number = number + 1 end
     rememberLayerNumber(zoneUID, serverId, instanceId, mapId, number)
     return number
+end
+
+local function canonicalLayerNumber(zoneUID, serverId, instanceId, mapId, suggestedNumber)
+    local number = getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
+    if number then return number end
+    if rememberLayerNumber(zoneUID, serverId, instanceId, mapId, suggestedNumber, nil, false) then
+        return tonumber(suggestedNumber)
+    end
+    return allocateLayerNumber(zoneUID, serverId, instanceId, mapId)
+end
+
+local function normalizeLayerUsers(zoneUID, serverId, _, mapId, number)
+    local changed = false
+    for senderKey, entry in pairs(layerUsers) do
+        if entry.zoneUID == zoneUID and entry.serverId == serverId
+            and entry.mapId == mapId
+            and entry.number ~= number then
+            entry.number = number
+            saveLayerUser(senderKey, entry)
+            changed = true
+        end
+    end
+    return changed
 end
 
 local function getLayerNumber(zoneUID, serverId, instanceId, mapId, refresh)
@@ -629,6 +659,7 @@ local function finalizeLocalLayerAssignment(token)
         number = bestNumber or allocateLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId)
         rememberLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, number, nil, true)
     end
+    normalizeLayerUsers(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, number)
     localLayer = {
         zoneUID = candidate.zoneUID,
         layerSwapId = candidate.layerSwapId,
@@ -881,41 +912,37 @@ function GuildMap:ReceiveLayerState(parts, sender)
             registryChanged = true
         end
     end
-    if localLayer and not pendingLocalLayer and localLayer.zoneUID == zoneUID
-        and localLayer.serverId == serverId and localLayer.instanceId == instanceId
-        and localLayer.mapId == mapId and localLayer.number ~= reportedNumber then
-        local previous = localLayer
-        beginLocalLayerAssignment({
-            zoneUID = previous.zoneUID, layerSwapId = previous.layerSwapId,
-            serverId = previous.serverId, instanceId = previous.instanceId,
-            unitType = previous.unitType, mapId = previous.mapId,
-            source = "iRCComms reconciliation", seenAt = previous.seenAt,
-            forceQuery = true, initialNumber = previous.number,
-        })
-    end
+    -- A different friendly number is not evidence of a different layer when
+    -- the raw identity matches. It only means the clients built their local
+    -- number caches in a different order.
     if pendingLocalLayer and pendingLocalLayer.zoneUID == zoneUID
-        and pendingLocalLayer.serverId == serverId and pendingLocalLayer.instanceId == instanceId
+        and pendingLocalLayer.serverId == serverId
         and pendingLocalLayer.mapId == mapId then
         self:ReceiveLayerAssignment({ "LAYER_ASSIGN", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
-            tostring(instanceId), tostring(mapId), tostring(reportedNumber), layerSwapId }, sender)
-    else
-        rememberLayerNumber(zoneUID, serverId, instanceId, mapId, reportedNumber, nil, true)
+            tostring(pendingLocalLayer.instanceId), tostring(mapId), tostring(reportedNumber), layerSwapId }, sender)
     end
+    local canonicalNumber = canonicalLayerNumber(zoneUID, serverId, instanceId, mapId, reportedNumber)
     local senderKey = iRC:NormalizeName(sender)
     if senderKey ~= "" then
         layerUsers[senderKey] = {
-            -- The sender is authoritative for the friendly number displayed
-            -- on its own layer panel. Recalculating this from our registry can
-            -- shift Layer 1 to Layer 2 when the clients have different caches.
-            name = sender, zoneUID = zoneUID, number = reportedNumber,
+            -- Raw layer identity is authoritative. Friendly numbers can differ
+            -- between client caches, so every matching identity is normalized
+            -- to one stable number on this viewer.
+            name = sender, zoneUID = zoneUID, number = canonicalNumber,
             layerSwapId = layerSwapId,
             serverId = serverId, instanceId = instanceId, mapId = mapId,
             seenAt = GetTime and GetTime() or 0,
         }
         saveLayerUser(senderKey, layerUsers[senderKey])
+        normalizeLayerUsers(zoneUID, serverId, instanceId, mapId, canonicalNumber)
+        if canonicalNumber ~= reportedNumber then
+            iRC:DebugMsg("Normalized " .. iRC:FormatPlayerName(sender) .. " from reported Layer "
+                .. tostring(reportedNumber) .. " to Layer " .. tostring(canonicalNumber)
+                .. " because the raw layer identity matches.", 3)
+        end
         self:UpdatePins(true)
     end
-    if localLayer and localLayer.serverId == serverId and localLayer.instanceId == instanceId
+    if localLayer and localLayer.zoneUID == zoneUID and localLayer.serverId == serverId
         and localLayer.mapId == mapId then
         localLayer.number = getLayerNumber(localLayer.zoneUID, serverId, instanceId, mapId, false)
         self:UpdateLocalLayerDisplay()
@@ -1024,6 +1051,14 @@ function GuildMap:GetUserLayer(name)
         layerUsers[senderKey] = nil
         savedLayerUsers()[senderKey] = nil
         return nil
+    end
+    if entry.zoneUID and entry.serverId and entry.instanceId and entry.mapId then
+        local canonicalNumber = canonicalLayerNumber(entry.zoneUID, entry.serverId,
+            entry.instanceId, entry.mapId, entry.number)
+        if canonicalNumber and entry.number ~= canonicalNumber then
+            entry.number = canonicalNumber
+            saveLayerUser(senderKey, entry)
+        end
     end
     return entry
 end
@@ -1231,6 +1266,11 @@ local function clearPin(name)
     if not pin then return end
     if pinMenu and pinMenu:IsShown() and pinMenu.playerName == pin.playerName then hidePinMenu() end
     pin:Hide()
+    pin:SetScale(1)
+    if pin.mapAnchor then
+        pin.mapAnchor:Hide()
+        pin.mapAnchor:ClearAllPoints()
+    end
     pin.playerName, pin.classFile, pin.level = nil, nil, nil
     pin.className, pin.layerNumber, pin.layerStatus, pin.clusterMembers = nil, nil, nil, nil
     if pin.count then pin.count:Hide() end
@@ -1277,6 +1317,7 @@ local function acquirePin(parent)
     local pin = table.remove(GuildMap.pool)
     if not pin then
         pin = CreateFrame("Frame", nil, parent)
+        pin.standardFrameLevel = pin:GetFrameLevel()
         local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or DEFAULT_PIN_SIZE)))
         pin:SetSize(size, size)
         pin:SetFrameStrata("HIGH")
@@ -1350,6 +1391,7 @@ local function acquirePin(parent)
         end)
     end
     pin:SetParent(parent)
+    pin:SetScale(1)
     local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or DEFAULT_PIN_SIZE)))
     pin:SetSize(size, size)
     pin:Show()
@@ -1435,7 +1477,36 @@ local function configureClusterPin(pin, members, size)
     pin.count:Show()
 end
 
+local function activeOpenMapAPI()
+    local api = _G.OpenMapAPI
+    if type(api) ~= "table" or (tonumber(api.version) or 0) < 2
+        or type(api.IsStitched) ~= "function" then return nil end
+    local ok, stitched = pcall(api.IsStitched)
+    return ok and stitched == true and api or nil
+end
+
+local function openMapPosition(api, mapId, x, y)
+    if type(api.CanvasFromWorldPos) ~= "function" or not CreateVector2D
+        or not C_Map or not C_Map.GetWorldPosFromMapPos then return nil end
+    local ok, canvasX, canvasY = pcall(function()
+        local continent, worldPosition = C_Map.GetWorldPosFromMapPos(mapId, CreateVector2D(x, y))
+        if not continent or not worldPosition or type(worldPosition.GetXY) ~= "function" then return nil end
+        local worldX, worldY = worldPosition:GetXY()
+        if not worldX or not worldY then return nil end
+        return api.CanvasFromWorldPos(continent, worldX, worldY)
+    end)
+    if not ok or type(canvasX) ~= "number" or type(canvasY) ~= "number" then return nil end
+    return canvasX, canvasY
+end
+
 local function mapPosition(mapId, x, y, displayedMapId)
+    local openMapAPI = activeOpenMapAPI()
+    if openMapAPI then
+        -- Open Map keeps a full stitched-world coordinate space at every zoom
+        -- level. Pin anchors stay in that space; only their visible size is
+        -- adjusted as the canvas zoom changes.
+        return openMapPosition(openMapAPI, mapId, x, y)
+    end
     if mapId == displayedMapId then return x, y end
     if not CreateVector2D or not C_Map or not C_Map.GetWorldPosFromMapPos or not C_Map.GetMapPosFromWorldPos then return nil end
     local ok, convertedX, convertedY = pcall(function()
@@ -1459,6 +1530,60 @@ local function groupedMembers()
     return members
 end
 
+local function openMapIsStitched()
+    return activeOpenMapAPI() ~= nil
+end
+
+local function openMapCanvasScale()
+    if not openMapIsStitched() then return nil end
+    local scrollContainer = WorldMapFrame and WorldMapFrame.ScrollContainer
+    if not scrollContainer or type(scrollContainer.GetCanvasScale) ~= "function" then return nil end
+    local ok, scale = pcall(scrollContainer.GetCanvasScale, scrollContainer)
+    if not ok or type(scale) ~= "number" or scale <= 0 then return nil end
+    return math.max(0.01, scale)
+end
+
+local function placePin(pin, child, x, y, openMapScale)
+    pin:ClearAllPoints()
+    if not openMapScale then
+        if pin.mapAnchor then
+            pin.mapAnchor:Hide()
+            pin.mapAnchor:ClearAllPoints()
+        end
+        pin:SetParent(child)
+        pin:SetScale(1)
+        if pin.standardFrameLevel then pin:SetFrameLevel(pin.standardFrameLevel) end
+        pin:SetPoint("CENTER", child, "TOPLEFT", x, -y)
+        return
+    end
+
+    -- Open Map animates the map canvas scale. Keep an unmodified anchor on
+    -- that canvas so the location follows its zoom and pan, then counter-scale
+    -- only the visible pin inside it so the icon remains a usable size.
+    local anchor = pin.mapAnchor
+    if not anchor then
+        anchor = CreateFrame("Frame", nil, child)
+        anchor:SetSize(1, 1)
+        pin.mapAnchor = anchor
+    end
+    anchor:SetParent(child)
+    anchor:SetScale(1)
+    anchor:ClearAllPoints()
+    anchor:SetPoint("CENTER", child, "TOPLEFT", x, -y)
+    local api = _G.OpenMapAPI
+    local artTop
+    if type(api) == "table" and type(api.ArtTopLevel) == "function" then
+        local ok, level = pcall(api.ArtTopLevel)
+        if ok then artTop = tonumber(level) end
+    end
+    anchor:SetFrameLevel(math.min(9900, artTop and artTop + 4 or (child:GetFrameLevel() or 0) + 20))
+    anchor:Show()
+    pin:SetParent(anchor)
+    pin:SetFrameLevel(math.min(9900, anchor:GetFrameLevel() + 1))
+    pin:SetScale(1 / openMapScale)
+    pin:SetPoint("CENTER", anchor, "CENTER")
+end
+
 function GuildMap:UpdatePins(cachedOnly)
     -- Cached map positions are safe local data and must redraw immediately
     -- when the displayed map changes, including during startup/combat traffic
@@ -1472,6 +1597,7 @@ function GuildMap:UpdatePins(cachedOnly)
     local mapId = WorldMapFrame:GetMapID()
     local child = WorldMapFrame.ScrollContainer and WorldMapFrame.ScrollContainer.Child
     if not mapId or not child or child:GetWidth() <= 0 or child:GetHeight() <= 0 then return end
+    local openMapScale = openMapCanvasScale()
     local shown = {}
     local grouped
     if cachedOnly then
@@ -1493,6 +1619,7 @@ function GuildMap:UpdatePins(cachedOnly)
     table.sort(visible, function(a, b) return a.member.key < b.member.key end)
     local size = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or DEFAULT_PIN_SIZE)))
     local distance = math.max(CLUSTER_MINIMUM_DISTANCE, size * 1.75)
+    if openMapScale then distance = distance / openMapScale end
     local distanceSquared = distance * distance
     local clusters = {}
     local clusterGrid = {}
@@ -1535,8 +1662,7 @@ function GuildMap:UpdatePins(cachedOnly)
         shown[key] = true
         local pin = self.pins[key] or acquirePin(child)
         self.pins[key] = pin
-        pin:ClearAllPoints()
-        pin:SetPoint("CENTER", child, "TOPLEFT", xTotal / #members, -(yTotal / #members))
+        placePin(pin, child, xTotal / #members, yTotal / #members, openMapScale)
         if #members == 1 then configureSinglePin(pin, members[1], size) else configureClusterPin(pin, members, size) end
     end
     for name in pairs(self.pins) do if not shown[name] then clearPin(name) end end
@@ -1613,6 +1739,19 @@ local function initializeMap()
         or type(WorldMapFrame.ScrollContainer.HookScript) ~= "function" then return end
     mapInitialized = true
     hookGroupMemberTooltip()
+    local openMapAPI = _G.OpenMapAPI
+    if not openMapCallbacksRegistered and type(openMapAPI) == "table"
+        and type(openMapAPI.RegisterCallback) == "function" then
+        local function refreshOpenMapPins()
+            lastOpenMapCanvasScale = nil
+            GuildMap:UpdatePins(true)
+        end
+        local stitchedOK = pcall(openMapAPI.RegisterCallback, GuildMap,
+            "OpenMap_StitchedChanged", refreshOpenMapPins)
+        local viewOK = pcall(openMapAPI.RegisterCallback, GuildMap,
+            "OpenMap_ViewChanged", refreshOpenMapPins)
+        openMapCallbacksRegistered = stitchedOK and viewOK
+    end
     local function addLabelOutline(label)
         local fontFile, fontSize = label:GetFont()
         if fontFile and fontSize then label:SetFont(fontFile, fontSize, "OUTLINE") end
@@ -1674,6 +1813,17 @@ local function initializeMap()
             lastDisplayedMapId = displayedMapId
             GuildMap:UpdatePins(true)
         end
+        local scale = openMapCanvasScale()
+        if not scale then
+            lastOpenMapCanvasScale = nil
+            return
+        end
+        if lastOpenMapCanvasScale and math.abs(scale - lastOpenMapCanvasScale) <= 0.0001 then return end
+        local now = GetTime and GetTime() or 0
+        if now - lastOpenMapRefreshAt < OPEN_MAP_REFRESH_INTERVAL then return end
+        lastOpenMapCanvasScale = scale
+        lastOpenMapRefreshAt = now
+        GuildMap:UpdatePins(true)
     end)
     WorldMapFrame:HookScript("OnShow", function()
         updateToggle()
@@ -1695,6 +1845,7 @@ local function initializeMap()
         hidePinMenu()
         if mapControls then mapControls:Hide() end
         if mapTicker then mapTicker:Cancel(); mapTicker = nil end
+        lastOpenMapCanvasScale = nil
         for name in pairs(GuildMap.pins) do clearPin(name) end
     end)
     updateToggle()
@@ -1860,10 +2011,15 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 or not layerNumber or layerNumber < 1 or layerNumber > 99 then return end
             local senderKey = iRC:NormalizeName(sender)
             local entry = layerUsers[senderKey] or {}
-            entry.name, entry.mapId, entry.number = sender, layerMapId, layerNumber
+            local canonicalNumber = entry.zoneUID and getAssignedLayerNumber(entry.zoneUID,
+                entry.serverId, entry.instanceId, layerMapId) or nil
+            entry.name, entry.mapId, entry.number = sender, layerMapId, canonicalNumber or layerNumber
             entry.seenAt = GetTime and GetTime() or 0
             entry.transitioning, entry.transitioningUntil, entry.stale = nil, nil, nil
             layerUsers[senderKey] = entry
+            if canonicalNumber then
+                normalizeLayerUsers(entry.zoneUID, entry.serverId, entry.instanceId, layerMapId, canonicalNumber)
+            end
             GuildMap:UpdatePins(true)
             return
         end
