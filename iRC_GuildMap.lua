@@ -45,6 +45,9 @@ local groupMemberTooltipHooked
 local openMapCallbacksRegistered
 local lastSentMapId, lastSentXWire, lastSentYWire, lastPositionSentAt
 local lastSentMapLayerSignature, lastMapLayerSentAt
+local positionDeferredDuringCombat
+local positionDeferredGeneration = 0
+local postCombatPositionSent
 local lastDisplayedMapId
 local lastOpenMapCanvasScale
 local lastOpenMapRefreshAt = 0
@@ -65,13 +68,7 @@ local lastLayerBroadcastSignature
 local lastLayerBroadcastAt = 0
 
 local function layerScanBlockedByCombat()
-    if InCombatLockdown and InCombatLockdown() then return true end
-    if UnitAffectingCombat then
-        local ok, inCombat = pcall(UnitAffectingCombat, "player")
-        if not ok or iRC:IsSecretValue(inCombat) then return true end
-        if inCombat == true then return true end
-    end
-    return false
+    return iRC.IsCombatTrafficBlocked and iRC:IsCombatTrafficBlocked() or true
 end
 
 local function savedLayerUsers()
@@ -398,8 +395,7 @@ function GuildMap:BroadcastLocalLayer(force)
     local layer = self:GetLocalLayer()
     if not layer or iRC:GetSettings().showLayerPanel == false
         or not iRC.RaceGrid or not iRC.RaceGrid.BroadcastLayerState then return false end
-    if (InCombatLockdown and InCombatLockdown())
-        or (UnitAffectingCombat and UnitAffectingCombat("player"))
+    if layerScanBlockedByCombat()
         or (iRC.IsChatMessagingLocked and iRC:IsChatMessagingLocked()) then return false end
     local registry = self:GetLayerRegistryWire(layer.serverId, layer.instanceId, layer.mapId)
     local signature = tostring(layer.serverId) .. ":" .. tostring(layer.instanceId) .. ":"
@@ -1670,19 +1666,75 @@ end
 
 -- Position transmission ----------------------------------------------------
 
-function GuildMap:BroadcastPosition(force)
-    -- Forever can protect map/unit position data during combat. Resume one
-    -- current position broadcast after combat instead of touching secret data.
-    if iRC:DeferLowTraffic("traffic:guild-map-position", function() GuildMap:BroadcastPosition(force) end) then return false end
-    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false or not C_Map then return false end
-    local _, instanceType = GetInstanceInfo()
-    if instanceType and instanceType ~= "none" then return false end
-    local mapId = C_Map.GetBestMapForUnit("player")
-    local position = mapId and C_Map.GetPlayerMapPosition(mapId, "player")
-    if not position then return false end
-    local x, y = position:GetXY()
-    if not x or not y or (x == 0 and y == 0) then return false end
-    local xWire, yWire = math.floor(x * 10000 + 0.5), math.floor(y * 10000 + 0.5)
+local function isOutdoorPositionReadable()
+    if iRC:IsSecretValue(GetInstanceInfo) or type(GetInstanceInfo) ~= "function" then return false end
+    local ok, _, instanceType = pcall(GetInstanceInfo)
+    if not ok or iRC:IsSecretValue(instanceType) then return false end
+    return not instanceType or instanceType == "none"
+end
+
+local function broadcastCachedCombatPosition(force)
+    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false
+        or not lastSentMapId or not lastSentXWire or not lastSentYWire then return false end
+    if not isOutdoorPositionReadable() then return false end
+    local now = GetTime and GetTime() or 0
+    if not force and now - (lastPositionSentAt or 0) < POSITION_HEARTBEAT then return false end
+    -- Forever can protect live map coordinates during combat. Repeating the
+    -- last successfully read position keeps the existing pin alive without
+    -- accessing any protected map or unit-position values.
+    local message = table.concat({
+        "MAP_POS", POSITION_VERSION, tostring(lastSentMapId),
+        tostring(lastSentXWire), tostring(lastSentYWire),
+    }, "\t")
+    local sent = iRC:SendAddonTraffic(iRC.Prefix, message, "GUILD")
+    if sent then lastPositionSentAt = now end
+    return sent and true or false
+end
+
+local function readCurrentPositionWire()
+    if iRC:IsSecretValue(C_Map) or type(C_Map) ~= "table" then return nil end
+    local getBestMap = C_Map.GetBestMapForUnit
+    local getMapPosition = C_Map.GetPlayerMapPosition
+    if iRC:IsSecretValue(getBestMap) or type(getBestMap) ~= "function"
+        or iRC:IsSecretValue(getMapPosition) or type(getMapPosition) ~= "function" then return nil end
+    local mapOK, mapId = pcall(getBestMap, "player")
+    if not mapOK or iRC:IsSecretValue(mapId) or type(mapId) ~= "number" or mapId <= 0 then return nil end
+    local positionOK, position = pcall(getMapPosition, mapId, "player")
+    if not positionOK or iRC:IsSecretValue(position) or not position then return nil end
+    local getXY = position.GetXY
+    if iRC:IsSecretValue(getXY) or type(getXY) ~= "function" then return nil end
+    local coordinatesOK, x, y = pcall(getXY, position)
+    if not coordinatesOK or iRC:HasSecretValues(x, y)
+        or type(x) ~= "number" or type(y) ~= "number"
+        or x < 0 or x > 1 or y < 0 or y > 1 or (x == 0 and y == 0) then return nil end
+    return mapId, math.floor(x * 10000 + 0.5), math.floor(y * 10000 + 0.5)
+end
+
+function GuildMap:BroadcastPosition(force, postCombat)
+    -- Keep the last safe position alive during combat, then read and send the
+    -- current position once low-traffic mode ends.
+    local protectedCombat = iRC:IsCombatTrafficBlocked()
+    if iRC:IsLowTrafficMode() and not (postCombat and not protectedCombat) then
+        if protectedCombat then
+            positionDeferredDuringCombat = true
+            postCombatPositionSent = nil
+        elseif postCombatPositionSent then
+            return false
+        end
+        positionDeferredGeneration = positionDeferredGeneration + 1
+        local deferredGeneration = positionDeferredGeneration
+        -- The eventual fallback is always forced so a long delay cannot be
+        -- suppressed by the normal unchanged-position heartbeat window.
+        iRC:DeferLowTraffic("traffic:guild-map-position", function()
+            if deferredGeneration == positionDeferredGeneration then GuildMap:BroadcastPosition(true) end
+        end)
+        return broadcastCachedCombatPosition(force)
+    end
+    if not iRC:IsLowTrafficMode() then postCombatPositionSent = nil end
+    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false then return false end
+    if not isOutdoorPositionReadable() then return false end
+    local mapId, xWire, yWire = readCurrentPositionWire()
+    if not mapId then return false end
     local now = GetTime and GetTime() or 0
     local unchanged = lastSentMapId == mapId and lastSentXWire == xWire and lastSentYWire == yWire
     if not force and unchanged and now - (lastPositionSentAt or 0) < POSITION_HEARTBEAT then return false end
@@ -1975,6 +2027,28 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local unit = ...
         GuildMap:ObserveLocalLayer(unit, "nameplate")
     elseif event == "PLAYER_REGEN_ENABLED" then
+        if positionDeferredDuringCombat then
+            positionDeferredDuringCombat = nil
+            -- Combat is over, so live map coordinates are safe again. Bypass
+            -- the short low-traffic cooldown and immediately replace the
+            -- cached combat heartbeat with the player's current position.
+            local function sendFreshPosition()
+                if GuildMap:BroadcastPosition(true, true) then
+                    iRC:DebugMsg("Guild map sent the delayed position immediately after combat.", 3)
+                    -- The immediate send succeeded; invalidate the delayed
+                    -- fallback so it cannot send the same position twice.
+                    postCombatPositionSent = true
+                    positionDeferredGeneration = positionDeferredGeneration + 1
+                else
+                    iRC:DebugMsg("Guild map position was not ready after combat; the delayed retry remains queued.", 3)
+                end
+            end
+            if C_Timer and C_Timer.After then
+                C_Timer.After(0, sendFreshPosition)
+            else
+                sendFreshPosition()
+            end
+        end
         broadcastLayerTransition()
         if pendingLocalLayer then
             local candidate = pendingLocalLayer
@@ -1990,8 +2064,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "GROUP_ROSTER_UPDATE" then
         -- Remove newly grouped members immediately, even if the full map
         -- refresh is deferred by combat low-traffic mode.
-        if iRC:IsForeverClient() and ((InCombatLockdown and InCombatLockdown())
-            or (UnitAffectingCombat and UnitAffectingCombat("player"))) then
+        if iRC:IsForeverClient() and layerScanBlockedByCombat() then
             GuildMap:UpdatePins()
             return
         end

@@ -32,10 +32,13 @@ iRC.Prefix = "iRCConnV1"
 iRC.GridWireVersion = "6"
 iRC.LayerWireVersion = "6"
 iRC.AdminWireVersion = "6"
--- Testing-only controls accept exact character names and an explicit trailing
--- wildcard for a shared first name.
+-- Testing-only controls are locked to exact full character names. Forever may
+-- transport the separating space as a hyphen; NormalizeName handles that wire
+-- representation without widening access to another first or last name.
 iRC.TestAdminNames = {
-    "Crasling *",
+    "Crasling Mordaine",
+    "Crasling Veyrath",
+    "Crasling Vaelanar",
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -141,14 +144,29 @@ end
 local lowTrafficPending, lowTrafficPendingCount, lowTrafficGeneration = {}, 0, 0
 local LOW_TRAFFIC_QUEUE_LIMIT = 32
 
+local function combatStateBlocksTraffic()
+    local secretChecker = _G and _G.issecretvalue
+    local function blockedBy(callback, ...)
+        if type(secretChecker) == "function" and secretChecker(callback) == true then return true end
+        if type(callback) ~= "function" then return false end
+        local ok, value = pcall(callback, ...)
+        if not ok then return true end
+        if type(secretChecker) == "function" and secretChecker(value) == true then return true end
+        return value == true
+    end
+    return blockedBy(UnitAffectingCombat, "player") or blockedBy(InCombatLockdown)
+end
+
+function iRC:IsCombatTrafficBlocked()
+    return combatStateBlocksTraffic()
+end
+
 function iRC:IsLowTrafficMode()
-    return self.LowTrafficMode == true or (UnitAffectingCombat and UnitAffectingCombat("player"))
-        or (InCombatLockdown and InCombatLockdown())
+    return self.LowTrafficMode == true or combatStateBlocksTraffic()
 end
 
 function iRC:CanOpenPanel()
-    if (UnitAffectingCombat and UnitAffectingCombat("player"))
-        or (InCombatLockdown and InCombatLockdown()) then
+    if self:IsCombatTrafficBlocked() then
         self:Print(self.Colors.iRC .. self:Text("PANEL_CANNOT_USE_IN_COMBAT") .. self.Colors.Reset)
         return false
     end
@@ -174,14 +192,13 @@ function iRC:EnterLowTrafficMode()
 end
 
 function iRC:LeaveLowTrafficMode()
-    if UnitAffectingCombat and UnitAffectingCombat("player") then return end
+    if combatStateBlocksTraffic() then return end
     lowTrafficGeneration = lowTrafficGeneration + 1
     local generation = lowTrafficGeneration
     local delay = self:GetStartupTrafficDelay()
     if not C_Timer or not C_Timer.After then self.LowTrafficMode = false; return end
     C_Timer.After(delay, function()
-        if generation ~= lowTrafficGeneration or (UnitAffectingCombat and UnitAffectingCombat("player"))
-            or (InCombatLockdown and InCombatLockdown()) then return end
+        if generation ~= lowTrafficGeneration or combatStateBlocksTraffic() then return end
         iRC.LowTrafficMode = false
         local keys = {}
         for key in pairs(lowTrafficPending) do keys[#keys + 1] = key end
@@ -1167,8 +1184,7 @@ function iRC:GetSelfFoundState()
     -- Forever makes aura data secret while combat restrictions are active.
     -- Calling any aura enumeration API from tainted addon code can raise an
     -- error, so retain the last safe out-of-combat observation instead.
-    if self:IsForeverClient() and ((InCombatLockdown and InCombatLockdown())
-        or (UnitAffectingCombat and UnitAffectingCombat("player"))) then
+    if self:IsForeverClient() and self:IsCombatTrafficBlocked() then
         return cached == true
     end
 
@@ -1889,11 +1905,6 @@ function iRC:IsTestAdminName(name)
         if type(configuredName) == "string" and configuredName ~= "" then
             local normalizedConfiguredName = self:NormalizeName(configuredName)
             if normalizedName == normalizedConfiguredName then return true end
-            if normalizedConfiguredName:sub(-1) == "*" then
-                local stem = normalizedConfiguredName:sub(1, -2):gsub("%s+$", "")
-                if stem ~= "" and (normalizedName == stem
-                    or normalizedName:sub(1, #stem + 1) == stem .. " ") then return true end
-            end
             if not self:IsForeverClient() then
                 local testName, testRealm = configuredName:match("^(.+)%-(.+)$")
                 if testName and not name:find("-", 1, true) and string.lower(name) == string.lower(testName)

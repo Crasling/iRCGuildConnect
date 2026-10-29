@@ -41,9 +41,31 @@ assert(loadfile("Localization/enUS.lua"))("iRC", private)
 assert(loadfile("iRC_Guild.lua"))("iRC", private)
 assert(loadfile("iRC_Connection.lua"))("iRC", private)
 local connectionFrame, iRC = frames[#frames], private.iRC
-assert(iRC:IsTestAdminName("Crasling-Soulseeker"), "Crasling is an explicit test admin")
-assert(iRC:IsTestAdminName("Crasjin-Soulseeker"), "Crasjin is an explicit test admin")
-assert(not iRC:IsTestAdminName("Crasling-OtherRealm"), "test admin authority is realm-locked")
+local originalSecretChecker = issecretvalue
+local originalUnitAffectingCombat, originalInCombatLockdown = UnitAffectingCombat, InCombatLockdown
+local secretCombatState = {}
+issecretvalue = function(value) return value == secretCombatState end
+UnitAffectingCombat, InCombatLockdown = function() return false end, function() return false end
+assert(not iRC:IsCombatTrafficBlocked(), "clear combat APIs allow normal traffic")
+UnitAffectingCombat = function() return secretCombatState end
+assert(iRC:IsCombatTrafficBlocked(), "a secret combat result blocks protected traffic")
+UnitAffectingCombat = function() error("protected combat API") end
+assert(iRC:IsCombatTrafficBlocked(), "a failed combat query blocks protected traffic")
+issecretvalue = originalSecretChecker
+UnitAffectingCombat, InCombatLockdown = originalUnitAffectingCombat, originalInCombatLockdown
+local originalGameTocVersion = iRC.GameTocVersion
+iRC.GameTocVersion = 16001
+assert(iRC:IsTestAdminName("Crasling Mordaine"), "the configured full character name is a test admin")
+assert(iRC:IsTestAdminName("Crasling-Mordaine"), "Forever's transported full-name form is accepted")
+assert(iRC:IsTestAdminName("Crasling Veyrath"), "the second configured full character name is a test admin")
+assert(iRC:IsTestAdminName("Crasling-Veyrath"), "the second Forever transport name is accepted")
+assert(iRC:IsTestAdminName("Crasling Vaelanar"), "the third configured full character name is a test admin")
+assert(iRC:IsTestAdminName("Crasling-Vaelanar"), "the third Forever transport name is accepted")
+assert(not iRC:IsTestAdminName("Crasling Mawthorne"), "the previous full character name is not a test admin")
+assert(not iRC:IsTestAdminName("Crasling Soulseeker"), "another Crasling last name is not a test admin")
+assert(not iRC:IsTestAdminName("Someone Mordaine"), "another Mordaine first name is not a test admin")
+assert(not iRC:IsTestAdminName("Crasling *"), "wildcard syntax does not grant test-admin access")
+iRC.GameTocVersion = originalGameTocVersion
 iRC.TestAdminName = "Crasjin-Soulseeker"
 iRCDB, iRCCharDB = {}, {}
 local db = iRC:GetConnection()

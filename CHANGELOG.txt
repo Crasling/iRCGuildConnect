@@ -2,6 +2,11 @@
 iRC - Changelog
 ================================================================================
 
+v0.6.1 - Full Launch
+--------------------------------------------------------------------------------
+[CHANGED] Updated iRC for the full launch of WoW Forever
+[FIXED] Guild map pins now remain visible during combat
+
 v0.5.31 - Guild Map Improvements
 --------------------------------------------------------------------------------
 [IMPROVED] Guild map pins now work smoothly with Open Map
