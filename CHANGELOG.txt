@@ -2,6 +2,10 @@
 iRC - Changelog
 ================================================================================
 
+v0.6.2 - Level Cap Update
+--------------------------------------------------------------------------------
+[FIXED] Oops! The Guild Leaderboard max level is now correctly updated from 30 to 60
+
 v0.6.1 - Full Launch
 --------------------------------------------------------------------------------
 [CHANGED] Updated iRC for the full launch of WoW Forever

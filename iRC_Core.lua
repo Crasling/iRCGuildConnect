@@ -29,7 +29,7 @@ iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 iRC.Prefix = "iRCConnV1"
 -- Independent versions for the public cross-guild transports. Third-party
 -- LayerSwap packets and the separate guild-map position schema are independent.
-iRC.GridWireVersion = "6"
+iRC.GridWireVersion = "7"
 iRC.LayerWireVersion = "6"
 iRC.AdminWireVersion = "6"
 -- Testing-only controls are locked to exact full character names. Forever may
@@ -1039,9 +1039,8 @@ function iRC:StyleScrollFrame(scrollFrame)
     end
 end
 
--- Give every type-to-filter field the same compact search treatment used by
--- iWR: a quiet dark field, a spyglass, and a clear button that only appears
--- while a query is present.
+-- Apply compact search styling with a dark field, a search icon, and a clear
+-- button that only appears while a query is present.
 function iRC:StyleSearchBox(editBox, placeholder)
     if not editBox or editBox.iRCSearchStyled then return editBox end
     editBox.iRCSearchStyled = true

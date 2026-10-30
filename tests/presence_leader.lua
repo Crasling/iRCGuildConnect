@@ -22,7 +22,7 @@ function UnitClass() return "Warrior", "WARRIOR" end
 function GetNumGuildMembers() return #roster end
 function GetGuildRosterInfo(index)
     local row = roster[index]
-    return row.name .. "-Soulseeker", "Rank", row.rank, 10, "Warrior", nil, nil, nil, row.online, nil, "WARRIOR", nil, nil, nil, nil, nil, row.guid or ("Player-1-" .. row.name)
+    return row.name .. "-Soulseeker", "Rank", row.rank, row.level or 10, "Warrior", nil, nil, nil, row.online, nil, "WARRIOR", nil, nil, nil, nil, nil, row.guid or ("Player-1-" .. row.name)
 end
 function GetGuildInfo()
     for _, row in ipairs(roster) do if row.name == player then return "Darkspear Tribe", "Rank", row.rank end end
@@ -220,6 +220,12 @@ assert(group.members == 6 and group.activePlayers == 3 and group.verifiedMembers
 assert(group.averageLevel == 10, "averages use the same participant population")
 local classTotal = 0; for _, count in pairs(group.classes) do classTotal = classTotal + count end
 assert(classTotal == 6, "class breakdown uses the full guild roster")
+roster[1].level, roster[5].level = 60, 59
+iRC:InvalidateGuildMemberRows()
+iRC.RaceGrid:MarkLocalReportDirty()
+local maxLevelGroup = assert(iRC.RaceGrid:BuildOwnGuildReports()[1])
+assert(maxLevelGroup.membersLevel60 == 1 and maxLevelGroup.activeLevel60 == 1,
+    "leaderboard max-level activity counts level 60 and excludes level 59")
 assert(iRC:GetMemberVerification("Aofficer", false).state == "offline", "live verification behavior remains unchanged")
 db.members.member = { name = "Member", guid = "Player-1-Member", race = "Troll", lastSeen = now, addonVersion = "0.2.4" }
 local sourceRows = iRC:GetGuildRosterRows()
