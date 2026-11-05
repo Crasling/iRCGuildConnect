@@ -2,6 +2,15 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.1 - Guild List & Homepage
+--------------------------------------------------------------------------------
+[IMPROVED] Browse guilds in a compact list with expandable details
+[CHANGED] Sort guilds by activity, size, or name
+[REMOVED] Guild rankings and Top Guilds
+[IMPROVED] Guild Homepage now has tabs, a live preview, and one Save button
+[FIXED] Reduced background whispers and repeated checks
+[FIXED] Stopped repeated whisper attempts to offline players
+
 v0.6.3 - Settings & Sharing Improvements
 --------------------------------------------------------------------------------
 [IMPROVED] Personal Settings now has clear categories

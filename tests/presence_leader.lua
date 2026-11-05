@@ -232,6 +232,20 @@ profile("Aofficer"); profile("Zofficer")
 expectLeader("Aofficer")
 player = "Aofficer"
 expectLeader("Aofficer") -- Exactly the same result on the other officer client.
+local beforeRoutinePoll = #messages
+player = "Zofficer"
+assert(not iRC:PollGuildPresence() and #messages == beforeRoutinePoll,
+    "another eligible officer does not start a duplicate automatic presence poll")
+assert(iRC:RequestGuildPresence(false) and #messages == beforeRoutinePoll + 1,
+    "a non-leading officer can still request profiles explicitly")
+player = "Aofficer"
+assert(iRC:PollGuildPresence() and #messages == beforeRoutinePoll + 2,
+    "the elected officer sends the routine guild presence poll")
+assert(messages[#messages][3] == "GUILD" and messages[#messages][2] == "PRESENCE_REQUEST\t10\tOFFICER_POLL\t",
+    "routine polling retains the established guild packet format")
+assert(not iRC:PollGuildPresence() and #messages == beforeRoutinePoll + 2,
+    "the elected officer still observes the existing polling cooldown")
+
 db.active = false
 assert(not iRC:IsPresenceNotificationLeader(), "inactive guild never elects a notifier")
 

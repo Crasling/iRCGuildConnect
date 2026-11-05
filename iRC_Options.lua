@@ -1273,10 +1273,9 @@ y = connectionActionsY - 70
 local rulesEditorTopY = y - 2
 
 local guildRulesStatus
-local guildActivationCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, levelAnnouncementDropdown, professionAnnouncementDropdown, sameRaceLevelSlider, guildGroupsOnlyCheck, guildGroupsLevelSlider, guildContactsEdit, guildContactsSave, guildContactsListContent, guildContactsListEmpty, guildContactSuggestionFrame, guildContactSuggestionButtons
+local guildActivationCheck, progressionModeDropdown, maxLevelProgressionDropdown, guildFoundTradeExceptionsCheck, guildMapRuleCheck, levelAnnouncementDropdown, professionAnnouncementDropdown, sameRaceLevelSlider, guildGroupsOnlyCheck, guildGroupsLevelSlider
 local raceRuleUI = {}
 local homepageDescriptionUI = {}
-local guildContactRows = {}
 y = select(2, CreateSectionHeader(connectionContent, "Guild Enforced Rules", y - 2))
 guildRulesStatus, y = CreateInfoText(connectionContent, "", y, "GameFontHighlight")
 _, y = CreateInfoText(connectionContent, L.GUILD_RULES_INTRO, y, "GameFontDisableSmall")
@@ -1605,379 +1604,727 @@ local function RefreshRulesView(canSwitchRulesView)
 end
 
 (function()
-local homepageY = -12
-_, homepageY = CreateSectionHeader(guildHomepageContent, L.GUILD_CONTACTS_HEADER, homepageY)
-homepageDescriptionUI.preview = iRC.MainUI and iRC.MainUI:CreateGuildHomepagePreview(guildHomepageContent)
-if homepageDescriptionUI.preview then
-    homepageDescriptionUI.preview:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 12, homepageY)
-    homepageDescriptionUI.preview:SetPoint("TOPRIGHT", guildHomepageContent, "TOPRIGHT", -12, homepageY)
-    homepageY = homepageY - homepageDescriptionUI.preview:GetHeight() - 12
+local editor = homepageDescriptionUI
+editor.tabs, editor.panels, editor.dropdowns, editor.contactRows = {}, {}, {}, {}
+editor.activeTab = "presentation"
+editor.draft = { description = "", icon = 0, tag = "NORMAL", contacts = {}, contactNotes = {},
+    classBreakdown = { mode = "ALL", minLevel = 1, maxLevel = 60 } }
+
+local function cleanText(value)
+    return tostring(value or ""):gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s%s+", " ")
 end
-managementConnectionCards.homepage, homepageY = CreateConnectionStatusCard(guildHomepageContent, homepageY)
-local iconCard, iconY = CreateManagementSettingsCard(guildHomepageContent,
-    L.GUILD_HOMEPAGE_ICON_HEADER, L.GUILD_HOMEPAGE_ICON_DESC, homepageY - 2)
-homepageDescriptionUI.iconButtons = {}
-local iconSyncBadge = CreateSyncBadge(iconCard, 0)
-iconSyncBadge:ClearAllPoints()
-iconSyncBadge:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 15, iconY - 54)
-local iconDivider = iconCard:CreateTexture(nil, "ARTWORK")
-iconDivider:SetWidth(1)
-iconDivider:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 72, iconY + 5)
-iconDivider:SetPoint("BOTTOMLEFT", iconCard, "BOTTOMLEFT", 72, 10)
-iconDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
-for iconIndex, texture in ipairs(iRC.GuildHomepageIcons) do
-    local selectedIndex = iconIndex
-    local button = CreateFrame("Button", nil, iconCard, "BackdropTemplate")
-    button:SetSize(38, 38)
-    button:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 86 + ((iconIndex - 1) % 12) * 44,
-        iconY - math.floor((iconIndex - 1) / 12) * 44)
-    button:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    button:SetBackdropColor(0.03, 0.03, 0.03, 0.9)
-    button.icon = button:CreateTexture(nil, "ARTWORK")
-    button.icon:SetPoint("CENTER"); button.icon:SetSize(30, 30); button.icon:SetTexture(texture)
-    button:SetScript("OnClick", function() iRC:SetGuildHomepageIcon(selectedIndex) end)
-    button:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(iRC:Text("GUILD_HOMEPAGE_ICON_NUMBER", selectedIndex)); GameTooltip:Show()
-    end)
-    button:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    homepageDescriptionUI.iconButtons[iconIndex] = button
+local function copyDraft(source)
+    local result = { description = source.description, icon = source.icon, tag = source.tag,
+        contacts = {}, contactNotes = {}, classBreakdown = {} }
+    for _, name in ipairs(source.contacts) do result.contacts[#result.contacts + 1] = name end
+    for key, note in pairs(source.contactNotes) do result.contactNotes[key] = note end
+    for key, value in pairs(source.classBreakdown) do result.classBreakdown[key] = value end
+    return result
 end
-local iconRows = 3
-local iconCardHeight = math.abs(iconY) + iconRows * 44 + 8
-iconCard:SetHeight(iconCardHeight)
-homepageY = homepageY - iconCardHeight - 12
-local tagCard, tagY = CreateManagementSettingsCard(guildHomepageContent,
-    L.GUILD_HOMEPAGE_TAG_HEADER, L.GUILD_HOMEPAGE_TAG_DESC, homepageY)
-homepageDescriptionUI.guildTag, tagY = CreateSettingsDropdown("iRCGuildHomepageTag",
-    tagCard, L.GUILD_HOMEPAGE_TAG_LABEL, nil, tagY,
-    function() return iRC:GetGuildHomepageTag() end,
-    function(value) iRC:SetGuildHomepageTag(value) end,
-    function() return { "NORMAL", "PVE", "PVP", "RP" } end,
-    function(value)
-        if value == "PVE" then return L.GUILD_HOMEPAGE_TAG_PVE end
-        if value == "PVP" then return L.GUILD_HOMEPAGE_TAG_PVP end
-        if value == "RP" then return L.GUILD_HOMEPAGE_TAG_RP end
-        return L.GUILD_HOMEPAGE_TAG_NORMAL
-    end, true)
-homepageDescriptionUI.guildTag:Refresh()
-local tagCardHeight = math.abs(tagY) + 12
-tagCard:SetHeight(tagCardHeight)
-homepageY = homepageY - tagCardHeight - 12
-local classCard, classY = CreateManagementSettingsCard(guildHomepageContent,
-    L.GUILD_HOMEPAGE_CLASSES_HEADER, L.GUILD_HOMEPAGE_CLASSES_DESC, homepageY)
-homepageDescriptionUI.classBreakdownDraft = { mode = "ALL", minLevel = 1, maxLevel = 60 }
-local refreshClassBreakdownControls
-homepageDescriptionUI.classBreakdownMode, classY = CreateSettingsDropdown("iRCGuildHomepageClassBreakdownMode",
-    classCard, L.GUILD_HOMEPAGE_CLASSES_MODE, nil, classY,
-    function() return homepageDescriptionUI.classBreakdownDraft.mode end,
-    function(value)
-        homepageDescriptionUI.classBreakdownDraft.mode = value
-        if refreshClassBreakdownControls then refreshClassBreakdownControls(false) end
-    end,
-    function() return { "ALL", "RANGE", "MAX" } end,
-    function(value)
-        if value == "RANGE" then return L.GUILD_HOMEPAGE_CLASSES_RANGE end
-        if value == "MAX" then return L.GUILD_HOMEPAGE_CLASSES_MAX end
-        return L.GUILD_HOMEPAGE_CLASSES_ALL
-    end, true)
-local minLabel = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-minLabel:SetPoint("TOPLEFT", classCard, "TOPLEFT", 86, classY)
-minLabel:SetText(L.GUILD_HOMEPAGE_CLASSES_MIN)
-local minValue = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-minValue:SetPoint("LEFT", minLabel, "RIGHT", 8, 0)
-minValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-homepageDescriptionUI.classBreakdownMin = CreateFrame("Slider", "iRCGuildHomepageClassBreakdownMin", classCard, "OptionsSliderTemplate")
-homepageDescriptionUI.classBreakdownMin:SetPoint("TOPLEFT", classCard, "TOPLEFT", 86, classY - 22)
-homepageDescriptionUI.classBreakdownMin:SetWidth(205)
-homepageDescriptionUI.classBreakdownMin:SetMinMaxValues(1, 60)
-homepageDescriptionUI.classBreakdownMin:SetValueStep(1)
-_G[homepageDescriptionUI.classBreakdownMin:GetName() .. "Low"]:SetText("1")
-_G[homepageDescriptionUI.classBreakdownMin:GetName() .. "High"]:SetText("60")
-_G[homepageDescriptionUI.classBreakdownMin:GetName() .. "Text"]:SetText("")
-homepageDescriptionUI.classBreakdownMin:SetScript("OnValueChanged", function(_, value)
-    value = math.floor(value + 0.5)
-    homepageDescriptionUI.classBreakdownDraft.minLevel = value
-    minValue:SetText(tostring(value))
-end)
-local maxLabel = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-maxLabel:SetPoint("TOPLEFT", classCard, "TOPLEFT", 335, classY)
-maxLabel:SetText(L.GUILD_HOMEPAGE_CLASSES_MAXIMUM)
-local maxValue = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-maxValue:SetPoint("LEFT", maxLabel, "RIGHT", 8, 0)
-maxValue:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
-homepageDescriptionUI.classBreakdownMax = CreateFrame("Slider", "iRCGuildHomepageClassBreakdownMax", classCard, "OptionsSliderTemplate")
-homepageDescriptionUI.classBreakdownMax:SetPoint("TOPLEFT", classCard, "TOPLEFT", 335, classY - 22)
-homepageDescriptionUI.classBreakdownMax:SetWidth(205)
-homepageDescriptionUI.classBreakdownMax:SetMinMaxValues(1, 60)
-homepageDescriptionUI.classBreakdownMax:SetValueStep(1)
-_G[homepageDescriptionUI.classBreakdownMax:GetName() .. "Low"]:SetText("1")
-_G[homepageDescriptionUI.classBreakdownMax:GetName() .. "High"]:SetText("60")
-_G[homepageDescriptionUI.classBreakdownMax:GetName() .. "Text"]:SetText("")
-homepageDescriptionUI.classBreakdownMax:SetScript("OnValueChanged", function(_, value)
-    value = math.floor(value + 0.5)
-    homepageDescriptionUI.classBreakdownDraft.maxLevel = value
-    maxValue:SetText(tostring(value))
-end)
-classY = classY - 70
-homepageDescriptionUI.classBreakdownApply, classY = CreateSettingsButton(classCard,
-    L.GUILD_HOMEPAGE_CLASSES_APPLY, 155, classY, function()
-        local draft = homepageDescriptionUI.classBreakdownDraft
-        iRC:SetGuildHomepageClassBreakdown(draft.mode, draft.minLevel, draft.maxLevel)
-    end)
-refreshClassBreakdownControls = function(fromSaved)
-    local draft = homepageDescriptionUI.classBreakdownDraft
-    if fromSaved then
-        local saved = iRC:GetGuildHomepageClassBreakdown()
-        draft.mode, draft.minLevel, draft.maxLevel = saved.mode, saved.minLevel, saved.maxLevel
-    end
-    local range = draft.mode == "RANGE"
-    homepageDescriptionUI.classBreakdownMin:SetValue(draft.minLevel or 1)
-    homepageDescriptionUI.classBreakdownMax:SetValue(draft.maxLevel or 60)
-    homepageDescriptionUI.classBreakdownMin:SetEnabled(range)
-    homepageDescriptionUI.classBreakdownMax:SetEnabled(range)
-    minLabel:SetTextColor(range and 1 or 0.5, range and 0.82 or 0.5, range and 0.36 or 0.5)
-    maxLabel:SetTextColor(range and 1 or 0.5, range and 0.82 or 0.5, range and 0.36 or 0.5)
-    homepageDescriptionUI.classBreakdownMode:Refresh()
-end
-homepageDescriptionUI.refreshClassBreakdownControls = refreshClassBreakdownControls
-refreshClassBreakdownControls(true)
-local classCardHeight = math.abs(classY) + 12
-classCard:SetHeight(classCardHeight)
-homepageY = homepageY - classCardHeight - 12
-local descriptionCard, descriptionY = CreateManagementSettingsCard(guildHomepageContent,
-    L.GUILD_DESCRIPTION_HEADER, L.GUILD_DESCRIPTION_DESC, homepageY)
-local descriptionSyncBadge = CreateSyncBadge(descriptionCard, 0)
-descriptionSyncBadge:ClearAllPoints()
-descriptionSyncBadge:SetPoint("LEFT", descriptionCard, "LEFT", 15, -18)
-local descriptionDivider = descriptionCard:CreateTexture(nil, "ARTWORK")
-descriptionDivider:SetWidth(1)
-descriptionDivider:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 72, -58)
-descriptionDivider:SetPoint("BOTTOMLEFT", descriptionCard, "BOTTOMLEFT", 72, 10)
-descriptionDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
-local homepagePresets = {
-    { name = L.GUILD_DESCRIPTION_PRESET_RACE, text = L.GUILD_DESCRIPTION_TEXT_RACE },
-    { name = L.GUILD_DESCRIPTION_PRESET_SF, text = L.GUILD_DESCRIPTION_TEXT_SF },
-    { name = L.GUILD_DESCRIPTION_PRESET_GF, text = L.GUILD_DESCRIPTION_TEXT_GF },
-    { name = L.GUILD_DESCRIPTION_PRESET_COMMUNITY, text = L.GUILD_DESCRIPTION_TEXT_COMMUNITY },
-}
-homepageDescriptionUI.selectedPreset = 0
-local presetY = descriptionY
-homepageDescriptionUI.dropdown, descriptionY = CreateSettingsDropdown("iRCGuildDescriptionPreset", descriptionCard,
-    L.GUILD_DESCRIPTION_PRESET_LABEL, L.GUILD_DESCRIPTION_PRESET_DESC, descriptionY,
-    function() return homepageDescriptionUI.selectedPreset end,
-    function(value)
-        homepageDescriptionUI.selectedPreset = value
-        local preset = homepagePresets[value]
-        if preset then
-            homepageDescriptionUI.edit:SetText(preset.text)
-            homepageDescriptionUI.selectedPreset = value
-            homepageDescriptionUI.edit:SetFocus()
+local function snapshot(connection)
+    local data = connection and connection.guildHomepageDescription or {}
+    local icon = connection and connection.guildHomepageIcon or {}
+    local classes = iRC:GetGuildHomepageClassBreakdown()
+    local result = { description = data.text or "", icon = tonumber(icon.icon) or 0,
+        tag = iRC:GetGuildHomepageTag(), contacts = {}, contactNotes = {},
+        classBreakdown = { mode = classes.mode or "ALL", minLevel = classes.minLevel or 1, maxLevel = classes.maxLevel or 60 } }
+    for name in tostring(connection and connection.rules and connection.rules.guildContacts or ""):gmatch("[^,]+") do
+        local contactName = cleanText(name)
+        if contactName ~= "" then
+            result.contacts[#result.contacts + 1] = contactName
+            result.contactNotes[iRC:NormalizeName(contactName)] = (iRC:GetGuildContactDetails(contactName) or {}).note or ""
         end
-    end,
-    function() return { 0, 1, 2, 3, 4 } end,
-    function(value) return value == 0 and L.GUILD_DESCRIPTION_PRESET_CUSTOM or homepagePresets[value].name end)
-homepageDescriptionUI.dropdown.title:ClearAllPoints()
-homepageDescriptionUI.dropdown.title:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 86, presetY)
-homepageDescriptionUI.dropdown:ClearAllPoints()
-homepageDescriptionUI.dropdown:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 74, presetY - 15)
-UIDropDownMenu_SetWidth(homepageDescriptionUI.dropdown, 300)
-if homepageDescriptionUI.dropdown.description then
-    homepageDescriptionUI.dropdown.description:ClearAllPoints()
-    homepageDescriptionUI.dropdown.description:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 86, presetY - 48)
-    homepageDescriptionUI.dropdown.description:SetPoint("RIGHT", descriptionCard, "RIGHT", -18, 0)
+    end
+    return result
 end
-homepageDescriptionUI.edit = CreateFrame("EditBox", nil, descriptionCard, "BackdropTemplate")
-homepageDescriptionUI.edit:SetPoint("TOPLEFT", descriptionCard, "TOPLEFT", 86, descriptionY)
-homepageDescriptionUI.edit:SetPoint("RIGHT", descriptionCard, "RIGHT", -18, 0)
-homepageDescriptionUI.edit:SetHeight(72)
-homepageDescriptionUI.edit:SetMultiLine(true); homepageDescriptionUI.edit:SetAutoFocus(false)
-homepageDescriptionUI.edit:SetFontObject(GameFontHighlight); homepageDescriptionUI.edit:SetTextInsets(8, 8, 7, 7)
-homepageDescriptionUI.edit:SetMaxLetters(iRC.GuildHomepageDescriptionMaxLength)
-homepageDescriptionUI.edit:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-homepageDescriptionUI.edit:SetBackdropColor(0.03, 0.03, 0.03, 0.85)
-homepageDescriptionUI.edit:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
-homepageDescriptionUI.edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-homepageDescriptionUI.counter = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-homepageDescriptionUI.counter:SetPoint("TOPRIGHT", homepageDescriptionUI.edit, "BOTTOMRIGHT", 0, -3)
-homepageDescriptionUI.edit:SetScript("OnTextChanged", function(self)
-    homepageDescriptionUI.counter:SetFormattedText("%d / %d", #self:GetText(), iRC.GuildHomepageDescriptionMaxLength)
-    homepageDescriptionUI.selectedPreset = 0
-    if homepageDescriptionUI.dropdown then homepageDescriptionUI.dropdown:Refresh() end
-end)
-homepageDescriptionUI.save = CreateFrame("Button", nil, descriptionCard, "UIPanelButtonTemplate")
-homepageDescriptionUI.save:SetSize(100, 24); homepageDescriptionUI.save:SetPoint("TOPLEFT", homepageDescriptionUI.edit, "BOTTOMLEFT", 0, -20)
-homepageDescriptionUI.save:SetText(L.GUILD_DESCRIPTION_SAVE)
-homepageDescriptionUI.save:SetScript("OnClick", function()
-    if iRC:SetGuildHomepageDescription(homepageDescriptionUI.edit:GetText()) then homepageDescriptionUI.edit:ClearFocus() end
-end)
-homepageDescriptionUI.meta = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-homepageDescriptionUI.meta:SetPoint("LEFT", homepageDescriptionUI.save, "RIGHT", 12, 0); homepageDescriptionUI.meta:SetWidth(350); homepageDescriptionUI.meta:SetJustifyH("LEFT")
-local descriptionCardHeight = math.abs(descriptionY) + 96
-descriptionCard:SetHeight(descriptionCardHeight)
-homepageY = homepageY - descriptionCardHeight - 12
+local function fingerprint(draft)
+    local values = { draft.description, draft.icon, draft.tag, draft.classBreakdown.mode,
+        draft.classBreakdown.minLevel, draft.classBreakdown.maxLevel }
+    for _, name in ipairs(draft.contacts) do
+        values[#values + 1] = name
+        values[#values + 1] = draft.contactNotes[iRC:NormalizeName(name)] or ""
+    end
+    return table.concat(values, "\031")
+end
 
-local contactsCard, contactsY = CreateManagementSettingsCard(guildHomepageContent,
-    L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC, homepageY)
-local contactsSyncBadge = CreateSyncBadge(contactsCard, 0)
-contactsSyncBadge:ClearAllPoints()
-contactsSyncBadge:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 15, contactsY - 2)
-local contactsDivider = contactsCard:CreateTexture(nil, "ARTWORK")
-contactsDivider:SetWidth(1)
-contactsDivider:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 72, contactsY + 5)
-contactsDivider:SetPoint("BOTTOMLEFT", contactsCard, "BOTTOMLEFT", 72, 10)
-contactsDivider:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.20)
-local guildContactsLabel = contactsCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-guildContactsLabel:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 86, contactsY)
-guildContactsLabel:SetText(L.GUILD_CONTACTS_LABEL)
-guildContactsEdit = CreateFrame("EditBox", nil, contactsCard, "InputBoxTemplate")
-guildContactsEdit:SetHeight(24)
-guildContactsEdit:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 86, contactsY - 22)
-guildContactsEdit:SetPoint("TOPRIGHT", contactsCard, "TOPRIGHT", -118, contactsY - 22)
-guildContactsEdit:SetAutoFocus(false)
-guildContactsEdit:SetMaxLetters(60)
-guildContactSuggestionFrame = CreateFrame("Frame", nil, contactsCard, "BackdropTemplate")
-guildContactSuggestionFrame:SetHeight(128)
-guildContactSuggestionFrame:SetPoint("TOPLEFT", guildContactsEdit, "BOTTOMLEFT", 0, -2)
-guildContactSuggestionFrame:SetPoint("TOPRIGHT", guildContactsEdit, "BOTTOMRIGHT", 0, -2)
-guildContactSuggestionFrame:SetFrameStrata("DIALOG")
-guildContactSuggestionFrame:SetFrameLevel(contactsCard:GetFrameLevel() + 20)
-guildContactSuggestionFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-guildContactSuggestionFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.98)
-guildContactSuggestionFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.85)
-guildContactSuggestionFrame:Hide()
-guildContactSuggestionButtons = {}
-for index = 1, 5 do
-    local button = CreateFrame("Button", nil, guildContactSuggestionFrame)
-    button:SetHeight(23)
-    button:SetPoint("TOPLEFT", guildContactSuggestionFrame, "TOPLEFT", 7, -6 - (index - 1) * 23)
-    button:SetPoint("RIGHT", guildContactSuggestionFrame, "RIGHT", -7, 0)
-    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    button.text:SetPoint("LEFT", button, "LEFT", 7, 0)
-    button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
-    button.highlight:SetAllPoints()
-    button.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.18)
-    button:SetScript("OnClick", function(self)
-        guildContactsEdit:SetText(iRC:FormatInviteContactName(self.fullName or ""))
-        guildContactsEdit:SetCursorPosition(#guildContactsEdit:GetText())
-        guildContactSuggestionFrame:Hide()
-        guildContactsEdit:SetFocus()
+local function button(parent, label, width, height)
+    local control = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    control:SetSize(width or 130, height or 28)
+    control:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    control:SetBackdropColor(0.045, 0.038, 0.025, 0.98)
+    control:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.65)
+    control.text = control:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    control.text:SetPoint("CENTER")
+    control.text:SetText(label)
+    control.text:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+    control:SetFontString(control.text)
+    control:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    control:HookScript("OnEnable", function(self) self:SetAlpha(1) end)
+    control:HookScript("OnDisable", function(self) self:SetAlpha(0.42) end)
+    return control
+end
+local function closeDropdowns()
+    for _, dropdown in ipairs(editor.dropdowns) do dropdown.menu:Hide() end
+end
+local function dropdown(parent, label, width, getter, setter, options)
+    local control = button(parent, "", width or 240, 30)
+    control.text:ClearAllPoints()
+    control.text:SetPoint("LEFT", 11, 0)
+    control.text:SetPoint("RIGHT", -27, 0)
+    control.text:SetJustifyH("LEFT")
+    control.text:SetWordWrap(false)
+    control.arrow = control:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    control.arrow:SetPoint("RIGHT", -10, 0)
+    control.arrow:SetText("v")
+    control.menu = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    control.menu:SetWidth(width or 240)
+    control.menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    control.menu:SetClampedToScreen(true)
+    control.menu:EnableMouse(true)
+    control.menu:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9 })
+    control.menu:SetBackdropColor(0.025, 0.022, 0.016, 1)
+    control.menu:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.8)
+    control.menu.buttons = {}
+    control.menu:Hide()
+    function control:Refresh()
+        local value = getter()
+        for _, option in ipairs(options()) do
+            if option.value == value then self.text:SetText(option.label); return end
+        end
+        self.text:SetText(label)
+    end
+    control:SetScript("OnClick", function(self)
+        if self.menu:IsShown() then self.menu:Hide(); return end
+        closeDropdowns()
+        local entries, current = options(), getter()
+        for index, entry in ipairs(entries) do
+            local option = entry
+            local item = self.menu.buttons[index]
+            if not item then
+                item = button(self.menu, "", 1, 26)
+                item.text:ClearAllPoints()
+                item.text:SetPoint("LEFT", 10, 0)
+                item.text:SetPoint("RIGHT", -10, 0)
+                item.text:SetJustifyH("LEFT")
+                item.text:SetWordWrap(false)
+                self.menu.buttons[index] = item
+            end
+            item:ClearAllPoints()
+            item:SetPoint("TOPLEFT", self.menu, "TOPLEFT", 5, -5 - (index - 1) * 28)
+            item:SetPoint("TOPRIGHT", self.menu, "TOPRIGHT", -5, -5 - (index - 1) * 28)
+            item:SetText(option.label)
+            item.text:SetTextColor(option.value == current and 0.35 or 1, option.value == current and 1 or 0.82, 0.35)
+            item:SetScript("OnClick", function()
+                if editor.canEdit then setter(option.value) end
+                self:Refresh()
+                self.menu:Hide()
+            end)
+            item:Show()
+        end
+        for index = #entries + 1, #self.menu.buttons do self.menu.buttons[index]:Hide() end
+        self.menu:SetHeight(#entries * 28 + 10)
+        self.menu:ClearAllPoints()
+        if (self:GetBottom() or 0) > self.menu:GetHeight() + 12 then
+            self.menu:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -2)
+        else
+            self.menu:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 0, 2)
+        end
+        self.menu:Show()
+        self.menu:Raise()
     end)
-    guildContactSuggestionButtons[index] = button
+    control:HookScript("OnHide", function(self) self.menu:Hide() end)
+    editor.dropdowns[#editor.dropdowns + 1] = control
+    return control
 end
--- Guild homepage contacts ---------------------------------------------------
 
-local function updateGuildContactSuggestions(text)
-    text = tostring(text or ""):gsub("^%s+", ""):lower()
-    local matches, current = {}, tostring(iRC:GetConnectionRules().guildContacts or "")
-    if text ~= "" and GetNumGuildMembers and GetGuildRosterInfo then
-        for rosterIndex = 1, GetNumGuildMembers(true) do
-            local rosterName = GetGuildRosterInfo(rosterIndex)
-            local displayName = rosterName and iRC:FormatInviteContactName(rosterName)
-            if displayName and not current:find(rosterName, 1, true) and displayName:lower():find(text, 1, true) then
-                matches[#matches + 1] = { fullName = rosterName, displayName = displayName }
+editor.heading = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+editor.heading:SetPoint("TOPLEFT", 16, -12)
+editor.heading:SetText(L.GUILD_CONTACTS_HEADER)
+editor.hint = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+editor.hint:SetPoint("TOPLEFT", 16, -37)
+editor.hint:SetPoint("TOPRIGHT", -16, -37)
+editor.hint:SetJustifyH("LEFT")
+editor.hint:SetText(L.GUILD_HOMEPAGE_DRAFT_HINT)
+editor.save = button(guildHomepageContent, L.GUILD_HOMEPAGE_SAVE, 112)
+editor.save:SetPoint("TOPRIGHT", -16, -61)
+editor.discard = button(guildHomepageContent, L.GUILD_HOMEPAGE_DISCARD, 142)
+editor.discard:SetPoint("RIGHT", editor.save, "LEFT", -8, 0)
+editor.status = guildHomepageContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+editor.status:SetPoint("TOPLEFT", 16, -65)
+editor.status:SetPoint("TOPRIGHT", editor.discard, "TOPLEFT", -12, -3)
+editor.status:SetHeight(32)
+editor.status:SetJustifyH("LEFT")
+editor.status:SetWordWrap(true)
+editor.preview = iRC.MainUI and iRC.MainUI:CreateGuildHomepagePreview(guildHomepageContent)
+if editor.preview then
+    editor.preview:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 12, -106)
+    editor.preview:SetPoint("TOPRIGHT", guildHomepageContent, "TOPRIGHT", -12, -106)
+end
+
+local definitions = {
+    { key = "presentation", label = L.GUILD_HOMEPAGE_TAB_PRESENTATION },
+    { key = "appearance", label = L.GUILD_HOMEPAGE_TAB_APPEARANCE },
+    { key = "contacts", label = L.GUILD_HOMEPAGE_TAB_CONTACTS },
+    { key = "statistics", label = L.GUILD_HOMEPAGE_TAB_STATISTICS },
+}
+for _, definition in ipairs(definitions) do
+    local key = definition.key
+    local panel = CreateFrame("Frame", nil, guildHomepageContent)
+    panel:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 0, 0)
+    panel:SetPoint("TOPRIGHT", guildHomepageContent, "TOPRIGHT", 0, 0)
+    panel:SetHeight(1)
+    panel:Hide()
+    editor.panels[key] = panel
+    local tab = button(guildHomepageContent, definition.label, 120)
+    tab:SetScript("OnClick", function()
+        editor:ClearInputFocus()
+        editor.activeTab = key
+        editor:Layout()
+    end)
+    editor.tabs[key] = tab
+end
+function editor:Layout()
+    local width = math.max(520, guildHomepageContent:GetWidth() or 550)
+    local previewHeight = self.preview and self.preview:GetHeight() or 0
+    local tabY = -118 - previewHeight
+    local tabWidth = (width - 42) / 4
+    for index, definition in ipairs(definitions) do
+        local tab, panel = self.tabs[definition.key], self.panels[definition.key]
+        local active = definition.key == self.activeTab
+        tab:ClearAllPoints()
+        tab:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 12 + (index - 1) * (tabWidth + 6), tabY)
+        tab:SetWidth(tabWidth)
+        tab:SetBackdropColor(active and 0.17 or 0.045, active and 0.09 or 0.038, 0.025, 1)
+        tab:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], active and 1 or 0.35)
+        panel:ClearAllPoints()
+        panel:SetPoint("TOPLEFT", guildHomepageContent, "TOPLEFT", 0, tabY - 42)
+        panel:SetPoint("TOPRIGHT", guildHomepageContent, "TOPRIGHT", 0, tabY - 42)
+        panel:SetShown(active)
+    end
+    if self.LayoutIcons then self:LayoutIcons(width) end
+    guildHomepageContent:SetHeight(math.abs(tabY - 42) + self.panels[self.activeTab]:GetHeight() + 16)
+end
+if editor.preview then editor.preview.onHeightChanged = function() editor:Layout() end end
+guildHomepageContent:HookScript("OnSizeChanged", function() editor:Layout() end)
+
+function editor:IsDirty()
+    return self.baseline and (fingerprint(self.draft) ~= fingerprint(self.baseline)
+        or self.contactInput and cleanText(self.contactInput:GetText()) ~= "") or false
+end
+function editor:UpdateStatus()
+    local dirty = self:IsDirty()
+    local key = self.message or (not self.canEdit and "GUILD_HOMEPAGE_READ_ONLY")
+        or (self.remoteChanged and dirty and "GUILD_HOMEPAGE_EXTERNAL_CHANGED")
+        or (dirty and "GUILD_HOMEPAGE_UNSAVED" or "GUILD_HOMEPAGE_SAVED")
+    self.status:SetText(iRC:Text(key))
+    self.status:SetTextColor(self.message and 1 or (dirty and 1 or 0.6), self.message and 0.4 or (dirty and 0.78 or 0.6), 0.4)
+    self.save:SetEnabled(self.canEdit == true and dirty and not self.saving)
+    self.discard:SetEnabled(dirty and not self.saving)
+end
+function editor:UpdatePreview()
+    if self.previewPending then return end
+    self.previewPending = true
+    local function update()
+        self.previewPending = nil
+        if self.preview and self.guildKey == iRC:GetGuildKey() then self.preview:Refresh(self.draft) end
+        self:Layout()
+    end
+    if C_Timer and C_Timer.After then C_Timer.After(0.1, update) else update() end
+end
+function editor:Changed()
+    if self.refreshing then return end
+    self.message = nil
+    self:UpdateStatus()
+    self:UpdatePreview()
+end
+local function fail(key)
+    editor.message = key
+    editor:UpdateStatus()
+    iRC:Print(iRC.Colors.Red .. iRC:Text(key) .. iRC.Colors.Reset)
+    return false
+end
+
+local presentation = editor.panels.presentation
+local descriptionCard, descriptionY = CreateManagementSettingsCard(presentation, L.GUILD_DESCRIPTION_HEADER, L.GUILD_DESCRIPTION_DESC, 0)
+local presets = {
+    { value = 0, label = L.GUILD_DESCRIPTION_PRESET_CUSTOM },
+    { value = 1, label = L.GUILD_DESCRIPTION_PRESET_RACE, text = L.GUILD_DESCRIPTION_TEXT_RACE },
+    { value = 2, label = L.GUILD_DESCRIPTION_PRESET_SF, text = L.GUILD_DESCRIPTION_TEXT_SF },
+    { value = 3, label = L.GUILD_DESCRIPTION_PRESET_GF, text = L.GUILD_DESCRIPTION_TEXT_GF },
+    { value = 4, label = L.GUILD_DESCRIPTION_PRESET_COMMUNITY, text = L.GUILD_DESCRIPTION_TEXT_COMMUNITY },
+}
+editor.selectedPreset = 0
+editor.preset = dropdown(descriptionCard, L.GUILD_DESCRIPTION_PRESET_LABEL, 285,
+    function() return editor.selectedPreset end,
+    function(value)
+        editor.selectedPreset = value
+        if presets[value + 1].text then editor.description:SetText(presets[value + 1].text) end
+    end, function() return presets end)
+editor.preset:SetPoint("TOPLEFT", 18, descriptionY)
+editor.description = CreateFrame("EditBox", nil, descriptionCard, "BackdropTemplate")
+editor.description:SetPoint("TOPLEFT", 18, descriptionY - 44)
+editor.description:SetPoint("TOPRIGHT", -18, descriptionY - 44)
+editor.description:SetHeight(84)
+editor.description:SetMultiLine(true)
+editor.description:SetAutoFocus(false)
+editor.description:SetFontObject(GameFontHighlight)
+editor.description:SetTextInsets(8, 8, 7, 7)
+editor.description:SetMaxLetters(iRC.GuildHomepageDescriptionMaxLength)
+editor.description:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+editor.description:SetBackdropColor(0.02, 0.018, 0.014, 1)
+editor.description:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.5)
+editor.description:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+editor.counter = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+editor.counter:SetPoint("TOPRIGHT", editor.description, "BOTTOMRIGHT", 0, -5)
+editor.description:SetScript("OnTextChanged", function(self)
+    editor.counter:SetFormattedText("%d / %d", #self:GetText(), iRC.GuildHomepageDescriptionMaxLength)
+    if editor.refreshing then return end
+    editor.draft.description = self:GetText()
+    editor.selectedPreset = 0
+    editor.preset:Refresh()
+    editor:Changed()
+end)
+local tagLabel = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+tagLabel:SetPoint("TOPLEFT", 18, descriptionY - 158)
+tagLabel:SetText(L.GUILD_HOMEPAGE_TAG_LABEL)
+editor.tag = dropdown(descriptionCard, L.GUILD_HOMEPAGE_TAG_LABEL, 220,
+    function() return editor.draft.tag end,
+    function(value) editor.draft.tag = value; editor:Changed() end,
+    function() return {
+        { value = "NORMAL", label = L.GUILD_HOMEPAGE_TAG_NORMAL }, { value = "PVE", label = L.GUILD_HOMEPAGE_TAG_PVE },
+        { value = "PVP", label = L.GUILD_HOMEPAGE_TAG_PVP }, { value = "RP", label = L.GUILD_HOMEPAGE_TAG_RP },
+    } end)
+editor.tag:SetPoint("TOPRIGHT", -18, descriptionY - 151)
+local rulesHint = descriptionCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+rulesHint:SetPoint("TOPLEFT", 18, descriptionY - 194)
+rulesHint:SetPoint("TOPRIGHT", -18, descriptionY - 194)
+rulesHint:SetJustifyH("LEFT")
+rulesHint:SetText(L.GUILD_HOMEPAGE_RULESET_LOCKED)
+descriptionCard:SetHeight(math.abs(descriptionY) + 230)
+presentation:SetHeight(descriptionCard:GetHeight())
+
+local appearance = editor.panels.appearance
+local iconCard, iconY = CreateManagementSettingsCard(appearance, L.GUILD_HOMEPAGE_ICON_HEADER, L.GUILD_HOMEPAGE_ICON_DESC, 0)
+editor.iconButtons = {}
+for index, texture in ipairs(iRC.GuildHomepageIcons) do
+    local iconIndex = index
+    local control = button(iconCard, "", 42, 42)
+    control.icon = control:CreateTexture(nil, "ARTWORK")
+    control.icon:SetSize(32, 32)
+    control.icon:SetPoint("CENTER")
+    control.icon:SetTexture(texture)
+    control:SetScript("OnClick", function()
+        if editor.canChooseIcon then editor.draft.icon = iconIndex; editor:PaintIcons(); editor:Changed() end
+    end)
+    SetSimpleTooltip(control, iRC:Text("GUILD_HOMEPAGE_ICON_NUMBER", index))
+    editor.iconButtons[index] = control
+end
+editor.iconHint = iconCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+editor.iconHint:SetJustifyH("LEFT")
+function editor:LayoutIcons(width)
+    local columns = math.max(1, math.floor((width - 60) / 46))
+    for index, control in ipairs(self.iconButtons) do
+        control:ClearAllPoints()
+        control:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 18 + ((index - 1) % columns) * 46,
+            iconY - math.floor((index - 1) / columns) * 46)
+    end
+    local rows = math.ceil(#self.iconButtons / columns)
+    self.iconHint:ClearAllPoints()
+    self.iconHint:SetPoint("TOPLEFT", iconCard, "TOPLEFT", 18, iconY - rows * 46 - 7)
+    self.iconHint:SetPoint("TOPRIGHT", iconCard, "TOPRIGHT", -18, iconY - rows * 46 - 7)
+    iconCard:SetHeight(math.abs(iconY) + rows * 46 + 48)
+    appearance:SetHeight(iconCard:GetHeight())
+end
+function editor:PaintIcons()
+    for index, control in ipairs(self.iconButtons) do
+        control:SetEnabled(self.canChooseIcon == true)
+        control:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], self.draft.icon == index and 1 or 0.3)
+        control.icon:SetDesaturated(not self.canChooseIcon)
+    end
+    self.iconHint:SetText(self.canChooseIcon and L.GUILD_HOMEPAGE_DRAFT_HINT or L.GUILD_HOMEPAGE_ICON_LOCKED)
+end
+
+local statistics = editor.panels.statistics
+local classCard, classY = CreateManagementSettingsCard(statistics, L.GUILD_HOMEPAGE_CLASSES_HEADER, L.GUILD_HOMEPAGE_STATISTICS_HELP, 0)
+editor.classMode = dropdown(classCard, L.GUILD_HOMEPAGE_CLASSES_MODE, 260,
+    function() return editor.draft.classBreakdown.mode end,
+    function(value) editor.draft.classBreakdown.mode = value; editor:PaintClassRange(); editor:Changed() end,
+    function() return {
+        { value = "ALL", label = L.GUILD_HOMEPAGE_CLASSES_ALL },
+        { value = "RANGE", label = L.GUILD_HOMEPAGE_CLASSES_RANGE },
+        { value = "MAX", label = L.GUILD_HOMEPAGE_CLASSES_MAX },
+    } end)
+editor.classMode:SetPoint("TOPLEFT", 18, classY)
+local function classSlider(label, left, field)
+    local title = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    title:SetPoint("TOPLEFT", left, classY - 48)
+    title:SetText(label)
+    local valueLabel = classCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    valueLabel:SetPoint("LEFT", title, "RIGHT", 8, 0)
+    valueLabel:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
+    local slider = CreateFrame("Slider", nil, classCard, "BackdropTemplate")
+    slider:SetSize(210, 18)
+    slider:SetPoint("TOPLEFT", left, classY - 72)
+    slider:SetOrientation("HORIZONTAL")
+    slider:SetMinMaxValues(1, 60)
+    slider:SetValueStep(1)
+    if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+    slider:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9 })
+    slider:SetBackdropColor(0.02, 0.018, 0.014, 1)
+    slider:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.5)
+    slider:SetThumbTexture("Interface\\Buttons\\WHITE8X8")
+    slider:GetThumbTexture():SetSize(10, 22)
+    slider:GetThumbTexture():SetVertexColor(ORANGE[1], ORANGE[2], ORANGE[3], 1)
+    slider:SetScript("OnValueChanged", function(_, value)
+        value = math.floor(value + 0.5)
+        valueLabel:SetText(tostring(value))
+        if editor.refreshing then return end
+        editor.draft.classBreakdown[field] = value
+        if field == "minLevel" and value > editor.draft.classBreakdown.maxLevel then
+            editor.draft.classBreakdown.maxLevel = value
+        elseif field == "maxLevel" and value < editor.draft.classBreakdown.minLevel then
+            editor.draft.classBreakdown.minLevel = value
+        end
+        editor:PaintClassRange()
+        editor:Changed()
+    end)
+    return slider, title, valueLabel
+end
+editor.classMin, editor.classMinTitle, editor.classMinValue = classSlider(L.GUILD_HOMEPAGE_CLASSES_MIN, 18, "minLevel")
+editor.classMax, editor.classMaxTitle, editor.classMaxValue = classSlider(L.GUILD_HOMEPAGE_CLASSES_MAXIMUM, 274, "maxLevel")
+function editor:PaintClassRange()
+    local wasRefreshing = self.refreshing
+    self.refreshing = true
+    self.classMin:SetValue(self.draft.classBreakdown.minLevel)
+    self.classMax:SetValue(self.draft.classBreakdown.maxLevel)
+    self.refreshing = wasRefreshing
+    local enabled = self.canEdit and self.draft.classBreakdown.mode == "RANGE"
+    self.classMin:SetEnabled(enabled == true)
+    self.classMax:SetEnabled(enabled == true)
+    self.classMin:SetAlpha(enabled and 1 or 0.42)
+    self.classMax:SetAlpha(enabled and 1 or 0.42)
+end
+classCard:SetHeight(math.abs(classY) + 112)
+statistics:SetHeight(classCard:GetHeight())
+
+local contactsPanel = editor.panels.contacts
+local contactsCard, contactsY = CreateManagementSettingsCard(contactsPanel, L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC, 0)
+editor.contactInput = CreateFrame("EditBox", nil, contactsCard, "InputBoxTemplate")
+editor.contactInput:SetHeight(26)
+editor.contactInput:SetPoint("TOPLEFT", 18, contactsY)
+editor.contactInput:SetPoint("TOPRIGHT", -112, contactsY)
+editor.contactInput:SetAutoFocus(false)
+editor.contactInput:SetMaxLetters(80)
+editor.addContact = button(contactsCard, L.GUILD_CONTACTS_ADD, 82)
+editor.addContact:SetPoint("LEFT", editor.contactInput, "RIGHT", 10, 0)
+editor.suggestions = CreateFrame("Frame", nil, contactsCard, "BackdropTemplate")
+editor.suggestions:SetPoint("TOPLEFT", editor.contactInput, "BOTTOMLEFT", 0, -3)
+editor.suggestions:SetPoint("TOPRIGHT", editor.contactInput, "BOTTOMRIGHT", 0, -3)
+editor.suggestions:SetHeight(140)
+editor.suggestions:SetFrameStrata("FULLSCREEN_DIALOG")
+editor.suggestions:SetFrameLevel(contactsCard:GetFrameLevel() + 20)
+editor.suggestions:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9 })
+editor.suggestions:SetBackdropColor(0.02, 0.018, 0.014, 1)
+editor.suggestions:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.7)
+editor.suggestions:Hide()
+editor.suggestionButtons = {}
+for index = 1, 5 do
+    local control = button(editor.suggestions, "", 1, 25)
+    control:SetPoint("TOPLEFT", 5, -5 - (index - 1) * 26)
+    control:SetPoint("TOPRIGHT", -5, -5 - (index - 1) * 26)
+    control.text:ClearAllPoints()
+    control.text:SetPoint("LEFT", 8, 0)
+    control.text:SetJustifyH("LEFT")
+    control:SetScript("OnClick", function(self)
+        editor.contactInput:SetText(iRC:FormatInviteContactName(self.contactName))
+        editor.contactInput:SetCursorPosition(#editor.contactInput:GetText())
+        editor.suggestions:Hide()
+        editor.contactInput:SetFocus()
+    end)
+    editor.suggestionButtons[index] = control
+end
+local function hasContact(name, names)
+    local key = iRC:NormalizeName(name)
+    for _, contact in ipairs(names or editor.draft.contacts) do
+        if iRC:NormalizeName(contact) == key then return true end
+    end
+    return false
+end
+local function contactSuggestions()
+    local query = cleanText(editor.contactInput:GetText()):lower()
+    local matches = {}
+    if editor.canEdit and editor.contactInput:HasFocus() and query ~= "" then
+        for _, member in ipairs(iRC:GetGuildRosterSnapshot()) do
+            local name = member.name
+            if name and not hasContact(name) then
+                local label = iRC:FormatInviteContactName(name)
+                if label:lower():find(query, 1, true) then matches[#matches + 1] = { name = name, label = label } end
             end
         end
         table.sort(matches, function(a, b)
-            if not a then return b ~= nil end
-            if not b then return false end
-            local aName = tostring(a.displayName or ""):lower()
-            local bName = tostring(b.displayName or ""):lower()
-            local aStarts = aName:find(text, 1, true) == 1
-            local bStarts = bName:find(text, 1, true) == 1
+            local aStarts, bStarts = a.label:lower():find(query, 1, true) == 1, b.label:lower():find(query, 1, true) == 1
             if aStarts ~= bStarts then return aStarts end
-            return aName < bName
+            return a.label < b.label
         end)
     end
-    for index, button in ipairs(guildContactSuggestionButtons) do
+    for index, control in ipairs(editor.suggestionButtons) do
         local match = matches[index]
-        button:SetShown(match ~= nil)
-        if match then button.fullName = match.fullName; button.text:SetText(match.displayName) end
+        control:SetShown(match ~= nil)
+        if match then control.contactName = match.name; control:SetText(match.label) end
     end
-    guildContactSuggestionFrame:SetShown(matches[1] ~= nil)
+    editor.suggestions:SetHeight(math.min(5, #matches) * 26 + 10)
+    editor.suggestions:SetShown(matches[1] ~= nil)
 end
-local function addGuildContact()
-    local newName = guildContactsEdit:GetText():gsub("^%s+", ""):gsub("%s+$", "")
-    if newName == "" then return end
-    local current = tostring(iRC:GetConnectionRules().guildContacts or "")
-    for name in current:gmatch("[^,]+") do
-        if iRC:NormalizeName(name:gsub("^%s+", ""):gsub("%s+$", "")) == iRC:NormalizeName(newName) then return end
-    end
-    if iRC:SetGuildContacts(current ~= "" and (current .. ", " .. newName) or newName) then
-        guildContactsEdit:SetText("")
-        guildContactsEdit:ClearFocus()
-        guildContactSuggestionFrame:Hide()
-    end
+local function stageContact()
+    if not editor.canEdit then return false end
+    local input = cleanText(editor.contactInput:GetText())
+    if input == "" then return true end
+    local fullName = iRC:ResolveGuildMemberFullName(input)
+    if not fullName then return fail("GUILD_HOMEPAGE_CONTACT_INVALID") end
+    if hasContact(fullName) then editor.contactInput:SetText(""); return true end
+    local names = {}
+    for _, name in ipairs(editor.draft.contacts) do names[#names + 1] = name end
+    names[#names + 1] = fullName
+    if #names > 5 or #table.concat(names, ", ") > 140 then return fail("GUILD_CONTACTS_TOO_LONG") end
+    editor.draft.contacts = names
+    editor.draft.contactNotes[iRC:NormalizeName(fullName)] = ""
+    editor.contactInput:SetText("")
+    editor.contactInput:ClearFocus()
+    editor.suggestions:Hide()
+    editor:PaintContacts()
+    editor:Changed()
+    return true
 end
-guildContactsEdit:SetScript("OnEnterPressed", addGuildContact)
-guildContactsEdit:SetScript("OnTextChanged", function(self)
-    local value = self:GetText()
-    local display = value:gsub("^%l", string.upper)
-    if display ~= value then
-        local cursor = self:GetCursorPosition()
-        self:SetText(display)
-        self:SetCursorPosition(cursor)
-        return
+editor.addContact:SetScript("OnClick", stageContact)
+editor.contactInput:SetScript("OnEnterPressed", stageContact)
+editor.contactInput:SetScript("OnTextChanged", function() contactSuggestions(); editor:Changed() end)
+editor.contactInput:SetScript("OnEditFocusGained", contactSuggestions)
+editor.contactInput:SetScript("OnEscapePressed", function(self) editor.suggestions:Hide(); self:ClearFocus() end)
+editor.contactInput:SetScript("OnTabPressed", function(self)
+    local first = editor.suggestionButtons[1]
+    if editor.suggestions:IsShown() and first:IsShown() and first.contactName then
+        self:SetText(iRC:FormatInviteContactName(first.contactName)); editor.suggestions:Hide()
     end
-    updateGuildContactSuggestions(value)
 end)
-guildContactsEdit:SetScript("OnEditFocusLost", function(self)
+editor.contactInput:SetScript("OnEditFocusLost", function()
     C_Timer.After(0, function()
-        if not self:HasFocus() and not iRC:IsMouseOverFrame(guildContactSuggestionFrame) then
-            guildContactSuggestionFrame:Hide()
-        end
+        if not iRC:IsMouseOverFrame(editor.suggestions) then editor.suggestions:Hide() end
     end)
 end)
-guildContactsEdit:SetScript("OnTabPressed", function(self)
-    local first = guildContactSuggestionButtons[1]
-    if first and first:IsShown() and first.fullName then
-        self:SetText(iRC:FormatInviteContactName(first.fullName)); self:SetCursorPosition(#self:GetText()); guildContactSuggestionFrame:Hide()
+editor.contactsEmpty = contactsCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+editor.contactsEmpty:SetPoint("TOPLEFT", 18, contactsY - 48)
+editor.contactsEmpty:SetText(L.GUILD_CONTACTS_EMPTY)
+function editor:PaintContacts()
+    for index, name in ipairs(self.draft.contacts) do
+        local row, contactName = self.contactRows[index], name
+        if not row then
+            row = CreateFrame("Frame", nil, contactsCard, "BackdropTemplate")
+            row:SetHeight(72)
+            row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 })
+            row:SetBackdropColor(0.02, 0.018, 0.014, 0.9)
+            row:SetBackdropBorderColor(0.28, 0.23, 0.16, 0.8)
+            row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row.name:SetPoint("TOPLEFT", 10, -10)
+            row.note = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+            row.note:SetAutoFocus(false)
+            row.note:SetMaxLetters(80)
+            row.note:SetHeight(24)
+            row.note:SetPoint("BOTTOMLEFT", 12, 9)
+            row.note:SetPoint("BOTTOMRIGHT", -14, 9)
+            row.remove = button(row, L.GUILD_CONTACTS_REMOVE, 74, 23)
+            row.remove:SetPoint("TOPRIGHT", -9, -6)
+            self.contactRows[index] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 18, contactsY - 46 - (index - 1) * 80)
+        row:SetPoint("TOPRIGHT", contactsCard, "TOPRIGHT", -18, contactsY - 46 - (index - 1) * 80)
+        row.name:SetText(iRC:FormatInviteContactName(contactName))
+        row:EnableMouse(true)
+        local metadata = iRC:GetGuildContactDetails(contactName)
+        local contactDetail = L.GUILD_HOMEPAGE_UNSAVED
+        if metadata and metadata.addedBy then
+            contactDetail = iRC:Text("CONTACT_ADDED_BY", iRC:FormatPlayerName(metadata.addedBy))
+            if metadata.addedAt then
+                contactDetail = contactDetail .. "\n" .. iRC:Text("CONTACT_ADDED_AT", date("%Y-%m-%d %H:%M", metadata.addedAt))
+            end
+        end
+        SetSimpleTooltip(row, iRC:FormatInviteContactName(contactName), contactDetail)
+        row.note:SetEnabled(self.canEdit == true)
+        if self.rebinding or not row.note:HasFocus() then
+            local wasRefreshing = self.refreshing
+            self.refreshing = true
+            row.note:SetText(self.draft.contactNotes[iRC:NormalizeName(contactName)] or "")
+            self.refreshing = wasRefreshing
+        end
+        SetSimpleTooltip(row.note, L.CONTACT_COLUMN_NOTE, L.GUILD_HOMEPAGE_CONTACT_NOTE_HELP)
+        row.note:SetScript("OnTextChanged", function(control)
+            if self.refreshing or not self.canEdit then return end
+            self.draft.contactNotes[iRC:NormalizeName(contactName)] = control:GetText()
+            self:Changed()
+        end)
+        row.note:SetScript("OnEnterPressed", function(control) control:ClearFocus() end)
+        row.note:SetScript("OnEscapePressed", function(control) control:ClearFocus() end)
+        row.remove:SetEnabled(self.canEdit == true)
+        row.remove:SetScript("OnClick", function()
+            if not self.canEdit then return end
+            local kept = {}
+            for _, value in ipairs(self.draft.contacts) do
+                if iRC:NormalizeName(value) ~= iRC:NormalizeName(contactName) then kept[#kept + 1] = value end
+            end
+            self.draft.contacts = kept
+            self:PaintContacts()
+            self:Changed()
+        end)
+        row:Show()
+    end
+    for index = #self.draft.contacts + 1, #self.contactRows do self.contactRows[index]:Hide() end
+    self.contactsEmpty:SetShown(#self.draft.contacts == 0)
+    contactsCard:SetHeight(math.abs(contactsY) + 62 + math.max(1, #self.draft.contacts) * 80)
+    contactsPanel:SetHeight(contactsCard:GetHeight())
+    self:Layout()
+end
+
+function editor:Paint()
+    self.refreshing = true
+    if self.rebinding or not self.description:HasFocus() then self.description:SetText(self.draft.description) end
+    self.description:SetEnabled(self.canEdit == true)
+    self.preset:SetEnabled(self.canEdit == true)
+    self.tag:SetEnabled(self.canEdit == true)
+    self.classMode:SetEnabled(self.canEdit == true)
+    self.contactInput:SetEnabled(self.canEdit == true)
+    self.addContact:SetEnabled(self.canEdit == true and #self.draft.contacts < 5)
+    self.preset:Refresh()
+    self.tag:Refresh()
+    self.classMode:Refresh()
+    self:PaintClassRange()
+    self:PaintIcons()
+    self:PaintContacts()
+    self.refreshing = nil
+    self:UpdateStatus()
+    self:UpdatePreview()
+end
+function editor:ClearInputFocus()
+    self.description:ClearFocus()
+    self.contactInput:ClearFocus()
+    for _, row in ipairs(self.contactRows) do row.note:ClearFocus() end
+    self.suggestions:Hide()
+    closeDropdowns()
+end
+function editor:Refresh(connection, canEdit)
+    local current, guildKey = snapshot(connection), iRC:GetGuildKey()
+    local changedGuild = self.guildKey ~= guildKey
+    if changedGuild or not self.baseline or (not self.saving and not self:IsDirty()) then
+        if changedGuild then self:ClearInputFocus() end
+        self.baseline, self.draft = current, copyDraft(current)
+        self.rebinding = true
+        self.refreshing = true
+        self.contactInput:SetText("")
+        self.refreshing = nil
+        self.remoteChanged, self.message = nil, nil
+    elseif not self.saving then
+        self.remoteChanged = fingerprint(current) ~= fingerprint(self.baseline)
+    end
+    self.guildKey = guildKey
+    self.canEdit = canEdit == true and not iRC:IsLowTrafficMode()
+    if not self.canEdit then self:ClearInputFocus() end
+    local rules = iRC:GetConnectionRules()
+    self.canChooseIcon = self.canEdit and rules.raceLock ~= true and rules.classLock ~= true
+    if rules.raceLock == true or rules.classLock == true then self.draft.icon = current.icon end
+    self:Paint()
+    self.rebinding = nil
+end
+function editor:Discard()
+    self.baseline = nil
+    self:ClearInputFocus()
+    self:Refresh(iRC:GetConnection(), iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("homepage"))
+end
+editor.discard:SetScript("OnClick", function() editor:Discard() end)
+function editor:Save()
+    if self.saving or self.guildKey ~= iRC:GetGuildKey() or not iRC:IsGuildConnectionActive()
+        or not iRC:HasGuildPermission("homepage") or iRC:IsLowTrafficMode() then return false end
+    if not stageContact() then return false end
+    local draft, base, current = copyDraft(self.draft), self.baseline, snapshot(iRC:GetConnection())
+    draft.description = cleanText(draft.description):sub(1, iRC.GuildHomepageDescriptionMaxLength)
+    if draft.description ~= base.description and iRC:ContainsProfanity(draft.description) then return fail("GUILD_DESCRIPTION_PROFANITY") end
+    if draft.tag ~= "NORMAL" and draft.tag ~= "PVE" and draft.tag ~= "PVP" and draft.tag ~= "RP" then return false end
+    local classes = draft.classBreakdown
+    if classes.mode ~= "ALL" and classes.mode ~= "RANGE" and classes.mode ~= "MAX" then return false end
+    classes.minLevel = math.max(1, math.min(60, math.floor(tonumber(classes.minLevel) or 1)))
+    classes.maxLevel = math.max(classes.minLevel, math.min(60, math.floor(tonumber(classes.maxLevel) or 60)))
+    if classes.mode == "ALL" then classes.minLevel, classes.maxLevel = 1, 60
+    elseif classes.mode == "MAX" then classes.minLevel, classes.maxLevel = 60, 60 end
+    local names, seen = {}, {}
+    for _, name in ipairs(draft.contacts) do
+        local fullName = iRC:ResolveGuildMemberFullName(name)
+        if not fullName then return fail("GUILD_HOMEPAGE_CONTACT_INVALID") end
+        local key = iRC:NormalizeName(fullName)
+        if not seen[key] then names[#names + 1] = fullName; seen[key] = true end
+    end
+    if #names > 5 or #table.concat(names, ", ") > 140 then return fail("GUILD_CONTACTS_TOO_LONG") end
+    local contactsChanged = table.concat(draft.contacts, ", ") ~= table.concat(base.contacts, ", ")
+    local publishedContacts = contactsChanged and names or current.contacts
+    for _, name in ipairs(names) do
+        local key = iRC:NormalizeName(name)
+        if (draft.contactNotes[key] or "") ~= (base.contactNotes[key] or "") and not hasContact(name, publishedContacts) then
+            return fail("GUILD_HOMEPAGE_CONTACT_INVALID")
+        end
+    end
+    if self.canChooseIcon and draft.icon ~= base.icon
+        and (draft.icon < 1 or draft.icon > #iRC.GuildHomepageIcons or draft.icon ~= math.floor(draft.icon)) then return false end
+    self.saving = true
+    self:UpdateStatus()
+    local success = true
+    local function apply(changed, setter, ...)
+        if success and changed and setter(iRC, ...) ~= true then success = false end
+    end
+    -- An earlier attempt may have saved some fields before a later setter
+    -- failed. Skip values already present in current state when retrying.
+    apply(draft.description ~= base.description and draft.description ~= current.description,
+        iRC.SetGuildHomepageDescription, draft.description)
+    apply(self.canChooseIcon and draft.icon ~= base.icon and draft.icon ~= current.icon,
+        iRC.SetGuildHomepageIcon, draft.icon)
+    apply(draft.tag ~= base.tag and draft.tag ~= current.tag, iRC.SetGuildHomepageTag, draft.tag)
+    local classesChanged = classes.mode ~= base.classBreakdown.mode or classes.minLevel ~= base.classBreakdown.minLevel
+        or classes.maxLevel ~= base.classBreakdown.maxLevel
+    local classesCurrent = classes.mode == current.classBreakdown.mode and classes.minLevel == current.classBreakdown.minLevel
+        and classes.maxLevel == current.classBreakdown.maxLevel
+    apply(classesChanged and not classesCurrent,
+        iRC.SetGuildHomepageClassBreakdown, classes.mode, classes.minLevel, classes.maxLevel)
+    apply(contactsChanged and table.concat(names, ", ") ~= table.concat(current.contacts, ", "),
+        iRC.SetGuildContacts, table.concat(names, ", "))
+    for _, name in ipairs(names) do
+        local key = iRC:NormalizeName(name)
+        local note = cleanText(draft.contactNotes[key]):sub(1, 80)
+        apply(note ~= (base.contactNotes[key] or "") and note ~= (current.contactNotes[key] or ""),
+            iRC.SetGuildContactNote, name, note)
+    end
+    self.saving = nil
+    if not success then self:Paint(); return fail("GUILD_HOMEPAGE_SAVE_FAILED") end
+    self.baseline = nil
+    self:ClearInputFocus()
+    self:Refresh(iRC:GetConnection(), true)
+    if iRC.RefreshOptionsIfShown then iRC:RefreshOptionsIfShown() end
+    iRC:Print(iRC:Text("GUILD_HOMEPAGE_SAVED_MESSAGE"))
+    return true
+end
+editor.save:SetScript("OnClick", function() editor:Save() end)
+guildHomepageContainer:HookScript("OnHide", function()
+    editor:ClearInputFocus()
+end)
+local outsideClick = CreateFrame("Frame")
+outsideClick:RegisterEvent("GLOBAL_MOUSE_DOWN")
+outsideClick:SetScript("OnEvent", function()
+    for _, control in ipairs(editor.dropdowns) do
+        if control.menu:IsShown() and not iRC:IsMouseOverFrame(control) and not iRC:IsMouseOverFrame(control.menu) then control.menu:Hide() end
     end
 end)
-guildContactsEdit:SetScript("OnEscapePressed", function(self) guildContactSuggestionFrame:Hide(); self:ClearFocus() end)
-SetSimpleTooltip(guildContactsEdit, L.GUILD_CONTACTS_LABEL, L.GUILD_CONTACTS_DESC)
-guildContactsSave = CreateFrame("Button", nil, contactsCard, "UIPanelButtonTemplate")
-guildContactsSave:SetSize(90, 24)
-guildContactsSave:SetPoint("LEFT", guildContactsEdit, "RIGHT", 10, 0)
-guildContactsSave:SetText(L.GUILD_CONTACTS_ADD)
-guildContactsSave:SetScript("OnClick", addGuildContact)
-SetSimpleTooltip(guildContactsSave, L.GUILD_CONTACTS_ADD, L.GUILD_CONTACTS_DESC)
-local contactsListFrame = CreateFrame("Frame", nil, contactsCard, "BackdropTemplate")
-contactsListFrame:SetPoint("TOPLEFT", contactsCard, "TOPLEFT", 86, contactsY - 55)
-contactsListFrame:SetPoint("RIGHT", contactsCard, "RIGHT", -18, 0)
-contactsListFrame:SetHeight(130)
-contactsListFrame:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-contactsListFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.75)
-contactsListFrame:SetBackdropBorderColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.55)
-local contactHeaderName = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderName:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 12, -9); contactHeaderName:SetText(L.CONTACT_COLUMN_NAME)
-local contactHeaderNote = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderNote:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 175, -9); contactHeaderNote:SetText(L.CONTACT_COLUMN_NOTE)
-local contactHeaderAdded = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderAdded:SetPoint("TOPRIGHT", contactsListFrame, "TOPRIGHT", -104, -9); contactHeaderAdded:SetWidth(120); contactHeaderAdded:SetJustifyH("CENTER"); contactHeaderAdded:SetText(L.CONTACT_COLUMN_ADDED_BY)
-local contactHeaderActions = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-contactHeaderActions:SetPoint("TOPRIGHT", contactsListFrame, "TOPRIGHT", -15, -9); contactHeaderActions:SetWidth(75); contactHeaderActions:SetJustifyH("CENTER"); contactHeaderActions:SetText(L.CONTACT_COLUMN_ACTIONS)
-local contactsScroll = CreateFrame("ScrollFrame", nil, contactsListFrame, "UIPanelScrollFrameTemplate")
-iRC:StyleScrollFrame(contactsScroll)
-contactsScroll:SetPoint("TOPLEFT", contactsListFrame, "TOPLEFT", 8, -27)
-contactsScroll:SetPoint("BOTTOMRIGHT", contactsListFrame, "BOTTOMRIGHT", -28, 8)
-guildContactsListContent = CreateFrame("Frame", nil, contactsScroll)
-guildContactsListContent:SetWidth(1)
-guildContactsListContent:SetHeight(1)
-contactsScroll:SetScrollChild(guildContactsListContent)
-contactsListFrame:SetScript("OnSizeChanged", function(_, width)
-    guildContactsListContent:SetWidth(math.max(1, width - 40))
-end)
-guildContactsListEmpty = contactsListFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-guildContactsListEmpty:SetPoint("CENTER", contactsListFrame, "CENTER", 0, 0)
-guildContactsListEmpty:SetText(L.GUILD_CONTACTS_EMPTY)
-local contactsCardHeight = math.abs(contactsY) + 195
-contactsCard:SetHeight(contactsCardHeight)
-homepageY = homepageY - contactsCardHeight - 12
-guildHomepageContent:SetHeight(math.abs(homepageY) + 20)
+editor:Layout()
 end)()
 
 y = -12
@@ -3127,137 +3474,7 @@ local function Refresh()
     refreshingGuildGroupsLevel = false
     local isGuildMaster = connection and iRC:IsGuildMaster()
     local canEditHomepage = guildActive and iRC:HasGuildPermission("homepage")
-    if homepageDescriptionUI.preview then homepageDescriptionUI.preview:Refresh() end
-    homepageDescriptionUI.guildTag:Refresh()
-    if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.guildTag)
-    else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.guildTag) end
-    homepageDescriptionUI.refreshClassBreakdownControls(true)
-    local classRangeMode = homepageDescriptionUI.classBreakdownDraft.mode == "RANGE"
-    if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.classBreakdownMode)
-    else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.classBreakdownMode) end
-    homepageDescriptionUI.classBreakdownMin:SetEnabled(canEditHomepage == true and classRangeMode == true)
-    homepageDescriptionUI.classBreakdownMax:SetEnabled(canEditHomepage == true and classRangeMode == true)
-    homepageDescriptionUI.classBreakdownApply:SetEnabled(canEditHomepage and true or false)
-    homepageDescriptionUI.edit:SetEnabled(canEditHomepage and true or false)
-    homepageDescriptionUI.save:SetEnabled(canEditHomepage and true or false)
-    if canEditHomepage then UIDropDownMenu_EnableDropDown(homepageDescriptionUI.dropdown) else UIDropDownMenu_DisableDropDown(homepageDescriptionUI.dropdown) end
-    local homepageData = connection and connection.guildHomepageDescription or { text = "", timestamp = 0, editedBy = "" }
-    local homepageIcon = connection and connection.guildHomepageIcon or { icon = 0 }
-    local customIconEnabled = canEditHomepage and iRC:GetConnectionRules().raceLock == false
-        and iRC:GetConnectionRules().classLock ~= true
-    for index, button in ipairs(homepageDescriptionUI.iconButtons) do
-        button:SetEnabled(customIconEnabled and true or false)
-        local selected = tonumber(homepageIcon.icon) == index
-        button:SetBackdropBorderColor(selected and 1 or 0.35, selected and 0.65 or 0.30, selected and 0 or 0.25, selected and 1 or 0.8)
-        button.icon:SetDesaturated(not customIconEnabled)
-        button.icon:SetAlpha(customIconEnabled and 1 or 0.45)
-    end
-    if not homepageDescriptionUI.edit:HasFocus() then homepageDescriptionUI.edit:SetText(homepageData.text or "") end
-    homepageDescriptionUI.counter:SetFormattedText("%d / %d", #homepageDescriptionUI.edit:GetText(), iRC.GuildHomepageDescriptionMaxLength)
-    if (tonumber(homepageData.timestamp) or 0) > 0 then
-        homepageDescriptionUI.meta:SetText(iRC:Text("GUILD_DESCRIPTION_META", iRC:FormatPlayerName(homepageData.editedBy), date("%Y-%m-%d %H:%M", homepageData.timestamp)))
-    else
-        homepageDescriptionUI.meta:SetText(L.GUILD_DESCRIPTION_NEVER_SAVED)
-    end
-    guildContactsEdit:SetEnabled(canEditHomepage and true or false)
-    guildContactsSave:SetEnabled(canEditHomepage and true or false)
-    local contactNames = {}
-    for name in tostring(iRC:GetConnectionRules().guildContacts or ""):gmatch("[^,]+") do
-        name = name:gsub("^%s+", ""):gsub("%s+$", "")
-        if name ~= "" then contactNames[#contactNames + 1] = name end
-    end
-    for index, name in ipairs(contactNames) do
-        local rowName = name
-        local row = guildContactRows[index]
-        if not row then
-            row = CreateFrame("Frame", nil, guildContactsListContent, "BackdropTemplate")
-            row:SetHeight(27)
-            row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
-            row:SetBackdropColor(0.10, 0.08, 0.05, index % 2 == 0 and 0.55 or 0.35)
-            row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            row.name:SetPoint("LEFT", row, "LEFT", 8, 0)
-            row.name:SetWidth(155)
-            row.name:SetJustifyH("LEFT")
-            row.noteHit = CreateFrame("Button", nil, row)
-            row.noteHit:SetHeight(27)
-            row.noteHit:SetPoint("LEFT", row, "LEFT", 165, 0)
-            row.noteHit:SetPoint("RIGHT", row, "RIGHT", -230, 0)
-            row.noteText = row.noteHit:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.noteText:SetAllPoints(); row.noteText:SetJustifyH("LEFT")
-            row.note = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-            row.note:SetHeight(22); row.note:SetPoint("LEFT", row, "LEFT", 165, 0); row.note:SetPoint("RIGHT", row, "RIGHT", -230, 0)
-            row.note:SetAutoFocus(false); row.note:SetMaxLetters(80)
-            row.author = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            row.author:SetPoint("RIGHT", row, "RIGHT", -76, 0); row.author:SetWidth(145); row.author:SetJustifyH("CENTER")
-            row.remove = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            row.remove:SetSize(60, 22)
-            row.remove:SetPoint("RIGHT", row, "RIGHT", -4, 0)
-            row.remove:SetText(L.GUILD_CONTACTS_REMOVE)
-            row.highlight = row:CreateTexture(nil, "BACKGROUND")
-            row.highlight:SetAllPoints()
-            row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.10)
-            row.highlight:Hide()
-            guildContactRows[index] = row
-        end
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", guildContactsListContent, "TOPLEFT", 0, -(index - 1) * 29)
-        row:SetPoint("TOPRIGHT", guildContactsListContent, "TOPRIGHT", -5, -(index - 1) * 29)
-        row.name:SetText(iRC:FormatInviteContactName(rowName))
-        local detail = iRC:GetGuildContactDetails(rowName) or {}
-        local note = detail.note or ""
-        row.noteText:SetText(note ~= "" and (#note > 18 and note:sub(1, 15) .. "..." or note) or iRC:Text("CONTACT_NO_NOTE"))
-        row.author:SetText(iRC:FormatInviteContactName(detail.addedBy or "Unknown"))
-        local function showContactTooltip(owner)
-            row.highlight:Show()
-            local metadata = iRC:GetGuildContactDetails(rowName) or {}
-            GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-            GameTooltip:SetText(iRC:FormatInviteContactName(rowName), 1, 0.82, 0)
-            GameTooltip:AddLine(iRC:Text("CONTACT_ADDED_BY", iRC:FormatPlayerName(metadata.addedBy or "Unknown")), 1, 1, 1)
-            GameTooltip:AddLine(iRC:Text("CONTACT_ADDED_AT", metadata.addedAt and date("%Y-%m-%d %H:%M", metadata.addedAt) or "Unknown"), 1, 1, 1)
-            GameTooltip:AddLine(iRC:Text("CONTACT_NOTE_TOOLTIP", metadata.note and metadata.note ~= "" and metadata.note or iRC:Text("CONTACT_NO_NOTE")), 1, 1, 1, true)
-            GameTooltip:Show()
-        end
-        local function hideContactTooltip()
-            row.highlight:Hide()
-            GameTooltip:Hide()
-        end
-        row:SetScript("OnEnter", showContactTooltip)
-        row:SetScript("OnLeave", hideContactTooltip)
-        row.noteHit:SetScript("OnEnter", showContactTooltip)
-        row.noteHit:SetScript("OnLeave", hideContactTooltip)
-        row.note:SetScript("OnEnter", showContactTooltip)
-        row.note:SetScript("OnLeave", hideContactTooltip)
-        row.note:SetText(note); row.note:Hide(); row.noteHit:Show()
-        row.noteHit:SetEnabled(canEditHomepage and true or false)
-        row.noteHit:SetScript("OnClick", function()
-            row.noteOriginal = (iRC:GetGuildContactDetails(rowName) or {}).note or ""
-            row.note:SetText(row.noteOriginal); row.noteHit:Hide(); row.note:Show(); row.note:SetFocus()
-        end)
-        row.note:SetScript("OnEnterPressed", function(self)
-            if iRC:SetGuildContactNote(rowName, self:GetText()) then row.noteSaved = true end
-            self:ClearFocus()
-        end)
-        row.note:SetScript("OnEscapePressed", function(self)
-            row.noteCancelled = true; self:SetText(row.noteOriginal or note); self:ClearFocus()
-        end)
-        row.note:SetScript("OnEditFocusLost", function(self)
-            if row.noteCancelled then row.noteCancelled = nil
-            elseif not row.noteSaved then iRC:SetGuildContactNote(rowName, self:GetText()) end
-            row.noteSaved = nil; self:Hide(); row.noteHit:Show()
-        end)
-        row.remove:SetEnabled(canEditHomepage and true or false)
-        row.remove:SetScript("OnClick", function()
-            local kept = {}
-            for _, currentName in ipairs(contactNames) do
-                if currentName ~= rowName then kept[#kept + 1] = currentName end
-            end
-            iRC:SetGuildContacts(table.concat(kept, ", "))
-        end)
-        row:Show()
-    end
-    for index = #contactNames + 1, #guildContactRows do guildContactRows[index]:Hide() end
-    guildContactsListEmpty:SetShown(#contactNames == 0)
-    guildContactsListContent:SetHeight(math.max(1, #contactNames * 29))
+    homepageDescriptionUI:Refresh(connection, canEditHomepage)
     broadcastButton:SetEnabled(guildActive and true or false)
     guildActivationCheck:SetEnabled(isGuildMaster and true or false)
     local raceLockEnabled = guildActive and iRC:GetConnectionRules().raceLock == true
@@ -3390,6 +3607,9 @@ local function RestorePanelScrollAfterLayout(panel, position)
 end
 
 iRC.RefreshOptionsIfShown = function()
+    -- Homepage Save invokes several existing setters. Refresh once after the
+    -- batch rather than rebuilding every settings page between those setters.
+    if homepageDescriptionUI.saving then return end
     if settingsFrame:IsShown() then
         local panel = tabContents[selectedTab]
         local scrollFrame = GetPanelScrollFrame(panel)

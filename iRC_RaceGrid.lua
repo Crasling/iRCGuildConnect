@@ -2,7 +2,7 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
--- Public guild leaderboard, cache exchange, admin probe, and layer routing
+-- Public guild directory, cache exchange, admin probe, and layer routing
 --
 -- These data families share the hidden iRCComms channel but use independent
 -- prefixes and wire versions. Updating one route therefore does not force an
@@ -397,6 +397,12 @@ local adminPresence = {
     requestId = nil, requestIds = {},
 }
 local adminProbeBySender = {}
+local channelMemberKeys, channelMemberKeysAt = {}, -math.huge
+
+local function invalidateChannelRoster()
+    adminPresence.displayIndex = nil
+    channelMemberKeys, channelMemberKeysAt = {}, -math.huge
+end
 
 local function rememberAdminRequestId(requestId)
     local now = GetTime and GetTime() or 0
@@ -443,13 +449,23 @@ local function getAdminRosterAPI()
     return GetChannelRosterInfo
 end
 
+local function isIrcChannelDisplayIndex(index)
+    if type(GetChannelDisplayInfo) ~= "function" or iRC:IsSecretValue(index)
+        or type(index) ~= "number" or index < 1 or index ~= math.floor(index) then return false end
+    local ok, displayName = pcall(GetChannelDisplayInfo, index)
+    return ok and not iRC:IsSecretValue(displayName) and type(displayName) == "string"
+        and displayName:lower() == CHANNEL_NAME:lower()
+end
+
 local function findAdminChannelDisplayIndex()
-    if adminPresence.displayIndex then return adminPresence.displayIndex end
-    if not GetChannelDisplayInfo then return nil end
+    if not getChannelId() then invalidateChannelRoster(); return nil end
+    if isIrcChannelDisplayIndex(adminPresence.displayIndex) then return adminPresence.displayIndex end
+    -- Display indexes move when channels are joined, left, or reordered.
+    -- Never reuse members from the channel that inherited an old index.
+    invalidateChannelRoster()
+    if type(GetChannelDisplayInfo) ~= "function" then return nil end
     for index = 1, 50 do
-        local ok, displayName = pcall(GetChannelDisplayInfo, index)
-        if ok and not iRC:IsSecretValue(displayName) and type(displayName) == "string"
-            and displayName:lower() == CHANNEL_NAME:lower() then
+        if isIrcChannelDisplayIndex(index) then
             adminPresence.displayIndex = index
             return index
         end
@@ -460,16 +476,12 @@ local function refreshAdminChannelRoster(displayIndex, rosterCount)
     if not iRC:IsTestAdmin() then return false end
     if iRC:IsSecretValue(displayIndex) or iRC:IsSecretValue(rosterCount) then return false end
     local getRosterInfo = getAdminRosterAPI()
-    if not getRosterInfo then return false end
+    if not getRosterInfo or not getChannelId() then return false end
     displayIndex = tonumber(displayIndex) or findAdminChannelDisplayIndex()
     if not displayIndex then return false end
-    local displayName
-    if GetChannelDisplayInfo then
-        local ok, value = pcall(GetChannelDisplayInfo, displayIndex)
-        if ok then displayName = value end
-        if iRC:IsSecretValue(displayName) then return false end
-        if type(displayName) == "string" and displayName ~= ""
-            and displayName:lower() ~= CHANNEL_NAME:lower() then return false end
+    if not isIrcChannelDisplayIndex(displayIndex) then
+        if displayIndex == adminPresence.displayIndex then invalidateChannelRoster() end
+        return false
     end
     adminPresence.displayIndex = displayIndex
     local count = math.max(0, math.floor(tonumber(rosterCount) or 0))
@@ -554,7 +566,7 @@ function RaceGrid:RequestAdminOnlineUsers()
     adminPresence.requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
     rememberAdminRequestId(adminPresence.requestId)
     adminPresence.users = {}
-    adminPresence.displayIndex = nil
+    invalidateChannelRoster()
     if ListChannelByName then
         pcall(ListChannelByName, CHANNEL_NAME)
     elseif SlashCmdList and SlashCmdList.CHATLIST then
@@ -629,7 +641,7 @@ function RaceGrid:IsEnabled()
 end
 
 function RaceGrid:IsLayerChannelReady()
-    return getChannelId() ~= nil
+    return iRC.GetGuildKey and iRC:GetGuildKey() ~= nil or getChannelId() ~= nil
 end
 
 local function getChannelMemberNames()
@@ -652,8 +664,8 @@ local function getChannelMemberNames()
     return names
 end
 
-local channelMemberKeys, channelMemberKeysAt = {}, -math.huge
 function RaceGrid:IsKnownChannelMember(name)
+    if not findAdminChannelDisplayIndex() then return false end
     local now = GetTime and GetTime() or 0
     if now - channelMemberKeysAt >= 5 then
         local refreshed = {}
@@ -661,6 +673,73 @@ function RaceGrid:IsKnownChannelMember(name)
         channelMemberKeys, channelMemberKeysAt = refreshed, now
     end
     return channelMemberKeys[fullNameKey(name)] == true
+end
+
+local LAYER_PEER_LIMIT = 3
+local LAYER_PEER_LIFETIME = 300
+local layerPeers, layerLookupAt = {}, {}
+local layerLookupCursor = 0
+
+local function availableLayerPeer(name)
+    return not iRC.IsAddonWhisperTargetUnavailable or not iRC:IsAddonWhisperTargetUnavailable(name)
+end
+
+local function rememberLayerPeer(parts, sender)
+    local zoneUID, serverId, mapId = tonumber(parts[3]), tonumber(parts[4]), tonumber(parts[6])
+    if not zoneUID or zoneUID <= 0 or not serverId or serverId < 0 or not mapId or mapId <= 0 then return end
+    local now, key = GetTime(), fullNameKey(sender)
+    if key == "" then return end
+    local count, oldestKey, oldestAt = 0, nil, math.huge
+    for peerKey, peer in pairs(layerPeers) do
+        if now - peer.seenAt > LAYER_PEER_LIFETIME then layerPeers[peerKey] = nil
+        else
+            count = count + 1
+            if peer.seenAt < oldestAt then oldestKey, oldestAt = peerKey, peer.seenAt end
+        end
+    end
+    if not layerPeers[key] and count >= 128 and oldestKey then layerPeers[oldestKey] = nil end
+    local peer = layerPeers[key] or {}
+    peer.name, peer.serverId, peer.mapId, peer.seenAt = sender, serverId, mapId, now
+    layerPeers[key] = peer
+    return peer
+end
+
+local function layerPeerTargets(serverId, mapId, bootstrap)
+    local now, targets, used, peers = GetTime(), {}, {}, {}
+    for key, peer in pairs(layerPeers) do
+        if now - peer.seenAt > LAYER_PEER_LIFETIME then layerPeers[key] = nil
+        elseif peer.mapId == mapId and (not serverId or peer.serverId == serverId)
+            and availableLayerPeer(peer.name) and not isOwnGuildSender(peer.name)
+            and RaceGrid:IsKnownChannelMember(peer.name) then peers[#peers + 1] = peer end
+    end
+    table.sort(peers, function(a, b)
+        if a.seenAt ~= b.seenAt then return a.seenAt > b.seenAt end
+        return fullNameKey(a.name) < fullNameKey(b.name)
+    end)
+    for index = 1, math.min(LAYER_PEER_LIMIT, #peers) do
+        targets[#targets + 1], used[fullNameKey(peers[index].name)] = peers[index].name, true
+    end
+    -- An unknown layer may need a few discovery probes. Routine heartbeats
+    -- only use peers that actually sent recent layer data in this zone.
+    if bootstrap and #targets < LAYER_PEER_LIMIT then
+        local roster = getChannelMemberNames()
+        if #roster > 0 then
+            for step = 1, #roster do
+                local name = roster[(layerLookupCursor + step - 1) % #roster + 1]
+                local key = fullNameKey(name)
+                if not used[key] and availableLayerPeer(name) then
+                    targets[#targets + 1], used[key] = name, true
+                    if #targets == LAYER_PEER_LIMIT then break end
+                end
+            end
+            layerLookupCursor = (layerLookupCursor + LAYER_PEER_LIMIT) % #roster
+        end
+    end
+    return targets
+end
+
+local function sendGuildLayer(payload)
+    return iRC.GetGuildKey and iRC:GetGuildKey() ~= nil and send(LAYER_PREFIX, payload, "GUILD") == true
 end
 
 function RaceGrid:BroadcastLayerState(layer)
@@ -674,22 +753,19 @@ function RaceGrid:BroadcastLayerState(layer)
     if zoneUID <= 0 or serverId < 0 or instanceId < 0 or mapId <= 0 then return false end
     if layerSwapId ~= tostring(serverId) .. "-" .. tostring(zoneUID) then return false end
     self:EnsureChannel()
-    if not getChannelId() then return false end
 
-    -- Public CHANNEL chat is protected on Forever and may only be sent from a
-    -- hardware event. Layer observations are automatic, so use the hidden
-    -- iRCComms channel roster for discovery and addon whispers for transport.
-    -- Each observed raw ID is enough for peers to build the same sorted map;
-    -- omitting the full registry also keeps the addon payload below 255 bytes.
+    -- Guild members receive one shared raw identity. Cross-guild heartbeats
+    -- go only to a few recent same-zone peers, never the whole channel roster.
     local payload = table.concat({
         "LAYER_STATE", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId), tostring(instanceId),
         tostring(mapId), tostring(number), "", layerSwapId,
     }, SEP)
-    local sent
-    for _, name in ipairs(getChannelMemberNames()) do
-        if send(LAYER_PREFIX, payload, "WHISPER", name) then sent = true end
+    local guildSent, whispers = sendGuildLayer(payload), 0
+    for _, name in ipairs(layerPeerTargets(serverId, mapId, false)) do
+        if send(LAYER_PREFIX, payload, "WHISPER", name) then whispers = whispers + 1 end
     end
-    return sent == true
+    iRC:DebugMsg("Layer state shared: guild=" .. tostring(guildSent) .. ", peer whispers=" .. tostring(whispers) .. ".", 3)
+    return guildSent or whispers > 0
 end
 
 function RaceGrid:RequestLayerAssignment(layer)
@@ -703,24 +779,31 @@ function RaceGrid:RequestLayerAssignment(layer)
         or routeId ~= tostring(serverId) .. "-" .. tostring(zoneUID) then return false end
     self:EnsureChannel()
     if not getChannelId() then return false end
+    local now = GetTime()
+    local lookupKey = routeId .. ":" .. tostring(mapId)
+    for key, at in pairs(layerLookupAt) do if now - at >= 30 then layerLookupAt[key] = nil end end
+    if layerLookupAt[lookupKey] then return false end
+    layerLookupAt[lookupKey] = now
     local payload = table.concat({ "LAYER_REQUEST", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
         tostring(instanceId), tostring(mapId), routeId }, SEP)
-    local sent
-    for _, name in ipairs(getChannelMemberNames()) do
-        if send(LAYER_PREFIX, payload, "WHISPER", name) then sent = true end
+    local whispers = 0
+    for _, name in ipairs(layerPeerTargets(serverId, mapId, true)) do
+        if send(LAYER_PREFIX, payload, "WHISPER", name) then whispers = whispers + 1 end
     end
-    return sent == true
+    iRC:DebugMsg("Layer lookup " .. routeId .. ": " .. tostring(whispers) .. " peer whispers (limit 3).", 3)
+    return whispers > 0
 end
 
 function RaceGrid:BroadcastLayerTransition(mapId)
     mapId = math.floor(tonumber(mapId) or 0)
-    if mapId <= 0 or iRC:GetSettings().showLayerPanel == false or not self:IsLayerChannelReady() then return false end
+    if mapId <= 0 or iRC:GetSettings().showLayerPanel == false then return false end
     local payload = table.concat({ "LAYER_TRANSITION", LAYER_WIRE_VERSION, tostring(mapId) }, SEP)
-    local sent
-    for _, name in ipairs(getChannelMemberNames()) do
-        if send(LAYER_PREFIX, payload, "WHISPER", name) then sent = true end
+    local guildSent, whispers = sendGuildLayer(payload), 0
+    for _, name in ipairs(layerPeerTargets(nil, mapId, false)) do
+        if send(LAYER_PREFIX, payload, "WHISPER", name) then whispers = whispers + 1 end
     end
-    return sent == true
+    iRC:DebugMsg("Layer transition shared: guild=" .. tostring(guildSent) .. ", peer whispers=" .. tostring(whispers) .. ".", 3)
+    return guildSent or whispers > 0
 end
 
 function RaceGrid:EnsureChannel()
@@ -733,6 +816,7 @@ function RaceGrid:EnsureChannel()
         return
     end
     if JoinChannelByName then
+        invalidateChannelRoster()
         iRC:DebugMsg(iRC:Text("RACEGRID_OWN_CHANNEL_JOIN"), 3)
         JoinChannelByName(CHANNEL_NAME)
     end
@@ -762,6 +846,7 @@ function RaceGrid:ScheduleChannelJoin(delay)
 end
 
 function RaceGrid:Disable()
+    invalidateChannelRoster()
     if LeaveChannelByName and getChannelId() then LeaveChannelByName(CHANNEL_NAME) end
 end
 
@@ -1697,7 +1782,7 @@ function RaceGrid:RequestGuildCache()
     cleanCacheState()
     for _, request in pairs(cacheRequests) do
         if type(request) == "table" and not request.complete then
-            iRC:DebugMsg("Cached Guild Leaderboard request skipped because another request is still active.", 3)
+            iRC:DebugMsg("Cached Guild List request skipped because another request is still active.", 3)
             return false
         end
     end
@@ -1789,7 +1874,7 @@ local function handleCacheMessage(parts, sender, distribution)
         end
         local now = GetTime()
         if snapshot.servedAt and now - snapshot.servedAt <= CACHE_TRANSFER_TIMEOUT then
-            iRC:DebugMsg("Duplicate cached Guild Leaderboard transfer request ignored for "
+            iRC:DebugMsg("Duplicate cached Guild List transfer request ignored for "
                 .. guildName .. " from " .. iRC:FormatPlayerName(sender) .. ".", 3)
             return true
         end
@@ -1857,14 +1942,16 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     if not PREFIX_SCOPES[prefix] or not RaceGrid:IsEnabled() then return end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
     if not validatePacketProtocol(prefix, message, sender, distribution) then return end
-    if (distribution == "CHANNEL" or distribution == "WHISPER")
+    if (distribution == "CHANNEL" or distribution == "WHISPER" or distribution == "GUILD")
         and message:match("^LAYER_") then
-        local trusted = distribution == "CHANNEL" or isOwnGuildSender(sender) or RaceGrid:IsKnownChannelMember(sender)
+        local ownGuild = isOwnGuildSender(sender)
+        local trusted = distribution == "GUILD" and ownGuild
+            or distribution ~= "GUILD" and (distribution == "CHANNEL" or ownGuild or RaceGrid:IsKnownChannelMember(sender))
         if not trusted or not iRC.GuildMap then return end
         local layerParts = split(message)
         if tostring(layerParts[2] or "") ~= LAYER_WIRE_VERSION then return end
         if layerParts[1] == "LAYER_STATE" then
-            iRC.GuildMap:ReceiveLayerState(layerParts, sender)
+            if iRC.GuildMap:ReceiveLayerState(layerParts, sender) then rememberLayerPeer(layerParts, sender) end
         elseif layerParts[1] == "LAYER_REQUEST" and distribution == "WHISPER" then
             local zoneUID, serverId = tonumber(layerParts[3]), tonumber(layerParts[4])
             local instanceId, mapId = tonumber(layerParts[5]), tonumber(layerParts[6])
@@ -1873,14 +1960,16 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                 and serverId and serverId >= 0 and instanceId and instanceId >= 0 and mapId and mapId > 0
                 and routeId == tostring(serverId) .. "-" .. tostring(zoneUID) then
                 local number = iRC.GuildMap:GetAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
-                if number then
+                local peer = rememberLayerPeer(layerParts, sender)
+                if number and peer and (not peer.lastReplyAt or GetTime() - peer.lastReplyAt >= 10) then
+                    peer.lastReplyAt = GetTime()
                     send(LAYER_PREFIX, table.concat({ "LAYER_ASSIGN", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
                         tostring(instanceId), tostring(mapId), tostring(number), routeId }, SEP), "WHISPER", sender)
                 end
             end
         elseif layerParts[1] == "LAYER_ASSIGN" and distribution == "WHISPER" then
-            iRC.GuildMap:ReceiveLayerAssignment(layerParts, sender)
-        elseif layerParts[1] == "LAYER_TRANSITION" and distribution == "WHISPER" then
+            if iRC.GuildMap:ReceiveLayerAssignment(layerParts, sender) then rememberLayerPeer(layerParts, sender) end
+        elseif layerParts[1] == "LAYER_TRANSITION" and (distribution == "WHISPER" or distribution == "GUILD") then
             iRC.GuildMap:ReceiveLayerTransition(layerParts, sender)
         end
         return
@@ -2088,17 +2177,25 @@ function iRC:GetGlobalRaceOverview()
     return result
 end
 
-local function guildRank(a, b)
-    if (a.activeLevel60 or -1) ~= (b.activeLevel60 or -1) then
-        return (a.activeLevel60 or -1) > (b.activeLevel60 or -1)
+local DIRECTORY_SORT_FIELDS = {
+    ACTIVITY = { "activeMembers", "activePlayers" },
+    MEMBERS = { "members" },
+    NAME = {},
+}
+
+local function guildDirectoryOrder(a, b, sortKey)
+    -- Sort the directory by the selected information, never by a guild score.
+    -- Max-level counts remain report statistics and do not affect ordering.
+    for _, field in ipairs(DIRECTORY_SORT_FIELDS[sortKey]) do
+        -- Older reports can lack activity fields; unknown follows known zero.
+        local first, second = tonumber(a[field]) or -1, tonumber(b[field]) or -1
+        if first ~= second then return first > second end
     end
-    if (a.activeMembers or -1) ~= (b.activeMembers or -1) then return (a.activeMembers or -1) > (b.activeMembers or -1) end
-    if (a.activePlayers or 0) ~= (b.activePlayers or 0) then return (a.activePlayers or 0) > (b.activePlayers or 0) end
-    if (a.members or 0) ~= (b.members or 0) then return (a.members or 0) > (b.members or 0) end
     return normalizeGuildName(a.guildName) < normalizeGuildName(b.guildName)
 end
 
-function iRC:GetRaceGridOverview()
+function iRC:GetGuildDirectoryOverview(sortKey)
+    if sortKey ~= "MEMBERS" and sortKey ~= "NAME" then sortKey = "ACTIVITY" end
     local groups = {}
     if RaceGrid:IsEnabled() then
         for _, report in ipairs(self:GetGlobalRaceOverview()) do groups[normalizeGuildName(report.guildName)] = report end
@@ -2117,9 +2214,15 @@ function iRC:GetRaceGridOverview()
         end
         result[#result + 1] = group
     end
-    table.sort(result, guildRank)
+    table.sort(result, function(a, b) return guildDirectoryOrder(a, b, sortKey) end)
     self:DebugMsg(self:Text("RACEGRID_SUMMARY", #result), 3)
     return result, "irc_guilds"
+end
+
+-- Existing callers can continue using the previous overview entry point.
+-- Both names expose the same directory without competitive placements.
+function iRC:GetRaceGridOverview(sortKey)
+    return self:GetGuildDirectoryOverview(sortKey)
 end
 
 local frame = CreateFrame("Frame")
@@ -2149,6 +2252,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             LAYER_PREFIX, LAYER_WIRE_VERSION, tostring(layerReady == true),
             ADMIN_PREFIX, ADMIN_WIRE_VERSION, tostring(adminReady == true)), 3)
     elseif event == "PLAYER_LOGIN" then
+        invalidateChannelRoster()
         channelJoinStartedAt = GetTime and GetTime() or 0
         if getChannelId() and LeaveChannelByName then
             -- WoW may remember and autojoin a custom channel before addons run.
@@ -2172,6 +2276,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             RaceGrid:BroadcastReport()
         end) end
     elseif event == "CHANNEL_UI_UPDATE" then
+        invalidateChannelRoster()
         if getChannelId() then
             if not channelJoinReady and LeaveChannelByName then
                 LeaveChannelByName(CHANNEL_NAME)
@@ -2184,7 +2289,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "CHANNEL_ROSTER_UPDATE" then
         local displayIndex, rosterCount = ...
-        channelMemberKeysAt = -math.huge
+        invalidateChannelRoster()
         if adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10 then
             refreshAdminChannelRoster(displayIndex, rosterCount)
         end

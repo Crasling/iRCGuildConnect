@@ -669,9 +669,11 @@ local function finalizeLocalLayerAssignment(token)
         mapId = candidate.mapId,
         source = candidate.source,
         seenAt = candidate.seenAt,
+        provisional = (candidate.replyCount or 0) == 0,
     }
     iRC:DebugMsg("Local layer assigned after iRCComms lookup: route=" .. tostring(candidate.layerSwapId)
-        .. ", layer=" .. tostring(number) .. ", replies=" .. tostring(candidate.replyCount or 0), 3)
+        .. ", layer=" .. tostring(number) .. ", replies=" .. tostring(candidate.replyCount or 0)
+        .. (localLayer.provisional and "; using a local estimate." or "."), 3)
     GuildMap:UpdateLocalLayerDisplay()
     GuildMap:BroadcastLocalLayer(true)
     return true

@@ -325,6 +325,8 @@ end
 local function replaceableTrafficLifetime(kind)
     if kind == "MAP_POS" then return 10 end
     if kind == "LAYER_STATE" then return 20 end
+    if kind == "LAYER_REQUEST" or kind == "LAYER_ASSIGN" then return 5 end
+    if kind == "LAYER_TRANSITION" or kind == "ICON_REQ" then return 15 end
     if kind == "HELLO" then return 30 end
 end
 
@@ -393,10 +395,83 @@ local function chatMessagingLocked()
     return locked == true
 end
 
+local WHISPER_OFFLINE_COOLDOWN = 300
+local whisperTargets, whisperTargetCount = {}, 0
+
+local function whisperTargetKey(target)
+    if iRC:IsSecretValue(target) or type(target) ~= "string" then return "" end
+    if iRC:IsForeverClient() then return iRC:NormalizeName(target) end
+    -- Keep realm suffixes intact; two realms can have the same character name.
+    return target:match("^%s*(.-)%s*$"):lower()
+end
+
+local function rememberWhisperAttempt(prefix, kind, target)
+    local key = whisperTargetKey(target)
+    if key == "" then return end
+    local now = GetTime and GetTime() or 0
+    local state = whisperTargets[key]
+    if not state then
+        if whisperTargetCount >= 512 then
+            local oldestKey, oldestAt
+            for oldKey, entry in pairs(whisperTargets) do
+                if not oldestAt or entry.at < oldestAt then oldestKey, oldestAt = oldKey, entry.at end
+            end
+            if oldestKey then whisperTargets[oldestKey] = nil; whisperTargetCount = whisperTargetCount - 1 end
+        end
+        state = {}
+        whisperTargets[key], whisperTargetCount = state, whisperTargetCount + 1
+    end
+    state.at, state.prefix, state.kind, state.target = now, prefix, kind, target
+end
+
+function iRC:IsAddonWhisperTargetUnavailable(target)
+    local state = whisperTargets[whisperTargetKey(target)]
+    return state ~= nil and (state.unavailableUntil or 0) > (GetTime and GetTime() or 0)
+end
+
+local function markWhisperTargetOffline(target)
+    local state = whisperTargets[whisperTargetKey(target)]
+    local now = GetTime and GetTime() or 0
+    -- Only correlate errors with our own recent addon sends. Ordinary whispers
+    -- remain untouched, and the original system error stays visible.
+    if not state or now - state.at > WHISPER_OFFLINE_COOLDOWN or (state.unavailableUntil or 0) > now
+        or (state.onlineAt or -1) > state.at then return end
+    state.unavailableUntil = now + WHISPER_OFFLINE_COOLDOWN
+    if iRC.Diagnostics then iRC.Diagnostics:Trace("WHISPER_OFFLINE", state.prefix, state.kind, state.target) end
+    iRC:DebugMsg("Paused addon whispers to " .. tostring(state.target) .. " for 5 minutes after an offline reply ("
+        .. tostring(state.prefix) .. "/" .. tostring(state.kind) .. ").", 3)
+end
+
+local function readWhisperOfflineError(message)
+    if iRC:IsSecretValue(message) or type(message) ~= "string" then return end
+    local template = ERR_CHAT_PLAYER_NOT_FOUND_S
+    if type(template) ~= "string" then return end
+    local first, last = template:find("%s", 1, true)
+    if not first then first, last = template:find("%1$s", 1, true) end
+    if not first then return end
+    local before, after = template:sub(1, first - 1), template:sub(last + 1)
+    if #message <= #before + #after or message:sub(1, #before) ~= before
+        or (#after > 0 and message:sub(-#after) ~= after) then return end
+    markWhisperTargetOffline(message:sub(#before + 1, #message - #after))
+end
+
+local function rememberWhisperTargetOnline(sender)
+    local state = whisperTargets[whisperTargetKey(sender)]
+    if state then
+        state.unavailableUntil = nil
+        state.onlineAt = GetTime and GetTime() or 0
+    end
+end
+
 local lastSendFailure, lastSendFailureAt
 local function sendAddonTrafficNow(prefix, message, distribution, target)
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
     if chatMessagingLocked() then return false, true end
+    local kind = message:match("^([A-Z][A-Z0-9_]*)") or "other"
+    if distribution == "WHISPER" then
+        if iRC:IsAddonWhisperTargetUnavailable(target) then return false end
+        rememberWhisperAttempt(prefix, kind, target)
+    end
     local ok, result = pcall(C_ChatInfo.SendAddonMessage, prefix, message, distribution, target)
     local readable = not iRC:IsSecretValue(result)
     local results = Enum and Enum.SendAddonMessageResult or {}
@@ -405,7 +480,9 @@ local function sendAddonTrafficNow(prefix, message, distribution, target)
     local sent = ok and readable and (result == true or result == (results.Success or 0))
     local retryable = ok and readable and (result == (results.AddonMessageThrottle or 3)
         or result == (results.ChannelThrottle or 8) or result == (results.AddOnMessageLockdown or 11))
-    local kind = message:match("^([A-Z][A-Z0-9_]*)") or "other"
+    if distribution == "WHISPER" and ok and readable and result == (results.TargetOffline or 12) then
+        markWhisperTargetOffline(target)
+    end
     local detail = readable and tostring(result):sub(1, 160) or "<secret>"
     if sent and iRC.TrafficMonitorEnabled then iRC:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
     if iRC.Diagnostics then iRC.Diagnostics:Trace(sent and "SEND" or "SEND_FAIL", prefix, kind, #message, distribution, target or "", detail) end
@@ -494,6 +571,7 @@ end
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
     if self:IsSecretValue(prefix) or self:IsSecretValue(message)
         or self:IsSecretValue(distribution) or self:IsSecretValue(target) then return false end
+    if distribution == "WHISPER" and self:IsAddonWhisperTargetUnavailable(target) then return false end
     message = tostring(message or "")
     if #message > 255 then
         self:DebugMsg("Blocked oversized addon message (" .. tostring(#message) .. " bytes) for " .. tostring(prefix or "?"), 1)
@@ -567,7 +645,7 @@ local INCOMING_PREFIX_POLICIES = {
     [iRC.Prefix] = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     iRCGFRoster = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     iRCGridV1 = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
-    iRCLayerV1 = { distributions = { WHISPER = true, CHANNEL = true } },
+    iRCLayerV1 = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
     iRCAdminV1 = { distributions = { WHISPER = true, CHANNEL = true } },
     iRCIconV1 = { distributions = { WHISPER = true } },
     LayerSwap = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
@@ -2878,7 +2956,9 @@ iRC.Frame:RegisterEvent("ADDON_LOADED")
 iRC.Frame:RegisterEvent("PLAYER_LOGIN")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_ENABLED")
-iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
+iRC.Frame:RegisterEvent("CHAT_MSG_SYSTEM")
+iRC.Frame:RegisterEvent("CHAT_MSG_ADDON")
+iRC.Frame:SetScript("OnEvent", function(_, event, loadedName, ...)
     if event == "ADDON_LOADED" then
         if loadedName ~= iRC.Name then return end
         savedVariablesReady = true
@@ -2904,5 +2984,11 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
         iRC:CloseAllWindows()
     elseif event == "PLAYER_REGEN_ENABLED" then
         iRC:LeaveLowTrafficMode()
+    elseif event == "CHAT_MSG_SYSTEM" then
+        readWhisperOfflineError(loadedName)
+    elseif event == "CHAT_MSG_ADDON" then
+        local message, distribution, sender = ...
+        if not iRC:HasSecretValues(loadedName, message, distribution, sender)
+            and INCOMING_PREFIX_POLICIES[loadedName] then rememberWhisperTargetOnline(sender) end
     end
 end)

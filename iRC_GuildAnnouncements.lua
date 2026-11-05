@@ -12,9 +12,11 @@ local Announcements = {}
 iRC.GuildAnnouncements = Announcements
 local ICON_PREFIX = "iRCIconV1"
 local ICON_WIRE_VERSION = "1"
-local PUBLIC_ICON_TTL = 30
 local PUBLIC_REQUEST_COOLDOWN = 300
+local PUBLIC_ICON_TTL = PUBLIC_REQUEST_COOLDOWN
+local PUBLIC_REQUEST_QUEUE_LIFETIME = 15
 local publicIcons, pendingRequests, queuedRequests, queuedNames = {}, {}, {}, {}
+local lastPublicRequestByName = {}
 local lastReplyAt = {}
 local lastPublicRequestAt, requestTimerPending = 0, false
 
@@ -183,6 +185,12 @@ end
 local function processPublicRequests()
     requestTimerPending = false
     local request = table.remove(queuedRequests, 1)
+    -- A busy chat can fill this queue faster than its paced sender drains it.
+    -- Do not whisper an old author after they may have logged out.
+    while request and request.expiresAt <= time() do
+        queuedNames[request.key], pendingRequests[request.key] = nil, nil
+        request = table.remove(queuedRequests, 1)
+    end
     if not request then return end
     queuedNames[request.key] = nil
     local now = GetTime and GetTime() or 0
@@ -196,6 +204,7 @@ local function processPublicRequests()
     end
     lastPublicRequestAt = now
     if pendingRequests[request.key] and pendingRequests[request.key] > time() then
+        lastPublicRequestByName[request.key] = time()
         sendIconWire("ICON_REQ\t" .. ICON_WIRE_VERSION, request.name)
     end
     if #queuedRequests > 0 and C_Timer and C_Timer.After then
@@ -206,7 +215,7 @@ end
 
 local function requestPublicIcon(name)
     local key = publicNameKey(name)
-    if not key or queuedNames[key] or #queuedRequests >= 40 then return end
+    if not key or key == publicNameKey(iRC:GetPlayerName()) or queuedNames[key] or #queuedRequests >= 40 then return end
     local now = time()
     if not Announcements.lastPublicCachePrune or now - Announcements.lastPublicCachePrune >= 60 then
         Announcements.lastPublicCachePrune = now
@@ -216,15 +225,19 @@ local function requestPublicIcon(name)
         for pendingKey, expiresAt in pairs(pendingRequests) do
             if expiresAt <= now then pendingRequests[pendingKey] = nil end
         end
+        for requestedKey, requestedAt in pairs(lastPublicRequestByName) do
+            if now - requestedAt >= PUBLIC_REQUEST_COOLDOWN then lastPublicRequestByName[requestedKey] = nil end
+        end
         for replyKey, repliedAt in pairs(lastReplyAt or {}) do
             if now - repliedAt > 600 then lastReplyAt[replyKey] = nil end
         end
     end
     if pendingRequests[key] and pendingRequests[key] > now then return end
+    if lastPublicRequestByName[key] and now - lastPublicRequestByName[key] < PUBLIC_REQUEST_COOLDOWN then return end
     if publicIcons[key] and publicIcons[key].expiresAt > now then return end
     pendingRequests[key] = now + PUBLIC_REQUEST_COOLDOWN
     queuedNames[key] = true
-    queuedRequests[#queuedRequests + 1] = { key = key, name = name }
+    queuedRequests[#queuedRequests + 1] = { key = key, name = name, expiresAt = now + PUBLIC_REQUEST_QUEUE_LIFETIME }
     if not requestTimerPending then
         requestTimerPending = true
         if C_Timer and C_Timer.After then C_Timer.After(0.1, processPublicRequests) else processPublicRequests() end
@@ -237,7 +250,8 @@ function Announcements:GetPublicChatIcon(name)
     if entry and entry.expiresAt > time() then
         local kind = sanitizePublicIconKind(entry.kind, name)
         if kind == "none" then
-            publicIcons[key] = nil
+            -- No badge is a valid cached answer, not a reason to ask again on
+            -- the author's next line of chat.
             return nil
         end
         return self.Icons[kind], kind

@@ -5,7 +5,7 @@ if not iRC then return end
 -- Main iRC window
 --
 -- This module builds the shared shell and its roster, log, management, guild
--- overview, and leaderboard pages. Most long lists use reusable visible rows;
+-- overview, and public guild pages. Most long lists use reusable visible rows;
 -- their data continues to live in the feature modules that produce it.
 
 local UI = {}
@@ -18,6 +18,7 @@ local GUILD_MEMBER_ROW_HEIGHT = 52
 local GUILD_MEMBER_ROW_SPACING = 56
 local MEMBER_MANAGEMENT_ROW_HEIGHT = 44
 local MEMBER_MANAGEMENT_ROW_SPACING = 48
+local GUILD_DIRECTORY_ROW_HEIGHT = 40
 
 -- Guild-card and shared presentation helpers -------------------------------
 
@@ -183,12 +184,6 @@ local FACTION_STYLES = {
     Horde = { border = { 0.72, 0.18, 0.15, 1 }, background = { 0.13, 0.035, 0.03, 0.92 } },
     Alliance = { border = { 0.18, 0.42, 0.80, 1 }, background = { 0.025, 0.07, 0.16, 0.92 } },
     MyGuild = { border = { 0.92, 0.62, 0.12, 1 }, background = { 0.12, 0.075, 0.02, 0.92 } },
-}
-
-local PODIUM_COLORS = {
-    [1] = { 0.95, 0.72, 0.18, 1 },
-    [2] = { 0.72, 0.74, 0.78, 1 },
-    [3] = { 0.68, 0.38, 0.17, 1 },
 }
 
 local FALLBACK_CLASS_COLORS = {
@@ -389,122 +384,183 @@ local function makeGuildRuleRow(parent, index)
     return row
 end
 
+local function guildDirectoryRowColumns(width)
+    width = tonumber(width) or 0
+    if width <= 0 then width = 651 end
+    local right = width - 44
+    local updated = width >= 630 and { left = right - 76, width = 76 } or nil
+    if updated then right = updated.left - 12 end
+    local firstStat = right - 3 * 54
+    local tagRight = firstStat - 12
+    return { width = width, nameLeft = 46, nameWidth = math.max(60, tagRight - 112 - 12 - 46),
+        tagLeft = tagRight - 112, tagWidth = 112, firstStat = firstStat, statWidth = 48,
+        updated = updated }
+end
+
 local function makeRaceCard(parent)
     local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    card:SetHeight(138)
-    createBackdrop(card, { 0.045, 0.055, 0.075, 0.98 }, { 0.30, 0.31, 0.34, 1 })
-
-    card.accent = card:CreateTexture(nil, "ARTWORK")
-    card.accent:SetWidth(4)
-    card.accent:SetPoint("TOPLEFT", 4, -5)
-    card.accent:SetPoint("BOTTOMLEFT", 4, 5)
-
-    card.iconFrame = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.iconFrame:SetSize(40, 40)
-    card.iconFrame:SetPoint("TOPLEFT", 13, -9)
-    createBackdrop(card.iconFrame, { 0.03, 0.03, 0.03, 1 }, { 0.58, 0.49, 0.25, 1 })
+    card:SetHeight(GUILD_DIRECTORY_ROW_HEIGHT)
+    card.groupBackground = card:CreateTexture(nil, "BACKGROUND")
+    card.groupBackground:SetAllPoints()
+    card.groupBackground:SetColorTexture(0.065, 0.047, 0.018, 0.98)
+    card.groupBackground:Hide()
+    -- Keep one outline above the row and its details without blocking clicks.
+    card.groupOutline = CreateFrame("Frame", nil, card, "BackdropTemplate")
+    card.groupOutline:SetAllPoints()
+    card.groupOutline:SetFrameLevel(card:GetFrameLevel() + 5)
+    card.groupOutline:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    card.groupOutline:SetBackdropBorderColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.8)
+    card.groupOutline:EnableMouse(false)
+    card.groupOutline:Hide()
+    card.header = CreateFrame("Button", nil, card)
+    card.header:SetPoint("TOPLEFT")
+    card.header:SetPoint("TOPRIGHT")
+    card.header:SetHeight(GUILD_DIRECTORY_ROW_HEIGHT)
+    card.header:RegisterForClicks("LeftButtonUp")
+    card.header.background = card.header:CreateTexture(nil, "BACKGROUND")
+    card.header.background:SetAllPoints()
+    card.header.background:SetColorTexture(0.035, 0.032, 0.026, 0.9)
+    card.header.highlight = card.header:CreateTexture(nil, "HIGHLIGHT")
+    card.header.highlight:SetAllPoints()
+    card.header.highlight:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.08)
+    card.divider = card.header:CreateTexture(nil, "ARTWORK")
+    card.divider:SetPoint("BOTTOMLEFT")
+    card.divider:SetPoint("BOTTOMRIGHT")
+    card.divider:SetHeight(1)
+    card.divider:SetColorTexture(0.4, 0.34, 0.22, 0.25)
+    card.details = CreateFrame("Frame", nil, card, "BackdropTemplate")
+    card.details:SetPoint("TOPLEFT", card, "TOPLEFT", 0, -GUILD_DIRECTORY_ROW_HEIGHT)
+    card.details:SetPoint("TOPRIGHT", card, "TOPRIGHT", 0, -GUILD_DIRECTORY_ROW_HEIGHT)
+    card.details:Hide()
+    card.accent = card.groupOutline:CreateTexture(nil, "ARTWORK")
+    card.accent:SetWidth(2)
+    card.accent:SetPoint("TOPLEFT", 0, -4)
+    card.accent:SetPoint("BOTTOMLEFT", 0, 4)
+    card.rowAccent = card.header:CreateTexture(nil, "ARTWORK")
+    card.rowAccent:SetWidth(2)
+    card.rowAccent:SetPoint("TOPLEFT", 0, -4)
+    card.rowAccent:SetPoint("BOTTOMLEFT", 0, 4)
+    card.iconFrame = CreateFrame("Frame", nil, card.header, "BackdropTemplate")
+    card.iconFrame:SetSize(26, 26)
+    card.iconFrame:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -7)
+    createBackdrop(card.iconFrame, { 0.02, 0.02, 0.02, 1 }, { 0.58, 0.43, 0.20, 1 })
     card.icon = card.iconFrame:CreateTexture(nil, "ARTWORK")
     card.icon:SetPoint("CENTER")
-    card.icon:SetSize(32, 32)
-
-    card.race = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    card.race:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -1)
+    card.icon:SetSize(22, 22)
+    card.race = card.header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    card.race:SetJustifyH("LEFT")
+    card.race:SetWordWrap(false)
     card.race:SetTextColor(unpack(COLORS.gold))
-    card.tag = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    card.tag:SetPoint("LEFT", card.race, "RIGHT", 9, 0)
-    card.tag:SetPoint("RIGHT", card, "RIGHT", -48, 0)
+    card.tag = card.header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     card.tag:SetJustifyH("LEFT")
     card.tag:SetWordWrap(false)
-    card.rank = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.rank:SetPoint("TOPRIGHT", -14, -16)
-    card.rank:SetTextColor(unpack(COLORS.gold))
-    card.freshness = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.freshness:SetPoint("TOPLEFT", card.iconFrame, "TOPRIGHT", 9, -23)
-    card.freshness:SetPoint("RIGHT", card, "RIGHT", -14, 0)
-    card.freshness:SetJustifyH("LEFT")
-    card.guildLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.guildLabel:SetPoint("TOP", card, "TOP", -35, -43)
-    card.guildLabel:SetText(iRC:Text("GUILD_STATS_RACE"))
-    card.guildLabel:SetTextColor(unpack(COLORS.gold))
-    card.guild = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.guild:SetPoint("LEFT", card.guildLabel, "RIGHT", 7, 0)
-    card.guild:SetWidth(180)
-    card.guild:SetJustifyH("LEFT")
-    card.guildLabel:Hide()
-    card.guild:Hide()
-
-    card.averageLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.averageLabel:SetPoint("TOP", card, "TOP", -240, -48)
-    card.averageLabel:SetWidth(145)
-    card.averageLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_LEVEL_60"))
-    card.membersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.membersLabel:SetPoint("TOP", card, "TOP", -80, -48)
-    card.membersLabel:SetWidth(145)
-    card.membersLabel:SetText(iRC:Text("GUILD_STATS_ONLINE_PEAK"))
-    card.totalLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.totalLabel:SetPoint("TOP", card, "TOP", 80, -48)
-    card.totalLabel:SetWidth(145)
-    card.totalLabel:SetText(iRC:Text("GUILD_STATS_ACTIVE_MEMBERS"))
-    card.totalMembersLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.totalMembersLabel:SetPoint("TOP", card, "TOP", 240, -48)
-    card.totalMembersLabel:SetWidth(145)
-    card.totalMembersLabel:SetText(iRC:Text("GUILD_STATS_TOTAL_MEMBERS"))
-    card.average = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.average:SetPoint("TOP", card.averageLabel, "BOTTOM", 0, -3)
-    card.members = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.members:SetPoint("TOP", card.membersLabel, "BOTTOM", 0, -3)
-    card.total = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.total:SetPoint("TOP", card.totalLabel, "BOTTOM", 0, -3)
-    card.totalMembers = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.totalMembers:SetPoint("TOP", card.totalMembersLabel, "BOTTOM", 0, -3)
-
-    card.classesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.classesTitle:SetPoint("TOP", card, "TOP", 0, -81)
-    card.classesTitle:SetText(iRC:Text("GUILD_STATS_CLASS_BREAKDOWN"))
-    card.classText = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.classText:SetPoint("TOPLEFT", 15, -93)
-    card.classText:SetPoint("TOPRIGHT", -15, -93)
-    card.classText:SetJustifyH("CENTER")
-    card.classText:SetWordWrap(false)
-    card.classBar = CreateFrame("Frame", nil, card, "BackdropTemplate")
-    card.classBar:SetPoint("TOPLEFT", 16, -108)
-    card.classBar:SetPoint("TOPRIGHT", -16, -108)
-    card.classBar:SetHeight(12)
-    createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
-    card.classSegments = {}
-    card.classLabels = {}
-    card.expandHint = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.expandHint:SetPoint("TOPRIGHT", -16, -123)
-    card.expandHint:SetWidth(630)
-    card.expandHint:SetJustifyH("RIGHT")
-    card.rulesSeparator = card:CreateTexture(nil, "ARTWORK")
-    card.rulesSeparator:SetColorTexture(0.35, 0.29, 0.16, 0.8)
-    card.rulesSeparator:SetPoint("TOPLEFT", 16, -139)
-    card.rulesSeparator:SetPoint("TOPRIGHT", -16, -139)
-    card.rulesSeparator:SetHeight(1)
-    card.rulesTitle = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    card.rulesTitle:SetPoint("TOPLEFT", 16, -149)
-    card.rulesTitle:SetText(iRC:Text("GUILD_STATS_GUILD_PROFILE"))
-    card.rulesTitle:SetTextColor(unpack(COLORS.gold))
-    card.rulesText = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.rulesText:SetPoint("TOPLEFT", 20, -168)
-    card.rulesText:SetPoint("TOPRIGHT", -20, -168)
-    card.rulesText:SetJustifyH("LEFT")
-    card.rulesText:SetJustifyV("TOP")
-    card.rulesText:SetWordWrap(true)
-    card.contactsLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.contactsLabel:SetPoint("TOPLEFT", 20, -182)
-    card.contactsLabel:SetText(iRC:Text("GUILD_CONTACTS_LABEL") .. ":")
-    card.contactsLabel:SetTextColor(unpack(COLORS.gold))
-    card.contactButtons = {}
-    card:EnableMouse(true)
-    card:SetScript("OnMouseUp", function(self, button)
-        if button ~= "LeftButton" or not self.guildKey then return end
+    card.expandButton = makeIRCActionButton(card.header, 24, 24, "+", false)
+    card.expandButton:SetPoint("TOPRIGHT", card, "TOPRIGHT", -8, -8)
+    function card:ToggleExpanded()
+        if self.onToggle then self.onToggle(); return end
+        if not self.guildKey then return end
         expandedGuildCards[self.guildKey] = not expandedGuildCards[self.guildKey]
         if GameTooltip then GameTooltip:Hide() end
         if UI.frame and UI.frame.scroll then UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll() end
         UI:Refresh()
+    end
+    card.expandButton:SetScript("OnClick", function() card:ToggleExpanded() end)
+    card.expandButton:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(iRC:Text(card.expanded and "GUILD_DIRECTORY_LESS" or "GUILD_DIRECTORY_MORE"))
+        GameTooltip:Show()
     end)
+    card.expandButton:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    card.header:SetScript("OnClick", function() card:ToggleExpanded() end)
+    card.stats = {}
+    for index, key in ipairs({ "GUILD_DIRECTORY_ACTIVE", "GUILD_DIRECTORY_PEAK", "GUILD_DIRECTORY_MEMBERS" }) do
+        local stat = CreateFrame("Button", nil, card.header)
+        stat:SetHeight(GUILD_DIRECTORY_ROW_HEIGHT)
+        stat.label = stat:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        stat.label:SetPoint("LEFT")
+        stat.label:SetText(iRC:Text(key))
+        stat.label:Hide()
+        stat.value = stat:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        stat.value:SetAllPoints()
+        stat.value:SetJustifyH("RIGHT")
+        stat:SetScript("OnClick", function() card:ToggleExpanded() end)
+        stat:SetScript("OnEnter", function(self)
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(self.label:GetText())
+            GameTooltip:AddLine(self.value:GetText(), 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        stat:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        card.stats[index] = stat
+    end
+    card.rowAge = card.header:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.rowAge:SetJustifyH("RIGHT")
+    card.rowAge:SetWordWrap(false)
+    card.metaHit = CreateFrame("Frame", nil, card.details)
+    card.metaHit:SetPoint("TOPLEFT", card, "TOPLEFT", 20, -GUILD_DIRECTORY_ROW_HEIGHT - 10)
+    card.metaHit:SetPoint("TOPRIGHT", card, "TOPRIGHT", -20, -GUILD_DIRECTORY_ROW_HEIGHT - 10)
+    card.metaHit:SetHeight(15)
+    card.metaHit:EnableMouse(true)
+    card.freshness = card.metaHit:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.freshness:SetAllPoints()
+    card.freshness:SetJustifyH("LEFT")
+    card.metaHit:SetScript("OnEnter", function(self)
+        if not GameTooltip or not card.report then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(card.report.guildName or "")
+        GameTooltip:AddLine(card.reportMetadata or "", 0.7, 0.7, 0.7, true)
+        GameTooltip:Show()
+    end)
+    card.metaHit:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    card.header:SetScript("OnEnter", function(self)
+        if not GameTooltip or not card.report then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(card.report.guildName or "")
+        GameTooltip:AddLine(card.tag:GetText(), 1, 1, 1)
+        GameTooltip:AddLine(card.freshness:GetText(), 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    card.header:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    card.rulesSeparator = card.details:CreateTexture(nil, "ARTWORK")
+    card.rulesSeparator:SetPoint("TOPLEFT", card, "TOPLEFT", 0, -GUILD_DIRECTORY_ROW_HEIGHT)
+    card.rulesSeparator:SetPoint("TOPRIGHT", card, "TOPRIGHT", 0, -GUILD_DIRECTORY_ROW_HEIGHT)
+    card.rulesSeparator:SetHeight(1)
+    card.rulesSeparator:SetColorTexture(0.6, 0.42, 0.16, 0.35)
+    local function title()
+        local text = card.details:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        text:SetTextColor(unpack(COLORS.gold))
+        text:SetJustifyH("LEFT")
+        return text
+    end
+    local function body()
+        local text = card.details:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        text:SetJustifyH("LEFT")
+        text:SetJustifyV("TOP")
+        text:SetWordWrap(true)
+        return text
+    end
+    card.detailsGuildName = card.details:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    card.detailsGuildName:SetJustifyH("LEFT")
+    card.detailsGuildName:SetJustifyV("TOP")
+    card.detailsGuildName:SetWordWrap(true)
+    card.detailsGuildName:SetTextColor(unpack(COLORS.gold))
+    card.descriptionTitle, card.description = title(), body()
+    card.rulesTitle, card.rulesText = title(), body()
+    card.descriptionTitle:SetText(iRC:Text("GUILD_DIRECTORY_DESCRIPTION"))
+    card.rulesTitle:SetText(iRC:Text("GUILD_STATS_ACTIVE_RULES"))
+    card.classesTitle, card.detailStats = title(), body()
+    card.classText = body()
+    card.classText:SetJustifyH("CENTER")
+    card.classBar = CreateFrame("Frame", nil, card.details, "BackdropTemplate")
+    card.classBar:SetHeight(12)
+    createBackdrop(card.classBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
+    card.classSegments, card.classLabels = {}, {}
+    card.contactsLabel, card.noContacts = title(), body()
+    card.contactsLabel:SetText(iRC:Text("GUILD_CONTACTS_LABEL"))
+    card.noContacts:SetText(iRC:Text("GUILD_STATS_NO_CONTACTS"))
+    card.contactButtons = {}
     return card
 end
 
@@ -521,6 +577,15 @@ local function makeFactionSection(parent, sectionKey, title)
     section.title:SetPoint("LEFT", 13, 0)
     section.title:SetText(title or sectionKey)
     section.title:SetTextColor(unpack(style.border))
+    section.title:SetWordWrap(false)
+    section.columnLabels = {}
+    for _, key in ipairs({ "TAGS", "ACTIVE", "PEAK", "MEMBERS", "UPDATED" }) do
+        local label = section.header:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        label:SetText(iRC:Text("GUILD_DIRECTORY_COLUMN_" .. key))
+        label:SetWordWrap(false)
+        label:SetJustifyH(key == "TAGS" and "LEFT" or "RIGHT")
+        section.columnLabels[key] = label
+    end
     section.header:SetScript("OnClick", function()
         collapsedFactionSections[sectionKey] = not collapsedFactionSections[sectionKey]
         if UI.frame and UI.frame.scroll then UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll() end
@@ -534,40 +599,6 @@ local function makeFactionSection(parent, sectionKey, title)
     end)
     section.header:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     return section
-end
-
-local function makeRacePodium(parent)
-    local podium = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    createBackdrop(podium, { 0.075, 0.06, 0.04, 0.98 }, { 0.55, 0.41, 0.17, 1 })
-    podium.title = podium:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    podium.title:SetPoint("TOP", 0, -7)
-    podium.title:SetText(iRC:Text("GUILD_STATS_TOP_THREE"))
-    podium.title:SetTextColor(unpack(COLORS.gold))
-    podium.entries = {}
-
-    for rank = 1, 3 do
-        local entry = CreateFrame("Button", nil, podium, "BackdropTemplate")
-        createBackdrop(entry, { 0.045, 0.055, 0.075, 0.98 }, PODIUM_COLORS[rank])
-        entry:RegisterForClicks("LeftButtonUp")
-        entry:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-        entry.icon = entry:CreateTexture(nil, "ARTWORK")
-        entry.icon:SetSize(30, 30)
-        entry.icon:SetPoint("LEFT", 8, 0)
-        entry.rank = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        entry.rank:SetPoint("LEFT", entry.icon, "RIGHT", 7, 0)
-        entry.rank:SetTextColor(unpack(PODIUM_COLORS[rank]))
-        entry.race = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, 0)
-        entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
-        entry.race:SetJustifyH("LEFT")
-        entry.tag = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        entry.tag:SetPoint("TOPLEFT", entry.race, "BOTTOMLEFT", 0, -1)
-        entry.tag:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
-        entry.tag:SetJustifyH("LEFT")
-        entry.tag:Hide()
-        podium.entries[rank] = entry
-    end
-    return podium
 end
 
 local MAIN_NAVIGATION = {
@@ -3112,6 +3143,28 @@ function UI:Create()
     frame.guildStatsSearch.hint = frame.guildStatsSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.guildStatsSearch.hint:SetPoint("LEFT", 7, 0)
     frame.guildStatsSearch.hint:SetText(iRC:Text("GUILD_STATS_SEARCH_HINT"))
+    frame.guildDirectorySortButtons = {}
+    for index, sort in ipairs({ { "ACTIVITY", "GUILD_DIRECTORY_SORT_ACTIVITY" },
+        { "MEMBERS", "GUILD_DIRECTORY_SORT_MEMBERS" }, { "NAME", "GUILD_DIRECTORY_SORT_NAME" } }) do
+        local key, label = sort[1], iRC:Text(sort[2])
+        local button = makeIRCActionButton(main, 100, 24, label, false)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 366 + (index - 1) * 105, -83)
+        button.sortKey = key
+        button:SetScript("OnClick", function()
+            frame.guildDirectorySort = key
+            UI.preservedRaceScroll = 0
+            UI:Refresh()
+        end)
+        button:SetScript("OnEnter", function(self)
+            if not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(iRC:Text("GUILD_DIRECTORY_SORT_TIP", label:lower()))
+            GameTooltip:Show()
+        end)
+        button:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        button:Hide()
+        frame.guildDirectorySortButtons[index] = button
+    end
     frame.guildStatsSearch.hint:SetTextColor(0.55, 0.55, 0.55)
     iRC:StyleSearchBox(frame.guildStatsSearch, frame.guildStatsSearch.hint)
     frame.guildStatsSearch:Hide()
@@ -4127,12 +4180,11 @@ function UI:Create()
     guildReport:Hide()
     frame.guildReport = guildReport
     frame:RegisterModalPopup(guildReport)
-    frame.showGuildDetails = function(group, rank)
+    frame.showGuildDetails = function(group)
         if type(group) ~= "table" then return end
         guildReport.title:SetText(tostring(group.guildName or "Unknown guild"))
         local tag = getGuildCardTag(group)
-        guildReport.subtitle:SetText("Leaderboard rank #" .. tostring(rank or "?") .. "   ·   "
-            .. tostring(group.faction or "Unknown") .. "   ·   " .. tostring(tag or "Normal"))
+        guildReport.subtitle:SetText(tostring(group.faction or "Unknown") .. "   ·   " .. tostring(tag or "Normal"))
         local lines = { infoSection("Guild summary", true) }
         if group.rulesKnown and type(group.rules) == "table" and group.rules.raceLock == true then
             lines[#lines + 1] = infoLine("Guild race", RACE_LABELS[group.race] or group.race or "Unknown")
@@ -4666,8 +4718,6 @@ function UI:Create()
         end
     end)
     frame.memberRows, frame.memberData, frame.raceCards, frame.factionSections = {}, {}, {}, {}
-    frame.racePodium = makeRacePodium(content)
-    frame.racePodium:Hide()
     frame.category = "Race Overview"
     return frame
 end
@@ -5140,7 +5190,6 @@ local function updatePersonalSettings(frame)
     for _, row in ipairs(frame.memberRows or {}) do row:Hide() end
     for _, card in ipairs(frame.raceCards or {}) do card:Hide() end
     for _, section in pairs(frame.factionSections or {}) do section:Hide() end
-    if frame.racePodium then frame.racePodium:Hide() end
     page.refreshing = true
     if iRC.Identity then iRC.Identity:RegisterCharacter(iRC:GetPlayerName()) end
     page.mainDropdown:Refresh()
@@ -5498,7 +5547,6 @@ local function updateMemberRows(frame)
     if selection then frame.memberSearchSelection = byKey[selection.kind .. ":" .. selection.lower] end
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
-    frame.racePodium:Hide()
     applyMemberSearch(frame)
     updateMemberSuggestions(frame)
     frame.contentTitle:SetText("Guild Members")
@@ -5699,7 +5747,6 @@ local function updateGuildLog(frame)
     if iRC.Identity then iRC.Identity:RequestGuildHistory() end
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
-    frame.racePodium:Hide()
 
     local records = iRC.Identity and iRC.Identity:GetGuildLog() or {}
     local query = frame.guildLogSearch and frame.guildLogSearch:GetText() or ""
@@ -5800,7 +5847,6 @@ end
 local function updateInactiveMembers(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
-    frame.racePodium:Hide()
 
     local threshold = math.max(0, math.min(9999,
         math.floor(tonumber(frame.inactiveMemberDays) or 30)))
@@ -5892,7 +5938,6 @@ end
 local function updateRankManagement(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
-    frame.racePodium:Hide()
     local options = iRC:GetGuildRankOptions()
     local roster = iRC:GetGuildRosterSnapshot()
     local rankCounts = {}
@@ -6020,7 +6065,6 @@ end
 local function updateSpecificMemberRemoval(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
-    frame.racePodium:Hide()
 
     local query = tostring(frame.memberKickSearch and frame.memberKickSearch:GetText() or ""):lower()
         :match("^%s*(.-)%s*$")
@@ -6228,7 +6272,6 @@ updateGuildOverview = function(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     for _, row in ipairs(frame.memberRows) do row:Hide() end
-    frame.racePodium:Hide()
 
     local overview = ensureGuildOverview(frame)
     frame.scroll:SetVerticalScroll(0)
@@ -6454,7 +6497,6 @@ local function updateGuildRules(frame)
     for _, card in ipairs(frame.raceCards) do card:Hide() end
     for _, section in pairs(frame.factionSections) do section:Hide() end
     for _, row in ipairs(frame.memberRows) do row:Hide() end
-    frame.racePodium:Hide()
 
     local connection = iRC:GetConnection()
     local rules = iRC:GetConnectionRules()
@@ -6848,7 +6890,7 @@ local function updateGuildRules(frame)
     end
 end
 
--- Public guild leaderboard --------------------------------------------------
+-- Public guild directory --------------------------------------------------
 
 local function formatNumber(value)
     local number = math.floor(tonumber(value) or 0)
@@ -6931,7 +6973,7 @@ local function updateClassBreakdown(card, classes, totalMembers)
         segment:Show()
         local label = card.classLabels[index]
         if not label then
-            label = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            label = (card.details or card):CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
             label:SetJustifyH("CENTER")
             card.classLabels[index] = label
         end
@@ -6982,31 +7024,96 @@ local function getActiveRuleLines(group)
     return lines
 end
 
-local function getGuildProfileLines(group)
-    local description = tostring(group.guildDescription or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if description == "" then description = iRC:Text("GUILD_STATS_NO_DESCRIPTION") end
-    local lines = {
-        description,
-    }
-    if (tonumber(group.guildDescriptionTimestamp) or 0) > 0 and tostring(group.guildDescriptionEditedBy or "") ~= "" then
-        lines[#lines + 1] = iRC.Colors.Gray
-            .. iRC:Text("GUILD_STATS_DESCRIPTION_META", iRC:FormatPlayerName(group.guildDescriptionEditedBy),
-                date("%Y-%m-%d %H:%M", group.guildDescriptionTimestamp))
-            .. iRC.Colors.Reset
+local function guildCardContacts(group)
+    local contacts, index = {}, 0
+    local onlineMask = math.floor(tonumber(group.guildContactsOnlineMask) or 0)
+    local fresh = tonumber(group.timestamp) and time() - tonumber(group.timestamp) <= 1800
+    for rawName in tostring(group.guildContacts or ""):gmatch("[^,]+") do
+        local name = rawName:match("^%s*(.-)%s*$")
+        if name ~= "" and #contacts < 5 then
+            index = index + 1
+            contacts[#contacts + 1] = { name = name, order = index,
+                online = fresh == true and math.floor(onlineMask / (2 ^ (index - 1))) % 2 == 1 }
+        end
     end
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = iRC:Text("GUILD_STATS_ACTIVE_RULES") .. ":"
-    for _, line in ipairs(getActiveRuleLines(group)) do lines[#lines + 1] = line end
-    return lines
+    table.sort(contacts, function(a, b)
+        if a.online ~= b.online then return a.online end
+        return a.order < b.order
+    end)
+    return contacts
 end
 
-local function guildCardHeight(group, forceExpanded)
-    if not forceExpanded and not expandedGuildCards[guildCardKey(group)] then return 138 end
-    local descriptionLines = math.max(1, math.ceil(#tostring(group.guildDescription or "") / 72))
-    return 210 + #getGuildProfileLines(group) * 14 + (descriptionLines - 1) * 14
+local function measureGuildText(text, width, fontObject)
+    if not UI.guildTextMeasure then
+        UI.guildTextMeasure = UIParent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        UI.guildTextMeasure:SetWordWrap(true)
+        UI.guildTextMeasure:Hide()
+    end
+    local measure = UI.guildTextMeasure
+    measure:SetFontObject(fontObject or "GameFontHighlightSmall")
+    measure:SetWidth(math.max(1, width))
+    measure:SetText(text)
+    return math.max(14, measure:GetStringHeight())
 end
 
-local function setRaceCard(card, group, rank, forceExpanded)
+local function guildCardLayout(group, expanded, width)
+    if not expanded then return { height = GUILD_DIRECTORY_ROW_HEIGHT } end
+    width = tonumber(width) or 0
+    width = (width > 0 and width or 651) - 40
+    local description = tostring(group.guildDescription or ""):match("^%s*(.-)%s*$")
+    if description == "" then description = iRC:Text("GUILD_STATS_NO_DESCRIPTION") end
+    local rules = table.concat(getActiveRuleLines(group), "\n")
+    local layout = { description = description, rules = rules, guildNameTop = GUILD_DIRECTORY_ROW_HEIGHT + 12 }
+    layout.guildNameHeight = measureGuildText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"), width, "GameFontNormalLarge")
+    layout.metadataTop = layout.guildNameTop + layout.guildNameHeight + 6
+    layout.descriptionTitle = layout.metadataTop + 33
+    layout.descriptionTop = layout.descriptionTitle + 20
+    layout.descriptionHeight = measureGuildText(description, width)
+    layout.rulesTitle = layout.descriptionTop + layout.descriptionHeight + 13
+    layout.rulesTop = layout.rulesTitle + 20
+    layout.rulesHeight = measureGuildText(rules, width)
+    layout.classesTitle = layout.rulesTop + layout.rulesHeight + 15
+    layout.statsTop = layout.classesTitle + 20
+    layout.classText = layout.statsTop + 21
+    layout.classBar = layout.classText + 18
+    layout.contactsTitle = layout.classBar + 27
+    layout.contactsTop = layout.contactsTitle + 21
+    layout.contacts = guildCardContacts(group)
+    layout.height = layout.contactsTop + math.max(1, math.ceil(#layout.contacts / 2)) * 23 + 13
+    return layout
+end
+
+local function guildCardHeight(group, forceExpanded, width)
+    local expanded = forceExpanded
+    if expanded == nil then expanded = expandedGuildCards[guildCardKey(group)] == true end
+    return guildCardLayout(group, expanded, width).height
+end
+
+local function guildCardGap(group)
+    return expandedGuildCards[guildCardKey(group)] == true and 8 or 1
+end
+
+local function guildReportAge(group)
+    local timestamp = tonumber(group.timestamp)
+    if not timestamp or timestamp <= 0 then return iRC:Text("RULESET_METADATA_UNKNOWN") end
+    local elapsed = math.max(0, time() - timestamp)
+    if elapsed < 60 then return iRC:Text("GUILD_DIRECTORY_UPDATED_NOW") end
+    if elapsed < 3600 then return iRC:Text("GUILD_DIRECTORY_UPDATED_MINUTES", math.floor(elapsed / 60)) end
+    if elapsed < 86400 then return iRC:Text("GUILD_DIRECTORY_UPDATED_HOURS", math.floor(elapsed / 3600)) end
+    return iRC:Text("GUILD_DIRECTORY_UPDATED_DATE", date("%Y-%m-%d", timestamp))
+end
+
+local function guildRowReportAge(group)
+    local timestamp = tonumber(group.timestamp)
+    if not timestamp or timestamp <= 0 then return "?" end
+    local elapsed = math.max(0, time() - timestamp)
+    if elapsed < 60 then return iRC:Text("GUILD_DIRECTORY_AGE_NOW") end
+    if elapsed < 3600 then return iRC:Text("GUILD_DIRECTORY_AGE_MINUTES", math.floor(elapsed / 60)) end
+    if elapsed < 86400 then return iRC:Text("GUILD_DIRECTORY_AGE_HOURS", math.floor(elapsed / 3600)) end
+    return iRC:Text("GUILD_DIRECTORY_AGE_DAYS", math.floor(elapsed / 86400))
+end
+
+local function setRaceCard(card, group, forceExpanded)
     local rules = group and group.rulesKnown and group.rules
     local rawClassColor = rules and rules.classLock == true
         and (RAID_CLASS_COLORS and RAID_CLASS_COLORS[iRC:NormalizeGuildClass(rules.guildClass)]
@@ -7015,191 +7122,251 @@ local function setRaceCard(card, group, rank, forceExpanded)
         rawClassColor.r or rawClassColor[1], rawClassColor.g or rawClassColor[2], rawClassColor.b or rawClassColor[3],
     }
     local accent = classColor or rules and rules.raceLock == true and (RACE_COLORS[group.race] or RACE_COLORS.Unknown)
-        or isGuildFoundRules(rules)
-            and { 0.30, 1, 0.35 } or RACE_COLORS.Unknown
-    card.accent:SetColorTexture(accent[1], accent[2], accent[3], 1)
+        or isGuildFoundRules(rules) and { 0.30, 1, 0.35 } or RACE_COLORS.Unknown
+    card.rowAccent:SetColorTexture(accent[1], accent[2], accent[3], 1)
+    card.accent:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1)
     setGuildCardIcon(card.icon, group)
     card.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
-    card.rank:SetText("#" .. rank)
-    local tags = getGuildCardTags(group, true)
-    card.tag:SetText(tags)
+    card.tag:SetText(getGuildCardTags(group, true))
     card.tag:SetTextColor(1, 1, 1)
-    card.tag:SetShown(tags ~= "")
-    card.average:SetText(group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "—")
-    card.members:SetText(formatNumber(group.activePlayers or 0))
-    card.total:SetText(group.activeMembers ~= nil and formatNumber(group.activeMembers) or "—")
-    card.totalMembers:SetText(formatNumber(group.members or 0))
-    card.report = group
-    card.guildKey = guildCardKey(group)
-    local expanded = forceExpanded or expandedGuildCards[card.guildKey]
-    local reportTime = tonumber(group.timestamp) and group.timestamp > 0
-        and date("%Y-%m-%d %H:%M", group.timestamp) or iRC:Text("RULESET_METADATA_UNKNOWN")
-    local reportSender = iRC:FormatPlayerName(group.relayedBy or group.name or iRC:Text("RULESET_METADATA_UNKNOWN"))
-    card.freshness:SetText(iRC:Text("GUILD_STATS_REPORT_META", reportTime, reportSender)
-        .. (group.cached and (" · " .. iRC:Text("RL_GRID_CACHED")) or ""))
-    card.expandHint:SetText(iRC:Text(expanded and "GUILD_STATS_COLLAPSE_RULES" or "GUILD_STATS_EXPAND_RULES"))
-    card.rulesSeparator:SetShown(expanded and true or false)
-    card.rulesTitle:SetShown(expanded and true or false)
-    card.rulesText:SetShown(expanded and true or false)
-    card.contactsLabel:SetShown(expanded and true or false)
+    card.tag:Show()
+    local values = { group.activeMembers, group.activePlayers, group.members }
+    local columns = guildDirectoryRowColumns(card:GetWidth())
+    local width = columns.width
+    card.race:ClearAllPoints()
+    card.race:SetPoint("TOPLEFT", card, "TOPLEFT", columns.nameLeft, -13)
+    card.race:SetWidth(columns.nameWidth)
+    card.tag:ClearAllPoints()
+    card.tag:SetPoint("TOPLEFT", card, "TOPLEFT", columns.tagLeft, -14)
+    card.tag:SetWidth(columns.tagWidth)
+    for index, stat in ipairs(card.stats) do
+        stat:ClearAllPoints()
+        stat:SetPoint("TOPLEFT", card, "TOPLEFT", columns.firstStat + (index - 1) * 54, 0)
+        stat:SetWidth(columns.statWidth)
+        stat.value:SetText(values[index] ~= nil and formatNumber(values[index]) or "?")
+    end
+    card.rowAge:ClearAllPoints()
+    card.rowAge:SetShown(columns.updated ~= nil)
+    if columns.updated then
+        card.rowAge:SetPoint("TOPLEFT", card, "TOPLEFT", columns.updated.left, -14)
+        card.rowAge:SetWidth(columns.updated.width)
+        card.rowAge:SetText(guildRowReportAge(group))
+    end
+    card.report, card.guildKey = group, guildCardKey(group)
+    local expanded = forceExpanded
+    if expanded == nil then expanded = expandedGuildCards[card.guildKey] == true end
+    card.expanded = expanded
+    local layout = guildCardLayout(group, expanded, width)
+    card:SetHeight(layout.height)
+    card.details:SetHeight(math.max(1, layout.height - GUILD_DIRECTORY_ROW_HEIGHT))
+    card.details:SetShown(expanded)
+    card.groupBackground:SetShown(expanded)
+    card.groupOutline:SetShown(expanded)
+    card.groupOutline:SetFrameLevel(card:GetFrameLevel() + 5)
+    card.rowAccent:SetShown(not expanded)
+    local shade = card.rowShade or 0.025
     if expanded then
-        card.rulesText:SetText(table.concat(getGuildProfileLines(group), "\n"))
-        card.contactsLabel:ClearAllPoints()
-        card.contactsLabel:SetPoint("TOPLEFT", card.rulesText, "BOTTOMLEFT", 0, -10)
-        local contacts, originalIndex = {}, 0
-        local onlineMask = math.floor(tonumber(group.guildContactsOnlineMask) or 0)
-        local onlineSnapshotFresh = tonumber(group.timestamp) and time() - tonumber(group.timestamp) <= 1800
-        for name in tostring(group.guildContacts or ""):gmatch("[^,]+") do
-            name = name:gsub("^%s+", ""):gsub("%s+$", "")
-            if name ~= "" and #contacts < 5 then
-                originalIndex = originalIndex + 1
-                contacts[#contacts + 1] = {
-                    name = name, order = originalIndex,
-                    online = onlineSnapshotFresh and math.floor(onlineMask / (2 ^ (originalIndex - 1))) % 2 == 1,
-                }
-            end
+        card.header.background:SetColorTexture(0.18, 0.115, 0.025, 0.98)
+    else
+        card.header.background:SetColorTexture(shade, shade, shade, 0.9)
+    end
+    local reportTimestamp = tonumber(group.timestamp) or 0
+    local reportTime = reportTimestamp > 0
+        and date("%Y-%m-%d %H:%M", reportTimestamp) or iRC:Text("RULESET_METADATA_UNKNOWN")
+    local reportSender = iRC:FormatPlayerName(group.relayedBy or group.name or iRC:Text("RULESET_METADATA_UNKNOWN"))
+    card.reportMetadata = iRC:Text("GUILD_STATS_REPORT_META", reportTime, reportSender)
+    card.freshness:SetText(guildReportAge(group) .. (group.cached and (" · " .. iRC:Text("RL_GRID_CACHED")) or ""))
+    card.expandButton:SetText(expanded and "-" or "+")
+    for _, field in ipairs({ card.rulesSeparator, card.detailsGuildName, card.descriptionTitle, card.description, card.rulesTitle,
+        card.rulesText, card.classesTitle, card.detailStats, card.classText, card.classBar, card.contactsLabel }) do
+        field:SetShown(expanded)
+    end
+    if expanded then
+        local function place(field, top, body)
+            field:ClearAllPoints()
+            field:SetPoint("TOPLEFT", card, "TOPLEFT", 20, -top)
+            if body then field:SetWidth(math.max(1, width - 40)) end
         end
-        table.sort(contacts, function(a, b)
-            if a.online ~= b.online then return a.online end
-            return a.order < b.order
-        end)
-        card.contactsLabel:SetText(#contacts > 0 and (iRC:Text("GUILD_CONTACTS_LABEL") .. ":") or iRC:Text("GUILD_STATS_NO_CONTACTS"))
-        local previousButton
-        for index, contact in ipairs(contacts) do
+        place(card.detailsGuildName, layout.guildNameTop, true)
+        card.detailsGuildName:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
+        card.detailsGuildName:SetHeight(layout.guildNameHeight)
+        card.metaHit:ClearAllPoints()
+        card.metaHit:SetPoint("TOPLEFT", card, "TOPLEFT", 20, -layout.metadataTop)
+        card.metaHit:SetPoint("TOPRIGHT", card, "TOPRIGHT", -20, -layout.metadataTop)
+        place(card.descriptionTitle, layout.descriptionTitle)
+        place(card.description, layout.descriptionTop, true)
+        card.description:SetText(layout.description)
+        card.description:SetHeight(layout.descriptionHeight)
+        place(card.rulesTitle, layout.rulesTitle)
+        place(card.rulesText, layout.rulesTop, true)
+        card.rulesText:SetText(layout.rules)
+        card.rulesText:SetHeight(layout.rulesHeight)
+        place(card.classesTitle, layout.classesTitle)
+        card.classesTitle:SetText(classBreakdownTitle(group))
+        place(card.detailStats, layout.statsTop, true)
+        card.detailStats:SetText(iRC:Text("GUILD_DIRECTORY_LEVEL_STATS", formatNumber(group.membersLevel60 or 0),
+            group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "?",
+            string.format("%.1f", tonumber(group.averageLevel) or 0)))
+        place(card.classText, layout.classText, true)
+        card.classBar:ClearAllPoints()
+        card.classBar:SetPoint("TOPLEFT", card, "TOPLEFT", 16, -layout.classBar)
+        card.classBar:SetPoint("TOPRIGHT", card, "TOPRIGHT", -16, -layout.classBar)
+        updateClassBreakdown(card, group.classBreakdownClasses or group.classes, group.members)
+        place(card.contactsLabel, layout.contactsTitle)
+        place(card.noContacts, layout.contactsTop, true)
+        card.noContacts:SetShown(#layout.contacts == 0)
+        for index, contact in ipairs(layout.contacts) do
             local button = card.contactButtons[index]
             if not button then
-                button = CreateFrame("Button", nil, card)
-                button:SetHeight(18)
+                button = CreateFrame("Button", nil, card.details)
+                button:SetHeight(21)
                 button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                button.text:SetAllPoints(); button.text:SetJustifyH("LEFT")
-                button.highlight = button:CreateTexture(nil, "HIGHLIGHT")
-                button.highlight:SetAllPoints(); button.highlight:SetColorTexture(1, 0.55, 0, 0.15)
+                button.text:SetAllPoints()
+                button.text:SetJustifyH("LEFT")
+                button.text:SetWordWrap(false)
+                button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
                 card.contactButtons[index] = button
             end
-            local contactName = contact.name
-            local displayName = iRC:FormatInviteContactName(contact.name)
+            local name = contact.name
+            local displayName = iRC:FormatPlayerName(name)
             button:ClearAllPoints()
-            if previousButton then button:SetPoint("LEFT", previousButton, "RIGHT", 6, 0)
-            else button:SetPoint("LEFT", card.contactsLabel, "RIGHT", 8, 0) end
+            button:SetPoint("TOPLEFT", card, "TOPLEFT", 20 + ((index - 1) % 2) * (width - 40) / 2,
+                -layout.contactsTop - math.floor((index - 1) / 2) * 23)
+            button:SetWidth((width - 52) / 2)
             button.text:SetText(contact.online
                 and ("|TInterface\\FriendsFrame\\StatusIcon-Online:10:10:0:0|t " .. displayName) or displayName)
-            button:SetWidth(math.max(55, button.text:GetStringWidth() + 14))
             button:SetScript("OnClick", function()
-                local playerFaction = UnitFactionGroup and UnitFactionGroup("player")
-                if playerFaction and group.faction and playerFaction ~= group.faction then
-                    iRC:Print(iRC:Text("GUILD_CONTACT_CROSS_FACTION"))
-                    return
+                local faction = UnitFactionGroup and UnitFactionGroup("player")
+                if faction and group.faction and faction ~= group.faction then
+                    iRC:Print(iRC:Text("GUILD_CONTACT_CROSS_FACTION")); return
                 end
-                iRC:OpenWhisper(contactName)
+                iRC:OpenWhisper(name)
             end)
             button:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText(iRC:Text("GUILD_CONTACT_WHISPER", displayName)); GameTooltip:Show()
+                if not GameTooltip then return end
+                GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                GameTooltip:SetText(iRC:Text("GUILD_CONTACT_WHISPER", displayName))
+                GameTooltip:Show()
             end)
-            button:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            button:Show(); previousButton = button
+            button:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+            button:Show()
         end
-        for index = #contacts + 1, #card.contactButtons do card.contactButtons[index]:Hide() end
+        for index = #layout.contacts + 1, #card.contactButtons do card.contactButtons[index]:Hide() end
     else
+        card.noContacts:Hide()
+        for _, label in ipairs(card.classLabels) do label:Hide() end
         for _, button in ipairs(card.contactButtons) do button:Hide() end
     end
-    card.classesTitle:SetText(classBreakdownTitle(group))
-    updateClassBreakdown(card, group.classBreakdownClasses or group.classes, group.members)
     card:Show()
 end
 
 function UI:CreateGuildHomepagePreview(parent)
     local preview = CreateFrame("Frame", nil, parent)
-    preview:SetHeight(450)
-
+    preview:SetHeight(GUILD_DIRECTORY_ROW_HEIGHT + 28)
+    preview.expanded = false
     preview.title = preview:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    preview.title:SetPoint("TOPLEFT", preview, "TOPLEFT", 2, 0)
+    preview.title:SetPoint("TOPLEFT", 2, 0)
     preview.title:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW"))
     preview.title:SetTextColor(unpack(COLORS.gold))
-
     preview.card = makeRaceCard(preview)
     preview.card:SetPoint("TOPLEFT", preview, "TOPLEFT", 0, -22)
     preview.card:SetPoint("TOPRIGHT", preview, "TOPRIGHT", 0, -22)
-    preview.card:SetScript("OnMouseUp", nil)
-    preview.card:EnableMouse(false)
-
     preview.empty = preview:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-    preview.empty:SetPoint("TOPLEFT", preview, "TOPLEFT", 16, -48)
-    preview.empty:SetPoint("TOPRIGHT", preview, "TOPRIGHT", -16, -48)
+    preview.empty:SetPoint("TOPLEFT", 16, -48)
+    preview.empty:SetPoint("TOPRIGHT", -16, -48)
     preview.empty:SetJustifyH("CENTER")
     preview.empty:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW_UNAVAILABLE"))
 
-    function preview:Refresh()
-        local group = iRC.RaceGrid and iRC.RaceGrid:GetLocalReport()
-        if type(group) ~= "table" or not group.guildName or group.guildName == "" then
+    function preview:Refresh(draft)
+        self.draft = draft
+        local now = GetTime and GetTime() or 0
+        local guildKey = iRC:GetGuildKey()
+        if not self.baseReport or self.baseGuildKey ~= guildKey or now - (self.baseAt or 0) >= 1 then
+            self.baseReport = iRC.RaceGrid and iRC.RaceGrid:GetLocalReport()
+            self.baseGuildKey, self.baseAt = guildKey, now
+        end
+        local base = self.baseReport
+        if type(base) ~= "table" or not base.guildName or base.guildName == "" then
             self.card:Hide()
             self.empty:Show()
+            if self:GetHeight() ~= 100 then
+                self:SetHeight(100)
+                if self.onHeightChanged then self.onHeightChanged(self) end
+            end
             return
         end
-
-        setRaceCard(self.card, group, 1, true)
-        self.card:SetHeight(guildCardHeight(group, true))
-        self.card.rank:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW_BADGE"))
-        self.card.expandHint:SetText(iRC:Text("GUILD_HOMEPAGE_PREVIEW_EXPANDED"))
+        -- Keep edits entirely in a preview copy; stored reports and published
+        -- settings remain untouched until the editor's shared Save action.
+        local group = {}
+        for key, value in pairs(base) do group[key] = value end
+        if type(draft) == "table" then
+            if draft.description ~= nil then group.guildDescription = draft.description end
+            if draft.icon ~= nil then group.guildHomepageIcon = draft.icon end
+            if draft.tag ~= nil then group.guildHomepageTag = draft.tag end
+            if type(draft.contacts) == "table" then
+                group.guildContacts = table.concat(draft.contacts, ",")
+                group.guildContactsOnlineMask = 0
+            end
+            local selection = draft.classBreakdown
+            if type(selection) == "table" then
+                local mode = selection.mode == "MAX" and "MAX" or selection.mode == "RANGE" and "RANGE" or "ALL"
+                local minimum = mode == "MAX" and 60 or mode == "RANGE"
+                    and math.max(1, math.min(60, math.floor(tonumber(selection.minLevel) or 1))) or 1
+                local maximum = mode == "RANGE"
+                    and math.max(minimum, math.min(60, math.floor(tonumber(selection.maxLevel) or 60))) or 60
+                group.classBreakdownMode, group.classBreakdownMinLevel, group.classBreakdownMaxLevel = mode, minimum, maximum
+                local cacheKey = mode .. ":" .. minimum .. ":" .. maximum
+                if self.classBase ~= base or self.classKey ~= cacheKey then
+                    local counts = {}
+                    if mode == "ALL" then
+                        for class, count in pairs(base.classes or {}) do counts[class] = count end
+                    else
+                        local roster = iRC.GetGuildRosterRows and iRC:GetGuildRosterRows()
+                            or iRC.GetGuildRosterSnapshot and iRC:GetGuildRosterSnapshot() or {}
+                        local seen = {}
+                        for _, member in ipairs(roster) do
+                            local level = tonumber(member.level) or 0
+                            local key = iRC:NormalizeName(member.name)
+                            local class = iRC:NormalizeGuildClass(member.classFile)
+                            if class == "" then class = iRC:NormalizeGuildClass(member.class or member.className) end
+                            if key ~= "" and not seen[key] then
+                                seen[key] = true
+                                if level >= minimum and level <= maximum and class ~= "" then
+                                    counts[class] = (counts[class] or 0) + 1
+                                end
+                            end
+                        end
+                    end
+                    self.classBase, self.classKey, self.classCounts = base, cacheKey, counts
+                end
+                group.classBreakdownClasses = self.classCounts
+            end
+        end
+        setRaceCard(self.card, group, self.expanded)
         for _, button in ipairs(self.card.contactButtons) do button:EnableMouse(false) end
         self.empty:Hide()
+        local height = self.card:GetHeight() + 28
+        if self:GetHeight() ~= height then
+            self:SetHeight(height)
+            if self.onHeightChanged then self.onHeightChanged(self) end
+        end
     end
-
+    preview.card.onToggle = function()
+        preview.expanded = not preview.expanded
+        preview:Refresh(preview.draft)
+    end
+    preview:HookScript("OnSizeChanged", function(self, width)
+        if width and width > 0 and self.layoutWidth ~= width then
+            self.layoutWidth = width
+            self:Refresh(self.draft)
+        end
+    end)
     preview:Refresh()
     return preview
 end
 
-local function updateRacePodium(frame, rankedGroups)
-    local placementOrder = { 2, 1, 3 }
-    frame.racePodium:ClearAllPoints()
-    frame.racePodium:SetSize(675, 86)
-    frame.racePodium:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, 0)
-    for _, rank in ipairs(placementOrder) do
-        local entry = frame.racePodium.entries[rank]
-        local group = rankedGroups[rank]
-        entry:ClearAllPoints()
-        entry:SetSize(207, 48)
-        if rank == 1 then
-            entry:SetPoint("TOP", frame.racePodium, "TOP", 0, -22)
-        elseif rank == 2 then
-            entry:SetPoint("TOPLEFT", frame.racePodium, "TOPLEFT", 10, -31)
-        else
-            entry:SetPoint("TOPRIGHT", frame.racePodium, "TOPRIGHT", -10, -31)
-        end
-        entry.rank:SetText("#" .. rank)
-        if group then
-            setGuildCardIcon(entry.icon, group)
-            entry.race:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
-            local tags = getGuildCardTags(group, guildStatsFilter == "ALL")
-            local showTag = tags ~= ""
-            entry.race:ClearAllPoints()
-            entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, showTag and 7 or 0)
-            entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, showTag and 7 or 0)
-            entry.tag:SetText(tags)
-            entry.tag:SetTextColor(1, 1, 1)
-            entry.tag:SetShown(showTag)
-            local selectedGroup, selectedRank = group, rank
-            entry:SetScript("OnClick", function()
-                if frame.showGuildDetails then frame.showGuildDetails(selectedGroup, selectedRank) end
-            end)
-            entry:EnableMouse(true)
-        else
-            entry.icon:SetTexture("Interface\\Icons\\Achievement_General")
-            entry.icon:SetTexCoord(0, 1, 0, 1)
-            entry.race:SetText(iRC:Text("GUILD_STATS_NO_DATA"))
-            entry.race:ClearAllPoints()
-            entry.race:SetPoint("LEFT", entry.rank, "RIGHT", 5, 0)
-            entry.race:SetPoint("RIGHT", entry, "RIGHT", -8, 0)
-            entry.tag:Hide()
-            entry:SetScript("OnClick", nil)
-            entry:EnableMouse(false)
-        end
-        entry:Show()
-    end
-    frame.racePodium:Show()
-end
-
 local function updateRaceOverview(frame)
-    local allGroups = iRC:GetRaceGridOverview()
+    local allGroups = iRC:GetGuildDirectoryOverview(frame.guildDirectorySort or "ACTIVITY")
     if guildStatsFilter == "RACE_LOCKED" then
         local filtered = {}
         for _, group in ipairs(allGroups) do
@@ -7243,12 +7410,8 @@ local function updateRaceOverview(frame)
         end
         allGroups = filtered
     end
-    local ranks = {}
-    for index, group in ipairs(allGroups) do ranks[group.guildName] = index end
-
     local gap, contentWidth = 9, 675
-    updateRacePodium(frame, allGroups)
-    local usedCards, yOffset = 0, 95
+    local usedCards, yOffset = 0, 0
 
     local playerFaction = UnitFactionGroup and UnitFactionGroup("player") or "Horde"
     local factionOrder = playerFaction == "Alliance" and { "Alliance", "Horde" } or { "Horde", "Alliance" }
@@ -7274,16 +7437,37 @@ local function updateRaceOverview(frame)
         section.title:SetText((collapsed and "+ " or "- ") .. title .. " (" .. #guilds .. ")")
         local cardsHeight = 0
         if not collapsed then
-            for index, group in ipairs(guilds) do cardsHeight = cardsHeight + guildCardHeight(group) + (index > 1 and gap or 0) end
+            for index, group in ipairs(guilds) do
+                cardsHeight = cardsHeight + guildCardHeight(group, nil, contentWidth - 24)
+                    + (index > 1 and guildCardGap(guilds[index - 1]) or 0)
+            end
         end
-        local sectionHeight = collapsed and 36 or (44 + cardsHeight + 10)
+        local sectionHeight = collapsed and 36 or (36 + cardsHeight + 8)
         section:ClearAllPoints()
         section:SetSize(contentWidth, sectionHeight)
         section:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
         section:Show()
         local cardWidth = contentWidth - 24
+        local columns = guildDirectoryRowColumns(cardWidth)
+        section.title:SetWidth(math.max(1, columns.tagLeft - 16))
+        local function heading(key, left, width)
+            local label = section.columnLabels[key]
+            label:ClearAllPoints()
+            label:SetPoint("TOPLEFT", section, "TOPLEFT", 12 + left, -12)
+            label:SetWidth(width)
+            label:SetShown(not collapsed)
+        end
+        heading("TAGS", columns.tagLeft, columns.tagWidth)
+        for index, key in ipairs({ "ACTIVE", "PEAK", "MEMBERS" }) do
+            heading(key, columns.firstStat + (index - 1) * 54, columns.statWidth)
+        end
+        if columns.updated then
+            heading("UPDATED", columns.updated.left, columns.updated.width)
+        else
+            section.columnLabels.UPDATED:Hide()
+        end
         local cardOffset = 36
-        for _, group in ipairs(collapsed and {} or guilds) do
+        for guildIndex, group in ipairs(collapsed and {} or guilds) do
             usedCards = usedCards + 1
             local card = frame.raceCards[usedCards]
             if not card then
@@ -7292,12 +7476,13 @@ local function updateRaceOverview(frame)
             elseif card:GetParent() ~= section then
                 card:SetParent(section)
             end
-            local cardHeight = guildCardHeight(group)
+            local cardHeight = guildCardHeight(group, nil, cardWidth)
             card:ClearAllPoints()
             card:SetSize(cardWidth, cardHeight)
             card:SetPoint("TOPLEFT", section, "TOPLEFT", 12, -cardOffset)
-            setRaceCard(card, group, ranks[group.guildName] or usedCards)
-            cardOffset = cardOffset + cardHeight + gap
+            card.rowShade = guildIndex % 2 == 0 and 0.045 or 0.025
+            setRaceCard(card, group)
+            cardOffset = cardOffset + cardHeight + guildCardGap(group)
         end
         yOffset = yOffset + sectionHeight + gap
     end
@@ -7454,6 +7639,14 @@ function UI:Refresh()
             button.text:SetFontObject(active and GameFontHighlight or GameFontNormal)
             button.text:SetTextColor(active and 1 or 0.78, active and 0.82 or 0.72, active and 0.36 or 0.62)
         end
+    end
+    for _, button in ipairs(frame.guildDirectorySortButtons or {}) do
+        button:SetShown(frame.category == "Race Overview")
+        local selected = button.sortKey == (frame.guildDirectorySort or "ACTIVITY")
+        button:SetBackdropColor(selected and 0.16 or 0.055, selected and 0.09 or 0.045, 0.025, 0.98)
+        button:SetBackdropBorderColor(selected and COLORS.gold[1] or 0.28,
+            selected and COLORS.gold[2] or 0.23, selected and COLORS.gold[3] or 0.16, 1)
+        button.text:SetTextColor(unpack(selected and COLORS.gold or COLORS.muted))
     end
     frame.scroll:ClearAllPoints()
     local usesSearchHeader = frame.category == "Race Overview" or frame.category == "Guild Log"
@@ -7632,7 +7825,7 @@ function UI:Open(subjectName, requestCacheFromOpen, requestedCategory)
     frame:Show()
     frame:Raise()
     clearOwnedKeyboardFocus(frame, false)
-    -- A normal panel launch should refresh shared leaderboard data even when
+    -- A normal panel launch should refresh shared guild data even when
     -- the user's preferred opening page is elsewhere in the panel.
     if requestCacheFromOpen and iRC.RaceGrid then
         iRC.RaceGrid:RequestGuildCacheFromOpen()

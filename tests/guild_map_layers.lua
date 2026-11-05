@@ -104,6 +104,7 @@ assert(not map:GetLocalLayer(), "wait for the assignment lookup before showing a
 advance(2)
 local layer = assert(map:GetLocalLayer(), "finish assigning the detected layer outside combat")
 assert(layer.zoneUID == 111 and layer.number == 1, "the detected raw route receives a display number")
+assert(layer.provisional == true, "an unanswered bounded lookup remains a local estimate")
 assert(#broadcasts == 1, "the detected layer is shared")
 assert(map:BroadcastLocalLayer(true), "layer sharing is allowed outside combat")
 
@@ -169,4 +170,11 @@ combat = false
 events.scripts.OnEvent(events, "PLAYER_REGEN_ENABLED")
 assert(transitions == 2, "the deferred transfer announcement resumes after combat")
 
-print("PASS: local detection, assignment, sharing, combat/secret/error guards, post-combat recovery, channel readiness, unique NPC votes, and transfers")
+map.UpdatePins = function() end
+assert(map:ReceiveLayerState({ "LAYER_STATE", "6", "111", "4621", "0", "1415", "4", "", "4621-111" }, "Guild Peer One"))
+assert(map:ReceiveLayerState({ "LAYER_STATE", "6", "111", "4621", "99", "1415", "7", "", "4621-111" }, "Guild Peer Two"))
+local firstPeer, secondPeer = assert(map:GetUserLayer("Guild Peer One")), assert(map:GetUserLayer("Guild Peer Two"))
+assert(firstPeer.number == secondPeer.number and firstPeer.zoneUID == secondPeer.zoneUID,
+    "raw guild identities keep the same layer together despite different reported numbers and NPC instances")
+
+print("PASS: local detection, bounded-lookup fallback, raw guild normalization, sharing, combat/secret guards, channel readiness, unique NPC votes, and transfers")

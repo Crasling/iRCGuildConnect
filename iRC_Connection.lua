@@ -1096,7 +1096,10 @@ function iRC:RequestGuildPresence(isOfficerPoll, isStartup)
 end
 
 function iRC:PollGuildPresence()
-    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("presence") or time() - lastPresencePollAt < 55 then return false end
+    -- Every officer receives guild profiles, but only the elected officer
+    -- needs routine polls. Otherwise each member whispers every officer.
+    if not self:IsGuildConnectionActive() or not self:HasGuildPermission("presence")
+        or not self:IsPresenceNotificationLeader() or time() - lastPresencePollAt < 55 then return false end
     return self:RequestGuildPresence(true)
 end
 
