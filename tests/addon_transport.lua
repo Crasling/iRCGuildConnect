@@ -37,6 +37,7 @@ local function client(results)
     }
     assert(loadfile("iRC_Core.lua", "t", env))("iRC", private)
     function addon:GetGuildKey() return guild end
+    function addon:GetPlayerName() return "Local Person" end
     function addon:DebugMsg() end
     addon.Diagnostics = { Trace = function(_, ...) traces[#traces + 1] = { ... } end }
     local state = { addon = addon, env = env, secret = secret, attempts = attempts, delivered = delivered, traces = traces }
@@ -53,6 +54,9 @@ local function client(results)
     end
     function state:send(message) return addon:SendAddonTraffic(addon.Prefix, message, "GUILD") end
     function state:whisper(message, target, prefix) return addon:SendAddonTraffic(prefix or addon.Prefix, message, "WHISPER", target) end
+    function state:peer(target)
+        return addon:AcceptIncomingAddonTraffic(addon.Prefix, "HELLO\t10", "GUILD", target, "connection")
+    end
     function state:event(event, ...) addon.Frame.OnEvent(addon.Frame, event, ...) end
     function state:lock(value) locked = value end
     function state:changeGuild() guild = "another guild" end
@@ -129,24 +133,28 @@ assert(state:queued() == 0 and #state.attempts == 0,
     "an expired position leaves the queue even while chat stays locked")
 
 state = client({ 12, 0 })
+assert(state:peer("Offline Person"))
 assert(not state:whisper("LAYER_REQUEST\t6\t1", "Offline Person", "iRCLayerV1"))
 assert(not state:whisper("ICON_REQ\t1", "Offline-Person", "iRCIconV1"),
     "a server offline response blocks other automatic routes and both Forever name forms")
 assert(state:whisper("HELLO\t10", "Online Person") and #state.attempts == 2,
     "one unavailable target does not block another player")
 state:advance(301)
-assert(state:whisper("ICON_REQ\t1", "Offline Person", "iRCIconV1"), "offline cooldown expires")
+assert(not state:whisper("ICON_REQ\t1", "Offline Person", "iRCIconV1"),
+    "an expired offline cooldown does not prove that the player returned")
+assert(state:peer("Offline Person"))
+assert(state:whisper("ICON_REQ\t1", "Offline Person", "iRCIconV1"), "a fresh reply restores the target")
 
 state = client({ 0 })
-state:whisper("LAYER_STATE\t6\t1", "Departed Person", "iRCLayerV1")
+state:whisper("HELLO\t10", "Departed Person")
 state:event("CHAT_MSG_SYSTEM", "No player named 'Departed Person' is currently playing.")
 assert(not state:whisper("ICON_REQ\t1", "Departed Person", "iRCIconV1") and #state.attempts == 1,
     "asynchronous offline errors stop later automatic attempts")
-state:event("CHAT_MSG_ADDON", "iRCConnV1", state.secret, "GUILD", "Departed Person")
+assert(not state.addon:AcceptIncomingAddonTraffic("iRCConnV1", state.secret, "GUILD", "Departed Person", "connection"))
 assert(state.addon:IsAddonWhisperTargetUnavailable("Departed Person"), "secret addon events cannot change recipient state")
-state:event("CHAT_MSG_ADDON", "UnrelatedAddon", "online", "GUILD", "Departed Person")
+assert(not state.addon:AcceptIncomingAddonTraffic("UnrelatedAddon", "online", "GUILD", "Departed Person", "connection"))
 assert(state.addon:IsAddonWhisperTargetUnavailable("Departed Person"), "other addon prefixes cannot clear an offline cooldown")
-state:event("CHAT_MSG_ADDON", "iRCConnV1", "HELLO\t10", "GUILD", "Departed-Person")
+assert(state:peer("Departed-Person"))
 assert(state:whisper("HELLO\t10", "Departed Person"), "a new iRC packet immediately restores the recipient")
 state:event("CHAT_MSG_SYSTEM", "No player named 'Never Contacted' is currently playing.")
 assert(not state.addon:IsAddonWhisperTargetUnavailable("Never Contacted"), "manual whisper errors without an iRC attempt are ignored")
@@ -155,12 +163,13 @@ state:event("CHAT_MSG_SYSTEM", state.secret)
 state = client({ 0 })
 state:whisper("HELLO\t10", "Returning Person")
 state:advance(1)
-state:event("CHAT_MSG_ADDON", "iRCConnV1", "HELLO\t10", "GUILD", "Returning Person")
+assert(state:peer("Returning Person"))
 state:event("CHAT_MSG_SYSTEM", "No player named 'Returning Person' is currently playing.")
 assert(not state.addon:IsAddonWhisperTargetUnavailable("Returning Person"),
     "a delayed offline error cannot override a newer live packet")
 
 state = client({ 12, 0 })
+assert(state:peer("Gone Person"))
 state:lock(true)
 state:whisper("ICON_REQ\t1", "Gone Person", "iRCIconV1")
 state:whisper("LAYER_ASSIGN\t6\t1", "Gone Person", "iRCLayerV1")
@@ -171,6 +180,7 @@ assert(#state.attempts == 2 and state.attempts[2].target == "Other Person" and s
     "queued packets for an offline target are discarded while other recipients continue")
 
 state = client({ 0 })
+assert(state:peer("Stale Recipient"))
 state:lock(true)
 state:whisper("LAYER_REQUEST\t6\t1", "Stale Recipient", "iRCLayerV1")
 state:advance(6)
@@ -180,6 +190,38 @@ assert(#state.attempts == 0 and state:queued() == 0, "old layer lookups expire r
 
 state = client({ 12, 0 })
 state.addon.GameTocVersion = 120000
+assert(state:peer("Same-RealmOne"))
+state:advance(1)
+assert(state:peer("Same-RealmTwo"))
 state:whisper("ICON_REQ\t1", "Same-RealmOne", "iRCIconV1")
 assert(state:whisper("ICON_REQ\t1", "Same-RealmTwo", "iRCIconV1"), "retail realm names have independent offline states")
-print("PASS: numeric send results, paced retries, positions, finite failures, secret guards, guild changes, offline recipients, and recovery")
+
+state = client({ 0 })
+for index = 1, 500 do
+    local target = "Unknown Person " .. index
+    assert(not state:whisper("ICON_REQ\t1", target, "iRCIconV1"))
+    assert(not state:whisper("LAYER_REQUEST\t6\t1", target, "iRCLayerV1"))
+end
+state:advance(10)
+assert(#state.attempts == 0 and state:queued() == 0, "unknown names never trigger background whisper attempts")
+assert(state:peer("Known Person"))
+assert(not state:whisper("LAYER_STATE\t6\t1", "Known Person", "iRCLayerV1"))
+assert(not state:whisper("LAYER_TRANSITION\t6\t1415", "Known Person", "iRCLayerV1"))
+assert(#state.attempts == 0, "even known online peers never receive routine layer whispers")
+assert(state.addon:SendAddonTraffic("iRCLayerV1", "LAYER_STATE\t6\t1", "GUILD"),
+    "guild layer sharing still sends normally")
+
+state = client({ 0 })
+assert(state:peer("Expiring Person"))
+state.addon.StartupTrafficReadyAt = 140
+assert(state:whisper("ICON_REQ\t1", "Expiring Person", "iRCIconV1"))
+state:advance(41)
+assert(#state.attempts == 0, "delayed background work rechecks peer freshness at the real send boundary")
+assert(not state.addon:IsRecentAddonPeer("Expiring Person"), "accepted peer evidence expires")
+
+state = client({ 0 })
+assert(state:peer("Long Report Recipient"))
+state:advance(120)
+assert(state:whisper("CACHE_DATA\t7\trequest\tpart", "Long Report Recipient", "iRCGridV1"),
+    "long requested guild report transfers are independent of background peer freshness")
+print("PASS: paced retries, secret guards, offline recovery, no blind probes, no routine layer whispers, and requested report transfers")

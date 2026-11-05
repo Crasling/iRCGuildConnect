@@ -6,7 +6,7 @@ local guids, timers, frames = {}, {}, {}
 local ready = true
 local secretValue = {}
 local settings = { showLayerPanel = true }
-local addon = { LayerWireVersion = "6", Prefix = "iRCConnV1" }
+local addon = { LayerWireVersion = "7", Prefix = "iRCConnV1" }
 
 function issecretvalue(value) return value == secretValue end
 function GetTime() return now end
@@ -23,6 +23,7 @@ function strsplit(separator, value)
     return table.unpack(fields)
 end
 function UnitPlayerControlled() return false end
+function UnitName() return "Local", "Paladin" end
 function UnitGUID(unit)
     guidReads = guidReads + 1
     return guids[unit]
@@ -48,6 +49,7 @@ function LibStub(name)
 end
 local private = {}
 assert(loadfile(root .. "iRC_Core.lua"))("iRC", private)
+addon.LayerWireVersion = "7"
 
 function addon:GetSettings() return settings end
 function addon:IsForeverClient() return true end
@@ -71,6 +73,7 @@ addon.RaceGrid = {
     end,
 }
 
+assert(loadfile(root .. "iRC_LayerRegistry.lua"))("iRC", { iRC = addon })
 assert(loadfile(root .. "iRC_GuildMap.lua"))("iRC", { iRC = addon })
 local map, events = addon.GuildMap, frames[#frames]
 
@@ -171,8 +174,12 @@ events.scripts.OnEvent(events, "PLAYER_REGEN_ENABLED")
 assert(transitions == 2, "the deferred transfer announcement resumes after combat")
 
 map.UpdatePins = function() end
-assert(map:ReceiveLayerState({ "LAYER_STATE", "6", "111", "4621", "0", "1415", "4", "", "4621-111" }, "Guild Peer One"))
-assert(map:ReceiveLayerState({ "LAYER_STATE", "6", "111", "4621", "99", "1415", "7", "", "4621-111" }, "Guild Peer Two"))
+addon.LayerRegistry:Merge(4621, 1415, {
+    { zoneUID = 111, preferredNumber = 1, owner = "local paladin", createdAt = time() - 20, observedAt = time() },
+})
+map:OnLayerRegistryMerged(4621, 1415)
+assert(map:ReceiveLayerState({ "LAYER_STATE", "7", "111", "4621", "0", "1415", "4", "", "4621-111" }, "Guild Peer One"))
+assert(map:ReceiveLayerState({ "LAYER_STATE", "7", "111", "4621", "99", "1415", "7", "", "4621-111" }, "Guild Peer Two"))
 local firstPeer, secondPeer = assert(map:GetUserLayer("Guild Peer One")), assert(map:GetUserLayer("Guild Peer Two"))
 assert(firstPeer.number == secondPeer.number and firstPeer.zoneUID == secondPeer.zoneUID,
     "raw guild identities keep the same layer together despite different reported numbers and NPC instances")

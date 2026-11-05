@@ -182,12 +182,19 @@ local function sendIconWire(message, target)
     return iRC:SendAddonTraffic(ICON_PREFIX, message, "WHISPER", target)
 end
 
+local function canRequestPublicIcon(name)
+    -- Seeing a name in chat does not prove that the player runs iRC or is
+    -- still available when this queue drains.
+    return type(iRC.IsRecentAddonPeer) == "function" and iRC:IsRecentAddonPeer(name)
+        and not (iRC.IsAddonWhisperTargetUnavailable and iRC:IsAddonWhisperTargetUnavailable(name))
+end
+
 local function processPublicRequests()
     requestTimerPending = false
     local request = table.remove(queuedRequests, 1)
     -- A busy chat can fill this queue faster than its paced sender drains it.
     -- Do not whisper an old author after they may have logged out.
-    while request and request.expiresAt <= time() do
+    while request and (request.expiresAt <= time() or not canRequestPublicIcon(request.name)) do
         queuedNames[request.key], pendingRequests[request.key] = nil, nil
         request = table.remove(queuedRequests, 1)
     end
@@ -202,10 +209,14 @@ local function processPublicRequests()
         C_Timer.After(delay, processPublicRequests)
         return
     end
-    lastPublicRequestAt = now
     if pendingRequests[request.key] and pendingRequests[request.key] > time() then
-        lastPublicRequestByName[request.key] = time()
-        sendIconWire("ICON_REQ\t" .. ICON_WIRE_VERSION, request.name)
+        if canRequestPublicIcon(request.name) then
+            lastPublicRequestAt = now
+            lastPublicRequestByName[request.key] = time()
+            sendIconWire("ICON_REQ\t" .. ICON_WIRE_VERSION, request.name)
+        else
+            pendingRequests[request.key] = nil
+        end
     end
     if #queuedRequests > 0 and C_Timer and C_Timer.After then
         requestTimerPending = true
@@ -216,6 +227,7 @@ end
 local function requestPublicIcon(name)
     local key = publicNameKey(name)
     if not key or key == publicNameKey(iRC:GetPlayerName()) or queuedNames[key] or #queuedRequests >= 40 then return end
+    if not canRequestPublicIcon(name) then return end
     local now = time()
     if not Announcements.lastPublicCachePrune or now - Announcements.lastPublicCachePrune >= 60 then
         Announcements.lastPublicCachePrune = now
@@ -380,10 +392,23 @@ local function hookChatTooltip(chatFrame)
         GameTooltip:AddLine(iRC:Text(help[2]), 1, 1, 1, true)
         GameTooltip:Show()
     end
-    local enterOK = pcall(chatFrame.HookScript, chatFrame, "OnHyperlinkEnter", onHyperlinkEnter)
-    local leaveOK = pcall(chatFrame.HookScript, chatFrame, "OnHyperlinkLeave", hideChatIconTooltip)
+    local enterOK, enterError = pcall(chatFrame.HookScript, chatFrame, "OnHyperlinkEnter", onHyperlinkEnter)
+    local leaveOK, leaveError = pcall(chatFrame.HookScript, chatFrame, "OnHyperlinkLeave", hideChatIconTooltip)
     if not (enterOK and leaveOK) then
-        iRC:DebugMsg("Chat icon tooltip hooks were blocked for this chat frame.", 2)
+        local frameName = "<unnamed>"
+        if type(chatFrame.GetName) == "function" then
+            local ok, name = pcall(chatFrame.GetName, chatFrame)
+            if ok and not iRC:IsSecretValue(name) and type(name) == "string" and name ~= "" then frameName = name end
+        end
+        local function result(attached, err)
+            if attached then return "attached" end
+            if iRC:IsSecretValue(err) then return "failed (<secret>)" end
+            return "failed (" .. tostring(err):gsub("[%c]", " "):sub(1, 220) .. ")"
+        end
+        -- A failure on one chat window or one of its two handlers does not
+        -- tell us whether hovering works elsewhere. Keep the actual errors.
+        iRC:DebugMsg("Chat tooltip hooks on " .. frameName .. ": OnHyperlinkEnter=" .. result(enterOK, enterError)
+            .. "; OnHyperlinkLeave=" .. result(leaveOK, leaveError) .. ".", 2)
     end
 end
 

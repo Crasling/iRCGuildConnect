@@ -4,15 +4,14 @@ if not iRC then return end
 
 -- Guild world-map pins and layer discovery
 --
--- Positions use guild addon messages. Layer numbers are inferred from creature
--- GUIDs, reconciled through iRCComms/LayerSwap-compatible data, and kept
--- separate from raw internal zone identifiers.
+-- Positions use guild addon messages. Creature GUIDs identify the raw layer;
+-- a shared zone registry assigns the short numbers shown in the UI.
 
 local GuildMap = { positions = {}, pins = {}, pool = {} }
 iRC.GuildMap = GuildMap
 
 local POSITION_VERSION = "1"
-local LAYER_WIRE_VERSION = tostring(iRC.LayerWireVersion or "6")
+local LAYER_WIRE_VERSION = tostring(iRC.LayerWireVersion or "7")
 local POSITION_LIFETIME = 90
 local POSITION_UPDATE_INTERVAL = 5
 local POSITION_HEARTBEAT = 20
@@ -59,7 +58,6 @@ local layerTransitioning = false
 local layerTransitionBroadcastPending = false
 local layerVotes, layerVotedGuids = {}, {}
 local knownLayerIds = {}
-local knownLayerNumbers = {}
 local layerSwapZoneIds, importedLayerSwapZones = {}, {}
 local layerSwapMessageThrottle = {}
 local lastLayerSwapThrottleCleanup = 0
@@ -67,11 +65,95 @@ local layerUsers = {}
 local guildRosterLookup, guildRosterLookupSource = {}, nil
 local lastLayerBroadcastSignature
 local lastLayerBroadcastAt = 0
+local layerGroup = { members = {}, valid = false }
+local layerGroupRefreshPending, layerGroupQueryPending = false, false
 
 local function layerScanBlockedByCombat()
     -- A false result allows scanning; only a missing helper blocks by default.
     if not iRC.IsCombatTrafficBlocked then return true end
     return iRC:IsCombatTrafficBlocked()
+end
+
+function GuildMap:GetLayerGroupDistribution()
+    return layerGroup.valid and layerGroup.distribution or nil
+end
+
+function GuildMap:IsLayerGroupMember(name)
+    if not layerGroup.valid or iRC:IsSecretValue(name) or type(name) ~= "string" then return false end
+    return layerGroup.members[iRC:NormalizeName(name)] == true
+end
+
+local function safeGroupValue(callback, ...)
+    if type(callback) ~= "function" then return nil, false end
+    local ok, value = pcall(callback, ...)
+    if not ok or iRC:IsSecretValue(value) then return nil, false end
+    return value, true
+end
+
+local function layerGroupUnitName(unit)
+    local secretChecker = C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret
+    if type(secretChecker) == "function" then
+        local secret, readable = safeGroupValue(secretChecker, unit)
+        if not readable or secret == true then return nil end
+    end
+    if iRC:IsForeverClient() and type(UnitName) == "function" then
+        local ok, firstName, lastName = pcall(UnitName, unit)
+        if not ok or iRC:HasSecretValues(firstName, lastName)
+            or type(firstName) ~= "string" or firstName == "" then return nil end
+        if type(lastName) == "string" and lastName ~= "" and not firstName:find(" ", 1, true) then
+            return firstName .. " " .. lastName
+        end
+        return firstName
+    end
+    local name, readable = safeGroupValue(GetUnitName, unit, true)
+    return readable and type(name) == "string" and name ~= "" and name or nil
+end
+
+function GuildMap:RefreshLayerGroup()
+    -- Membership is read outside combat and cached for receive-side trust.
+    -- A deferred roster change invalidates the old cache until it is readable.
+    if layerScanBlockedByCombat() then
+        layerGroup.valid, layerGroupRefreshPending = false, true
+        return false
+    end
+    local inRaid, raidReadable = safeGroupValue(IsInRaid)
+    if type(IsInRaid) == "function" and not raidReadable then
+        layerGroup.valid, layerGroupRefreshPending = false, true
+        return false
+    end
+    local count, countReadable = safeGroupValue(inRaid and GetNumGroupMembers or GetNumSubgroupMembers)
+    if not countReadable then
+        if type(GetNumGroupMembers) == "function" or type(GetNumSubgroupMembers) == "function" then
+            layerGroup.valid, layerGroupRefreshPending = false, true
+            return false
+        end
+        count = 0
+    end
+    if type(count) ~= "number" or count ~= count or count < 0 or count == math.huge then
+        layerGroup.valid, layerGroupRefreshPending = false, true
+        return false
+    end
+    count = math.min(inRaid and 40 or 4, math.floor(count))
+    local members, keys = {}, {}
+    if count > 0 then
+        for index = 1, count do
+            local name = layerGroupUnitName((inRaid and "raid" or "party") .. index)
+            local key = name and iRC:NormalizeName(name)
+            if not key or key == "" then
+                layerGroup.valid, layerGroupRefreshPending = false, true
+                return false
+            end
+            if not members[key] then members[key], keys[#keys + 1] = true, key end
+        end
+    end
+    table.sort(keys)
+    local distribution = count > 0 and (inRaid and "RAID" or "PARTY") or nil
+    local signature = tostring(distribution) .. ":" .. table.concat(keys, ",")
+    local changed = signature ~= layerGroup.signature
+    layerGroup = { members = members, distribution = distribution, signature = signature, valid = true }
+    layerGroupRefreshPending = false
+    if changed and distribution then layerGroupQueryPending = true end
+    return true
 end
 
 local function savedLayerUsers()
@@ -225,72 +307,15 @@ local function layerScope(serverId, _, mapId)
     return tostring(serverId or 0) .. ":" .. tostring(mapId or 0)
 end
 
-local function pruneLayerNumbers(numbers)
-    local now = registryNow()
-    for zoneUID, assignment in pairs(numbers or {}) do
-        if type(assignment) ~= "table" or type(assignment.number) ~= "number"
-            or type(assignment.seenAt) ~= "number" or now - assignment.seenAt > LAYER_ID_LIFETIME then
-            numbers[zoneUID] = nil
-        end
-    end
+local function getAssignedLayerNumber(zoneUID, serverId, _, mapId)
+    return iRC.LayerRegistry and iRC.LayerRegistry:GetNumber(zoneUID, serverId, mapId) or nil
 end
 
-local function getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
-    local numbers = knownLayerNumbers[layerScope(serverId, instanceId, mapId)]
-    pruneLayerNumbers(numbers)
-    local assignment = numbers and numbers[tonumber(zoneUID)]
-    return assignment and assignment.number or nil
-end
-
-local function rememberLayerNumber(zoneUID, serverId, instanceId, mapId, number, seenAt, preferIncoming)
-    zoneUID, number = tonumber(zoneUID), tonumber(number)
-    if not zoneUID or not number or number < 1 or number > 99 or number ~= math.floor(number) then return false end
-    local scope = layerScope(serverId, instanceId, mapId)
-    local numbers = knownLayerNumbers[scope]
-    if not numbers then numbers = {}; knownLayerNumbers[scope] = numbers end
-    pruneLayerNumbers(numbers)
-    local existing = numbers[zoneUID]
-    if existing then
-        existing.seenAt = math.max(existing.seenAt or 0, tonumber(seenAt) or registryNow())
-        if existing.number == number then return true end
-        if not preferIncoming then return false end
-        existing.number = number
-        return true
-    end
-    -- Do not allow two raw identities in one registry to silently claim the
-    -- same friendly number. A later lookup can still resolve the conflict.
-    for knownId, assignment in pairs(numbers) do
-        if knownId ~= zoneUID and assignment.number == number then
-            if not preferIncoming then return false end
-            numbers[knownId] = nil
-        end
-    end
-    numbers[zoneUID] = { number = number, seenAt = tonumber(seenAt) or registryNow() }
-    return true
-end
-
-local function allocateLayerNumber(zoneUID, serverId, instanceId, mapId)
-    local existing = getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
-    if existing then return existing end
-    local scope = layerScope(serverId, instanceId, mapId)
-    local numbers = knownLayerNumbers[scope]
-    if not numbers then numbers = {}; knownLayerNumbers[scope] = numbers end
-    pruneLayerNumbers(numbers)
-    local used = {}
-    for _, assignment in pairs(numbers) do used[assignment.number] = true end
-    local number = 1
-    while number < 99 and used[number] do number = number + 1 end
-    rememberLayerNumber(zoneUID, serverId, instanceId, mapId, number)
-    return number
-end
-
-local function canonicalLayerNumber(zoneUID, serverId, instanceId, mapId, suggestedNumber)
-    local number = getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
-    if number then return number end
-    if rememberLayerNumber(zoneUID, serverId, instanceId, mapId, suggestedNumber, nil, false) then
-        return tonumber(suggestedNumber)
-    end
-    return allocateLayerNumber(zoneUID, serverId, instanceId, mapId)
+local function claimLayerNumber(zoneUID, serverId, mapId, preferredNumber, owner)
+    if not iRC.LayerRegistry then return nil end
+    local row = iRC.LayerRegistry:Claim(zoneUID, serverId, mapId, preferredNumber, owner)
+    if GuildMap.OnLayerRegistryMerged then GuildMap:OnLayerRegistryMerged(serverId, mapId, false) end
+    return row and row.number or getAssignedLayerNumber(zoneUID, serverId, nil, mapId)
 end
 
 local function normalizeLayerUsers(zoneUID, serverId, _, mapId, number)
@@ -307,28 +332,60 @@ local function normalizeLayerUsers(zoneUID, serverId, _, mapId, number)
     return changed
 end
 
-local function getLayerNumber(zoneUID, serverId, instanceId, mapId, refresh)
-    local assigned = getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
-    if assigned then return assigned end
-    local scope = layerScope(serverId, instanceId, mapId)
-    local ids = knownLayerIds[scope]
-    if not ids then
-        ids = {}
-        knownLayerIds[scope] = ids
-    end
-    pruneLayerIds(ids)
-    if refresh ~= false then rememberLayerId(ids, zoneUID) end
-    local sorted = {}
-    for knownId in pairs(ids) do sorted[#sorted + 1] = knownId end
-    table.sort(sorted)
-    for index, knownId in ipairs(sorted) do
-        if knownId == zoneUID then return math.max(1, math.min(99, index)) end
-    end
-    return 1
+local function getLayerNumber(zoneUID, serverId, instanceId, mapId)
+    return getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
 end
 
 function GuildMap:GetAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
     return getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
+end
+
+function GuildMap:IsLayerLookupCurrent(request)
+    local layer = pendingLocalLayer or localLayer
+    return layer ~= nil and layer.serverId == request.serverId and layer.mapId == request.mapId
+        and layer.zoneUID == request.rawId
+end
+
+function GuildMap:OnLayerRegistryMerged(serverId, mapId, confirmed)
+    -- One shared book drives the player's panel and all peer aliases. A
+    -- collision repair can renumber several raw IDs, so refresh the scope.
+    local changed = false
+    local function shared(rawId)
+        return confirmed ~= false and (type(confirmed) ~= "table" or confirmed[rawId] == true)
+    end
+    for senderKey, entry in pairs(layerUsers) do
+        if entry.serverId == serverId and entry.mapId == mapId and entry.zoneUID then
+            local number = getAssignedLayerNumber(entry.zoneUID, serverId, entry.instanceId, mapId)
+            if number and number ~= entry.number then
+                entry.number, changed = number, true
+                saveLayerUser(senderKey, entry)
+            end
+            if number and shared(entry.zoneUID) and entry.provisional then
+                entry.provisional, changed = false, true
+            end
+        end
+    end
+    if localLayer and localLayer.serverId == serverId and localLayer.mapId == mapId then
+        local number = getAssignedLayerNumber(localLayer.zoneUID, serverId, localLayer.instanceId, mapId)
+        if number and number ~= localLayer.number then
+            iRC:DebugMsg("Layer registry updated " .. tostring(localLayer.layerSwapId) .. ": Layer "
+                .. tostring(localLayer.number) .. " -> " .. tostring(number) .. ".", 3)
+            localLayer.number, changed = number, true
+        end
+        if number and shared(localLayer.zoneUID) then
+            if localLayer.provisional then changed = true end
+            localLayer.provisional = false
+        end
+    end
+    if pendingLocalLayer and shared(pendingLocalLayer.zoneUID) and pendingLocalLayer.serverId == serverId and pendingLocalLayer.mapId == mapId
+        and getAssignedLayerNumber(pendingLocalLayer.zoneUID, serverId, pendingLocalLayer.instanceId, mapId) then
+        pendingLocalLayer.registryConfirmed = true
+    end
+    if changed then
+        self:UpdateLocalLayerDisplay()
+        self:UpdatePins(true)
+    end
+    return changed
 end
 
 local function layerSwapZoneKey(mapId, serverId)
@@ -384,13 +441,9 @@ local function importLayerSwapZoneData(mapId)
 end
 
 function GuildMap:GetLayerRegistryWire(serverId, instanceId, mapId)
-    local ids = knownLayerIds[layerScope(serverId, instanceId, mapId)] or {}
-    pruneLayerIds(ids)
-    local sorted = {}
-    for zoneUID in pairs(ids) do sorted[#sorted + 1] = zoneUID end
-    table.sort(sorted)
     local wire = {}
-    for index = 1, math.min(99, #sorted) do wire[index] = tostring(sorted[index]) end
+    local rows = iRC.LayerRegistry and iRC.LayerRegistry:Export(serverId, mapId) or {}
+    for index, row in ipairs(rows) do wire[index] = tostring(row.zoneUID) end
     return table.concat(wire, ",")
 end
 
@@ -411,6 +464,17 @@ function GuildMap:BroadcastLocalLayer(force)
     lastLayerBroadcastSignature = signature
     lastLayerBroadcastAt = now
     return true
+end
+
+local function queryNewLayerGroup()
+    if not layerGroupQueryPending or layerScanBlockedByCombat()
+        or not GuildMap:GetLayerGroupDistribution() then return false end
+    local layer = GuildMap:GetLocalLayer()
+    if not layer or not iRC.RaceGrid or not iRC.RaceGrid.RequestLayerAssignment then return false end
+    -- A membership change is one opportunity to compare the existing books.
+    -- Incoming replies update the cache; they never schedule another query.
+    layerGroupQueryPending = false
+    return iRC.RaceGrid:RequestLayerAssignment(layer)
 end
 
 -- Movable current-layer panel ----------------------------------------------
@@ -533,10 +597,11 @@ local function initializeLayerPanel()
         local layer = GuildMap:GetLocalLayer()
         if layer then
             GameTooltip:AddLine("You are currently on Layer " .. tostring(layer.number) .. " in this zone.", 0.30, 1, 0.35)
-            local ids = knownLayerIds[layerScope(layer.serverId, layer.instanceId, layer.mapId)]
-            pruneLayerIds(ids)
-            local count = 0
-            for _ in pairs(ids or {}) do count = count + 1 end
+            if layer.provisional then
+                GameTooltip:AddLine("Local estimate. No other client has confirmed this number yet.", 1, 0.82, 0.35, true)
+            end
+            local rows = iRC.LayerRegistry and iRC.LayerRegistry:Export(layer.serverId, layer.mapId) or {}
+            local count = #rows
             if count > 0 then
                 GameTooltip:AddLine("Layer identities observed in this zone: " .. tostring(count), 0.68, 0.68, 0.68)
             end
@@ -544,8 +609,8 @@ local function initializeLayerPanel()
             GameTooltip:AddLine(pendingLocalLayer.waitingForCombat
                 and "Layer detection is paused until combat ends."
                 or (pendingLocalLayer.waitingForChannel
-                    and "Waiting to join iRCComms before assigning this zone's layer number."
-                    or "Checking iRCComms for this zone's existing layer number."), 1, 0.82, 0.35, true)
+                    and "Waiting for layer sharing to become available."
+                    or "Checking other clients for this zone's existing layer number."), 1, 0.82, 0.35, true)
         elseif layerTransitioning then
             GameTooltip:AddLine("Layer transfer detected. Waiting for fresh nearby NPC evidence.", 1, 0.82, 0.35, true)
         else
@@ -601,13 +666,13 @@ function GuildMap:UpdateLocalLayerDisplay()
     if mapControls and mapControls.layerLabel then
         if layer then
             mapControls.layerLabel:SetText("Current zone layer: " .. tostring(layer.number))
-            mapControls.layerLabel:SetTextColor(0.30, 1, 0.35, 1)
+            mapControls.layerLabel:SetTextColor(layer.provisional and 1 or 0.30, layer.provisional and 0.82 or 1, 0.35, 1)
         elseif pendingLocalLayer then
             mapControls.layerLabel:SetText(pendingLocalLayer.waitingForCombat
                 and "Current zone layer: paused during combat"
                 or (pendingLocalLayer.waitingForChannel
-                    and "Current zone layer: waiting for iRCComms..."
-                    or "Current zone layer: checking iRCComms..."))
+                    and "Current zone layer: waiting for sharing..."
+                    or "Current zone layer: checking other clients..."))
             mapControls.layerLabel:SetTextColor(1, 0.82, 0.35, 1)
         elseif layerTransitioning then
             mapControls.layerLabel:SetText("Current zone layer: transitioning...")
@@ -620,15 +685,16 @@ function GuildMap:UpdateLocalLayerDisplay()
     if layerPanel then
         local waiting = pendingLocalLayer or layerTransitioning
         layerPanel.value:SetText(layer and tostring(layer.number) or (waiting and "..." or "--"))
-        layerPanel.value:SetTextColor(layer and 0.30 or (waiting and 1 or 0.72),
-            layer and 1 or (waiting and 0.82 or 0.72), layer and 0.35 or (waiting and 0.35 or 0.72))
+        local provisional = layer and layer.provisional
+        layerPanel.value:SetTextColor(layer and (provisional and 1 or 0.30) or (waiting and 1 or 0.72),
+            layer and (provisional and 0.82 or 1) or (waiting and 0.82 or 0.72), layer and 0.35 or (waiting and 0.35 or 0.72))
         layerPanel:SetShown(shouldShowLayerPanel())
     end
 end
 
 -- Layer-number agreement ----------------------------------------------------
 
--- A candidate is assigned only after local evidence and the short iRCComms
+-- A candidate is assigned only after local evidence and the short shared
 -- lookup complete. Tokens make callbacks from an older scan harmless.
 local function finalizeLocalLayerAssignment(token)
     local candidate = pendingLocalLayer
@@ -645,19 +711,15 @@ local function finalizeLocalLayerAssignment(token)
         end
         return false
     end
-    pendingLocalLayer = nil
     if currentPlayerMapId() ~= candidate.mapId then return false end
     local number = getAssignedLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId)
     if not number then
-        local bestNumber, bestVotes = nil, 0
-        for reportedNumber, votes in pairs(candidate.replies or {}) do
-            if votes > bestVotes or votes == bestVotes and (not bestNumber or reportedNumber < bestNumber) then
-                bestNumber, bestVotes = reportedNumber, votes
-            end
-        end
-        number = bestNumber or allocateLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId)
-        rememberLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, number, nil, true)
+        local owner, readable = safeGroupValue(iRC.GetPlayerName, iRC)
+        if not readable or type(owner) ~= "string" or owner == "" then return false end
+        number = claimLayerNumber(candidate.zoneUID, candidate.serverId, candidate.mapId, nil, iRC:NormalizeName(owner))
     end
+    if not number then return false end
+    pendingLocalLayer = nil
     normalizeLayerUsers(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, number)
     localLayer = {
         zoneUID = candidate.zoneUID,
@@ -669,10 +731,10 @@ local function finalizeLocalLayerAssignment(token)
         mapId = candidate.mapId,
         source = candidate.source,
         seenAt = candidate.seenAt,
-        provisional = (candidate.replyCount or 0) == 0,
+        provisional = not candidate.registryConfirmed,
     }
-    iRC:DebugMsg("Local layer assigned after iRCComms lookup: route=" .. tostring(candidate.layerSwapId)
-        .. ", layer=" .. tostring(number) .. ", replies=" .. tostring(candidate.replyCount or 0)
+    iRC:DebugMsg("Local layer assigned after registry lookup: route=" .. tostring(candidate.layerSwapId)
+        .. ", layer=" .. tostring(number) .. ", registry confirmed=" .. tostring(candidate.registryConfirmed == true)
         .. (localLayer.provisional and "; using a local estimate." or "."), 3)
     GuildMap:UpdateLocalLayerDisplay()
     GuildMap:BroadcastLocalLayer(true)
@@ -705,14 +767,10 @@ local function continueLocalLayerAssignment(token)
         return false
     end
     candidate.waitingForChannel = nil
-    local knownNumber = getAssignedLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId)
-    if knownNumber and not candidate.forceQuery then
-        rememberLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, knownNumber)
-        candidate.replies, candidate.replyCount = { [knownNumber] = 1 }, 1
-        return finalizeLocalLayerAssignment(token)
-    end
+    if candidate.requestedAssignment then return finalizeLocalLayerAssignment(token) end
     GuildMap:UpdateLocalLayerDisplay()
     if iRC.RaceGrid.RequestLayerAssignment then iRC.RaceGrid:RequestLayerAssignment(candidate) end
+    layerGroupQueryPending = false
     candidate.requestedAssignment = true
     candidate.assignmentReadyAt = (GetTime and GetTime() or 0) + LAYER_ASSIGNMENT_WAIT
     if C_Timer and C_Timer.After then
@@ -728,35 +786,13 @@ local function beginLocalLayerAssignment(candidate)
         return false
     end
     local token = {}
-    candidate.token, candidate.replies, candidate.responders, candidate.replyCount = token, {}, {}, 0
-    if candidate.initialNumber then
-        candidate.replies[candidate.initialNumber] = 1
-        candidate.replyCount = 1
-    end
+    candidate.token = token
     pendingLocalLayer = candidate
     layerTransitioning = false
     layerTransitionBroadcastPending = false
     localLayer = nil
     GuildMap:UpdateLocalLayerDisplay()
     continueLocalLayerAssignment(token)
-    return true
-end
-
-function GuildMap:ReceiveLayerAssignment(parts, sender)
-    local candidate = pendingLocalLayer
-    if not candidate or type(parts) ~= "table" or tostring(parts[2] or "") ~= LAYER_WIRE_VERSION then return false end
-    local zoneUID, serverId = tonumber(parts[3]), tonumber(parts[4])
-    local instanceId, mapId, number = tonumber(parts[5]), tonumber(parts[6]), tonumber(parts[7])
-    local routeId = tostring(parts[8] or "")
-    if zoneUID ~= candidate.zoneUID or serverId ~= candidate.serverId
-        or instanceId ~= candidate.instanceId or mapId ~= candidate.mapId
-        or routeId ~= candidate.layerSwapId or not number or number < 1 or number > 99
-        or number ~= math.floor(number) then return false end
-    local senderKey = iRC:NormalizeName(sender)
-    if senderKey == "" or candidate.responders[senderKey] then return false end
-    candidate.responders[senderKey] = true
-    candidate.replies[number] = (candidate.replies[number] or 0) + 1
-    candidate.replyCount = (candidate.replyCount or 0) + 1
     return true
 end
 
@@ -787,7 +823,11 @@ function GuildMap:ObserveLocalLayer(unit, source)
     local observedAt = GetTime and GetTime() or 0
     if localLayer and localLayer.layerSwapId == routeId and localLayer.mapId == mapId then
         localLayer.seenAt = observedAt
-        localLayer.number = getLayerNumber(zoneUID, serverId, instanceId, mapId)
+        local owner, readable = safeGroupValue(iRC.GetPlayerName, iRC)
+        if readable and type(owner) == "string" and owner ~= "" then
+            claimLayerNumber(zoneUID, serverId, mapId, localLayer.number, iRC:NormalizeName(owner))
+        end
+        localLayer.number = getLayerNumber(zoneUID, serverId, instanceId, mapId) or localLayer.number
         return true
     end
     if pendingLocalLayer and pendingLocalLayer.layerSwapId == routeId
@@ -904,53 +944,38 @@ function GuildMap:ReceiveLayerState(parts, sender)
     local ids = knownLayerIds[scope]
     if not ids then ids = {}; knownLayerIds[scope] = ids end
     pruneLayerIds(ids)
-    local registryChanged = ids[zoneUID] == nil
     rememberLayerId(ids, zoneUID)
     for rawId in tostring(parts[8] or ""):gmatch("%d+") do
         local knownId = tonumber(rawId)
         if knownId and knownId > 0 and not ids[knownId] then
             rememberLayerId(ids, knownId)
-            registryChanged = true
         end
     end
-    -- A different friendly number is not evidence of a different layer when
-    -- the raw identity matches. It only means the clients built their local
-    -- number caches in a different order.
-    if pendingLocalLayer and pendingLocalLayer.zoneUID == zoneUID
-        and pendingLocalLayer.serverId == serverId
-        and pendingLocalLayer.mapId == mapId then
-        self:ReceiveLayerAssignment({ "LAYER_ASSIGN", LAYER_WIRE_VERSION, tostring(zoneUID), tostring(serverId),
-            tostring(pendingLocalLayer.instanceId), tostring(mapId), tostring(reportedNumber), layerSwapId }, sender)
-    end
-    local canonicalNumber = canonicalLayerNumber(zoneUID, serverId, instanceId, mapId, reportedNumber)
+    -- A bare state locates this peer, but is not an assignment claim. Only a
+    -- registry snapshot carries the original owner and observation times.
     local senderKey = iRC:NormalizeName(sender)
+    if senderKey == "" then return false end
+    local canonicalNumber = getAssignedLayerNumber(zoneUID, serverId, instanceId, mapId)
     if senderKey ~= "" then
         layerUsers[senderKey] = {
-            -- Raw layer identity is authoritative. Friendly numbers can differ
-            -- between client caches, so every matching identity is normalized
-            -- to one stable number on this viewer.
-            name = sender, zoneUID = zoneUID, number = canonicalNumber,
+            -- The raw route identifies the physical layer; the shared book
+            -- supplies the display number for every player on that route.
+            name = sender, zoneUID = zoneUID, number = canonicalNumber or reportedNumber,
+            reportedNumber = reportedNumber, provisional = canonicalNumber == nil,
             layerSwapId = layerSwapId,
             serverId = serverId, instanceId = instanceId, mapId = mapId,
             seenAt = GetTime and GetTime() or 0,
         }
         saveLayerUser(senderKey, layerUsers[senderKey])
-        normalizeLayerUsers(zoneUID, serverId, instanceId, mapId, canonicalNumber)
-        if canonicalNumber ~= reportedNumber then
+        if canonicalNumber then normalizeLayerUsers(zoneUID, serverId, instanceId, mapId, canonicalNumber) end
+        if canonicalNumber and canonicalNumber ~= reportedNumber then
             iRC:DebugMsg("Normalized " .. iRC:FormatPlayerName(sender) .. " from reported Layer "
                 .. tostring(reportedNumber) .. " to Layer " .. tostring(canonicalNumber)
                 .. " because the raw layer identity matches.", 3)
         end
         self:UpdatePins(true)
     end
-    if localLayer and localLayer.zoneUID == zoneUID and localLayer.serverId == serverId
-        and localLayer.mapId == mapId then
-        localLayer.number = getLayerNumber(localLayer.zoneUID, serverId, instanceId, mapId, false)
-        self:UpdateLocalLayerDisplay()
-        if registryChanged and C_Timer and C_Timer.After then
-            C_Timer.After(1 + math.random() * 2, function() GuildMap:BroadcastLocalLayer(false) end)
-        end
-    end
+    self:OnLayerRegistryMerged(serverId, mapId, false)
     return true
 end
 
@@ -1054,8 +1079,9 @@ function GuildMap:GetUserLayer(name)
         return nil
     end
     if entry.zoneUID and entry.serverId and entry.instanceId and entry.mapId then
-        local canonicalNumber = canonicalLayerNumber(entry.zoneUID, entry.serverId,
-            entry.instanceId, entry.mapId, entry.number)
+        -- A saved viewer alias is not a new wire claim.
+        local canonicalNumber = getAssignedLayerNumber(entry.zoneUID, entry.serverId,
+            entry.instanceId, entry.mapId)
         if canonicalNumber and entry.number ~= canonicalNumber then
             entry.number = canonicalNumber
             saveLayerUser(senderKey, entry)
@@ -1072,6 +1098,8 @@ function GuildMap:ReceiveLayerTransition(parts, sender)
     if not mapId or mapId <= 0 or mapId ~= math.floor(mapId) or senderKey == "" then return false end
     local entry = self:GetUserLayer(sender) or { name = sender, mapId = mapId }
     entry.name, entry.mapId = sender, mapId
+    entry.zoneUID, entry.serverId, entry.instanceId, entry.layerSwapId, entry.number = nil, nil, nil, nil, nil
+    savedLayerUsers()[senderKey] = nil
     entry.transitioning, entry.stale = true, nil
     entry.transitioningUntil = (GetTime and GetTime() or 0) + LAYER_TRANSITION_LIFETIME
     entry.seenAt = GetTime and GetTime() or 0
@@ -1523,11 +1551,9 @@ end
 
 local function groupedMembers()
     local members = {}
-    local prefix, count = IsInRaid() and "raid" or "party", IsInRaid() and GetNumGroupMembers() or GetNumSubgroupMembers()
-    for index = 1, count do
-        local name = GetUnitName(prefix .. index, true)
-        if name then members[iRC:NormalizeName(name)] = true end
-    end
+    if not layerGroup.valid then GuildMap:RefreshLayerGroup() end
+    local source = layerGroup.valid and layerGroup.members or lastGroupedMembers
+    for name in pairs(source) do members[name] = true end
     return members
 end
 
@@ -2036,14 +2062,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if initialized then return end
         initialized = true
+        GuildMap:RefreshLayerGroup()
         initializeLayerPanel()
         GuildMap:UpdateLocalLayerDisplay()
         if not layerPanelTicker and C_Timer and C_Timer.NewTicker then
             layerPanelTicker = C_Timer.NewTicker(15, function()
                 broadcastLayerTransition()
-                if not GuildMap:GetLocalLayer() then GuildMap:RefreshLocalLayerEvidence() end
                 GuildMap:UpdateLocalLayerDisplay()
-                GuildMap:BroadcastLocalLayer(false)
             end)
         end
         if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_WorldMap") then armMapInitialization() end
@@ -2079,6 +2104,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local unit = ...
         GuildMap:ObserveLocalLayer(unit, "nameplate")
     elseif event == "PLAYER_REGEN_ENABLED" then
+        if layerGroupRefreshPending then GuildMap:RefreshLayerGroup() end
         if positionDeferredDuringCombat then
             positionDeferredDuringCombat = nil
             -- Combat is over, so live map coordinates are safe again. Bypass
@@ -2113,7 +2139,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
         else
             GuildMap:RefreshLocalLayerEvidence()
         end
+        queryNewLayerGroup()
     elseif event == "GROUP_ROSTER_UPDATE" then
+        GuildMap:RefreshLayerGroup()
+        queryNewLayerGroup()
         -- Remove newly grouped members immediately, even if the full map
         -- refresh is deferred by combat low-traffic mode.
         if iRC:IsForeverClient() and layerScanBlockedByCombat() then
@@ -2136,6 +2165,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 or not layerNumber or layerNumber < 1 or layerNumber > 99 then return end
             local senderKey = iRC:NormalizeName(sender)
             local entry = layerUsers[senderKey] or {}
+            if entry.mapId ~= layerMapId or entry.transitioning or entry.stale then
+                -- MAP_LAYER carries a number only. It cannot reuse a raw
+                -- identity from a different zone or before a shard transfer.
+                entry.zoneUID, entry.serverId, entry.instanceId, entry.layerSwapId = nil, nil, nil, nil
+                savedLayerUsers()[senderKey] = nil
+            end
             local canonicalNumber = entry.zoneUID and getAssignedLayerNumber(entry.zoneUID,
                 entry.serverId, entry.instanceId, layerMapId) or nil
             entry.name, entry.mapId, entry.number = sender, layerMapId, canonicalNumber or layerNumber

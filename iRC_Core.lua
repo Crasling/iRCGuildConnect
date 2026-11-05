@@ -30,7 +30,7 @@ iRC.Prefix = "iRCConnV1"
 -- Independent versions for the public cross-guild transports. Third-party
 -- LayerSwap packets and the separate guild-map position schema are independent.
 iRC.GridWireVersion = "7"
-iRC.LayerWireVersion = "6"
+iRC.LayerWireVersion = "7"
 iRC.AdminWireVersion = "6"
 -- Testing-only controls are locked to exact full character names. Forever may
 -- transport the separating space as a hyphen; NormalizeName handles that wire
@@ -314,10 +314,13 @@ local function queueSize(head, tail)
     return math.max(0, tail - head + 1)
 end
 
-local function trafficPriority(kind)
+local function trafficPriority(kind, message)
     if kind == "RULES_ACK" or kind == "GROUP_VIOLATION_ACK"
         or kind == "GUILD_ACTIVATION" or kind == "GUILD_ACTIVATION_REQUEST" then return "ALERT" end
-    if kind == "MAP_POS" or kind == "LAYER_STATE" or kind == "CACHE_DATA"
+    -- Let other layer responders see that a snapshot has started before its
+    -- remaining chunks wait behind ordinary bulk traffic.
+    if kind == "LAYER_BOOK" and message and message:match("^LAYER_BOOK\t[^\t]+\t[^\t]+\t[^\t]+\t[^\t]+\t1\t") then return "NORMAL" end
+    if kind == "MAP_POS" or kind == "LAYER_STATE" or kind == "LAYER_BOOK" or kind == "CACHE_DATA"
         or kind == "GUILD_REPORT" or kind == "GUILD_CLASS_BREAKDOWN" then return "BULK" end
     return "NORMAL"
 end
@@ -326,6 +329,8 @@ local function replaceableTrafficLifetime(kind)
     if kind == "MAP_POS" then return 10 end
     if kind == "LAYER_STATE" then return 20 end
     if kind == "LAYER_REQUEST" or kind == "LAYER_ASSIGN" then return 5 end
+    if kind == "LAYER_QUERY" then return 8 end
+    if kind == "LAYER_BOOK" or kind == "LAYER_MISSING" then return 300 end
     if kind == "LAYER_TRANSITION" or kind == "ICON_REQ" then return 15 end
     if kind == "HELLO" then return 30 end
 end
@@ -396,7 +401,9 @@ local function chatMessagingLocked()
 end
 
 local WHISPER_OFFLINE_COOLDOWN = 300
+local ADDON_PEER_FRESHNESS = 30
 local whisperTargets, whisperTargetCount = {}, 0
+local recentAddonPeers, recentPeerOrder, recentPeerCursor = {}, {}, 0
 
 local function whisperTargetKey(target)
     if iRC:IsSecretValue(target) or type(target) ~= "string" then return "" end
@@ -405,22 +412,29 @@ local function whisperTargetKey(target)
     return target:match("^%s*(.-)%s*$"):lower()
 end
 
-local function rememberWhisperAttempt(prefix, kind, target)
+local function whisperTargetState(target)
     local key = whisperTargetKey(target)
     if key == "" then return end
-    local now = GetTime and GetTime() or 0
     local state = whisperTargets[key]
     if not state then
         if whisperTargetCount >= 512 then
             local oldestKey, oldestAt
             for oldKey, entry in pairs(whisperTargets) do
-                if not oldestAt or entry.at < oldestAt then oldestKey, oldestAt = oldKey, entry.at end
+                local activeAt = math.max(entry.at or -math.huge, entry.onlineAt or -math.huge)
+                if not oldestAt or activeAt < oldestAt then oldestKey, oldestAt = oldKey, activeAt end
             end
             if oldestKey then whisperTargets[oldestKey] = nil; whisperTargetCount = whisperTargetCount - 1 end
         end
         state = {}
         whisperTargets[key], whisperTargetCount = state, whisperTargetCount + 1
     end
+    return state
+end
+
+local function rememberWhisperAttempt(prefix, kind, target)
+    local state = whisperTargetState(target)
+    if not state then return end
+    local now = GetTime and GetTime() or 0
     state.at, state.prefix, state.kind, state.target = now, prefix, kind, target
 end
 
@@ -429,12 +443,43 @@ function iRC:IsAddonWhisperTargetUnavailable(target)
     return state ~= nil and (state.unavailableUntil or 0) > (GetTime and GetTime() or 0)
 end
 
+function iRC:IsRecentAddonPeer(target)
+    local seenAt = recentAddonPeers[whisperTargetKey(target)]
+    local now = GetTime and GetTime() or 0
+    return seenAt ~= nil and now >= seenAt and now - seenAt <= ADDON_PEER_FRESHNESS
+        and not self:IsAddonWhisperTargetUnavailable(target)
+end
+
+local lastWhisperSkipAt
+local function skipBackgroundWhisper(prefix, kind, target)
+    local reason
+    if prefix == "iRCLayerV1" and (kind == "LAYER_STATE" or kind == "LAYER_TRANSITION") then
+        reason = "routine layer updates use guild/group channels"
+    elseif (prefix == "iRCLayerV1" and (kind == "LAYER_REQUEST" or kind == "LAYER_ASSIGN")
+        or prefix == "iRCIconV1" and kind == "ICON_REQ") and not iRC:IsRecentAddonPeer(target) then
+        reason = "no recent iRC contact"
+    end
+    if not reason then return false end
+    if iRC.Diagnostics then iRC.Diagnostics:Trace("WHISPER_SKIP", prefix, kind, target or "", reason) end
+    local key, now = tostring(prefix) .. "/" .. tostring(kind) .. ": " .. reason, GetTime and GetTime() or 0
+    if not lastWhisperSkipAt or now - lastWhisperSkipAt >= 10 then
+        lastWhisperSkipAt = now
+        iRC:DebugMsg("Skipped addon whisper for " .. key .. ".", 3)
+    end
+    return true
+end
+
+local function skipLayerExchange(prefix, kind, message, distribution, target)
+    if prefix ~= "iRCLayerV1" or kind ~= "LAYER_QUERY" and kind ~= "LAYER_BOOK" and kind ~= "LAYER_MISSING" then return false end
+    return not (iRC.LayerSync and iRC.LayerSync:AllowsPacket(kind, message, distribution, target))
+end
+
 local function markWhisperTargetOffline(target)
     local state = whisperTargets[whisperTargetKey(target)]
     local now = GetTime and GetTime() or 0
     -- Only correlate errors with our own recent addon sends. Ordinary whispers
     -- remain untouched, and the original system error stays visible.
-    if not state or now - state.at > WHISPER_OFFLINE_COOLDOWN or (state.unavailableUntil or 0) > now
+    if not state or not state.at or now - state.at > WHISPER_OFFLINE_COOLDOWN or (state.unavailableUntil or 0) > now
         or (state.onlineAt or -1) > state.at then return end
     state.unavailableUntil = now + WHISPER_OFFLINE_COOLDOWN
     if iRC.Diagnostics then iRC.Diagnostics:Trace("WHISPER_OFFLINE", state.prefix, state.kind, state.target) end
@@ -456,10 +501,22 @@ local function readWhisperOfflineError(message)
 end
 
 local function rememberWhisperTargetOnline(sender)
-    local state = whisperTargets[whisperTargetKey(sender)]
+    local key = whisperTargetKey(sender)
+    if key == "" then return end
+    local now = GetTime and GetTime() or 0
+    -- Keep frequent incoming position/profile updates constant-time, even in
+    -- large guilds. Evicting an old peer simply makes discovery wait for it.
+    if recentAddonPeers[key] == nil then
+        recentPeerCursor = recentPeerCursor % 1024 + 1
+        local previous = recentPeerOrder[recentPeerCursor]
+        if previous then recentAddonPeers[previous] = nil end
+        recentPeerOrder[recentPeerCursor] = key
+    end
+    recentAddonPeers[key] = now
+    local state = whisperTargets[key]
     if state then
         state.unavailableUntil = nil
-        state.onlineAt = GetTime and GetTime() or 0
+        state.onlineAt = now
     end
 end
 
@@ -468,8 +525,10 @@ local function sendAddonTrafficNow(prefix, message, distribution, target)
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
     if chatMessagingLocked() then return false, true end
     local kind = message:match("^([A-Z][A-Z0-9_]*)") or "other"
+    if skipLayerExchange(prefix, kind, message, distribution, target) then return false end
     if distribution == "WHISPER" then
         if iRC:IsAddonWhisperTargetUnavailable(target) then return false end
+        if skipBackgroundWhisper(prefix, kind, target) then return false end
         rememberWhisperAttempt(prefix, kind, target)
     end
     local ok, result = pcall(C_ChatInfo.SendAddonMessage, prefix, message, distribution, target)
@@ -478,6 +537,9 @@ local function sendAddonTrafficNow(prefix, message, distribution, target)
     -- WoW returns an enum, not a boolean. Nonzero error codes are truthy in
     -- Lua, so testing only the return value silently discarded failed sends.
     local sent = ok and readable and (result == true or result == (results.Success or 0))
+    if sent and prefix == "iRCLayerV1" and iRC.LayerSync and iRC.LayerSync.OnPacketSent then
+        iRC.LayerSync:OnPacketSent(kind, message, distribution, target)
+    end
     local retryable = ok and readable and (result == (results.AddonMessageThrottle or 3)
         or result == (results.ChannelThrottle or 8) or result == (results.AddOnMessageLockdown or 11))
     if distribution == "WHISPER" and ok and readable and result == (results.TargetOffline or 12) then
@@ -578,6 +640,9 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         if self.Diagnostics then self.Diagnostics:Trace("OVERSIZED", prefix, #message, distribution, target or "") end
         return false
     end
+    local kind = message:match("^([A-Z][A-Z0-9_]*)") or ""
+    if skipLayerExchange(prefix, kind, message, distribution, target) then return false end
+    if distribution == "WHISPER" and skipBackgroundWhisper(prefix, kind, target) then return false end
     local now = GetTime and GetTime() or 0
     local guildKey = self:GetGuildKey()
     local readyAt = tonumber(self.StartupTrafficReadyAt) or 0
@@ -587,9 +652,8 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         end)
         return true
     end
-    local kind = message:match("^([A-Z][A-Z0-9_]*)") or ""
     if self:IsPerformanceMode() and C_Timer and C_Timer.After then
-        local priority = trafficPriority(kind)
+        local priority = trafficPriority(kind, message)
         local immediatePacket = { prefix = prefix, message = message, distribution = distribution, target = target }
         local immediateCost = outgoingPacketCost(immediatePacket)
         local retryStartedAt
@@ -645,7 +709,7 @@ local INCOMING_PREFIX_POLICIES = {
     [iRC.Prefix] = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     iRCGFRoster = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     iRCGridV1 = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
-    iRCLayerV1 = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
+    iRCLayerV1 = { distributions = { GUILD = true, PARTY = true, RAID = true, WHISPER = true, CHANNEL = true } },
     iRCAdminV1 = { distributions = { WHISPER = true, CHANNEL = true } },
     iRCIconV1 = { distributions = { WHISPER = true } },
     LayerSwap = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
@@ -668,12 +732,12 @@ local INCOMING_SCOPE_KINDS = {
     ["chat-icons"] = { ICON_REQ = true, ICON_STATUS = true },
     ["race-grid"] = {
         CACHE_DATA = true, CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
-        GUILD_DESC = true, GUILD_REPORT = true, GUILD_REPORT_ACK = true,
+        GUILD_DESC = true, GUILD_REPORT = true,
     },
     ["race-grid-channel"] = {
         GUILD_CLASS_BREAKDOWN = true, GUILD_DESC = true, GUILD_REPORT = true,
     },
-    ["race-layer"] = { LAYER_ASSIGN = true, LAYER_REQUEST = true, LAYER_STATE = true, LAYER_TRANSITION = true },
+    ["race-layer"] = { LAYER_STATE = true, LAYER_TRANSITION = true, LAYER_QUERY = true, LAYER_BOOK = true, LAYER_MISSING = true },
     ["race-layer-channel"] = { LAYER_STATE = true },
     ["race-admin"] = { ADMIN_PRESENCE_REQUEST = true, ADMIN_PRESENCE_RESPONSE = true },
     ["race-admin-channel"] = { ADMIN_PRESENCE_REQUEST = true },
@@ -682,6 +746,7 @@ local INCOMING_SCOPE_KINDS = {
 -- Incoming traffic filtering ------------------------------------------------
 
 local function incomingTrafficPolicy(kind)
+    if kind == "LAYER_BOOK" then return 240, 10, 0 end
     if kind:find("_REQUEST$", 1, false) then return 3, 10, 1 end
     if kind == "HELLO" or kind == "MAP_POS" or kind == "LAYER_STATE" then return 10, 10, 0.5 end
     if kind == "CACHE_DATA" then return 80, 10, 0 end
@@ -745,6 +810,9 @@ function iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, s
     end
     state.count = state.count + 1
     if duplicateWindow > 0 then state.duplicates[message] = now end
+    -- A chat name or channel roster alone does not prove that an iRC client
+    -- answered. Only packets accepted by a feature's message filter count.
+    if allowedKinds and prefix ~= "LayerSwap" then rememberWhisperTargetOnline(sender) end
     return true
 end
 
@@ -2957,12 +3025,12 @@ iRC.Frame:RegisterEvent("PLAYER_LOGIN")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 iRC.Frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 iRC.Frame:RegisterEvent("CHAT_MSG_SYSTEM")
-iRC.Frame:RegisterEvent("CHAT_MSG_ADDON")
-iRC.Frame:SetScript("OnEvent", function(_, event, loadedName, ...)
+iRC.Frame:SetScript("OnEvent", function(_, event, loadedName)
     if event == "ADDON_LOADED" then
         if loadedName ~= iRC.Name then return end
         savedVariablesReady = true
         local savedConnections = ensureAccountConnectionStore()
+        if iRC.LayerRegistry then iRC.LayerRegistry:AttachStore(iRCDB) end
         for key, connection in pairs(savedConnections) do
             if type(connection) == "table" then savedConnectionKeysAtLoad[key] = true end
         end
@@ -2986,9 +3054,5 @@ iRC.Frame:SetScript("OnEvent", function(_, event, loadedName, ...)
         iRC:LeaveLowTrafficMode()
     elseif event == "CHAT_MSG_SYSTEM" then
         readWhisperOfflineError(loadedName)
-    elseif event == "CHAT_MSG_ADDON" then
-        local message, distribution, sender = ...
-        if not iRC:HasSecretValues(loadedName, message, distribution, sender)
-            and INCOMING_PREFIX_POLICIES[loadedName] then rememberWhisperTargetOnline(sender) end
     end
 end)

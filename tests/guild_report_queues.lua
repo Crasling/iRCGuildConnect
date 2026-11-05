@@ -326,4 +326,20 @@ end
 assert(not grid:IsCacheUpdating(), "interleaved reports complete during combat")
 leaveCombat()
 assert(#errors == 0, table.concat(errors, "\n"))
-print("PASS: cache queues, combat-aware timeouts, all six public packet orders, metadata validation, and metadata expiry")
+assert(#packets("GUILD_REPORT_ACK") == 0, "receiving public guild reports never sends automatic whisper receipts")
+
+-- A queued public report can outlive its author. It must still be saved, with
+-- no attempt to contact the now-offline player after normal or combat work.
+for _, fighting in ipairs({ false, true }) do
+    local report = fixture(fighting and "Offline Combat Guild" or "Offline Public Guild", "Goldmoon Morbus")
+    local before = #sent
+    if fighting then enterCombat() end
+    receive(serialize(report, true), report.name, "CHANNEL")
+    advance(2)
+    assert(stored(report.guildName), "a report is stored without a receipt from an online author")
+    assert(#sent == before, "public report processing sends no reply to its offline author")
+    if fighting then leaveCombat() end
+    advance(16)
+    assert(#sent == before, "no delayed receipt is left behind after processing or combat")
+end
+print("PASS: cache queues, combat-aware timeouts, public packet ordering, metadata validation, and silent public report reception")

@@ -2,6 +2,12 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.2 - Layer & Whisper Fixes
+--------------------------------------------------------------------------------
+[FIXED] Removed unnecessary background whispers
+[FIXED] More consistent layer numbers across guilds, groups, and friends
+[IMPROVED] Clearer display of unconfirmed layer numbers
+
 v0.7.1 - Guild List & Homepage
 --------------------------------------------------------------------------------
 [IMPROVED] Browse guilds in a compact list with expandable details

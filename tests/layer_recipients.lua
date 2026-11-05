@@ -1,13 +1,14 @@
 -- Exercise channel changes against the real layer sender. A display index
 -- belonging to General must never become a source of addon-whisper targets.
-local now, sent, frames, rosterReads = 1000, {}, {}, {}
+local now, sent, frames, rosterReads, recentPeers = 1000, {}, {}, {}, {}
 local guildKey, guildRoster = nil, { { name = "Guild Mate" } }
+local guildDeliveryAccepted = true
 local secret, metadataMode, channelId = {}, nil, 6
 local channels = {
     [1] = { name = "General", members = { "Unrelated Player" } },
     [2] = { name = "iRCCommsV1", members = { "Self Name", "Peer One", "PEER-ONE", "Peer Two" } },
 }
-local env, addon, private = {}, {}, {}
+local env, addon, private = {}, { LayerWireVersion = "7" }, {}
 setmetatable(env, { __index = _G })
 env._G = env
 env.GetTime = function() return now end
@@ -42,13 +43,20 @@ function addon:IsTestAdmin() return true end
 function addon:GetGuildKey() return guildKey end
 function addon:GetGuildRosterSnapshot() return guildRoster end
 function addon:HasSecretValues(...) for index = 1, select("#", ...) do if select(index, ...) == secret then return true end end return false end
-function addon:AcceptIncomingAddonTraffic() return true end
+function addon:AcceptIncomingAddonTraffic(_, _, _, sender)
+    recentPeers[self:NormalizeName(sender)] = now
+    return true
+end
+function addon:IsRecentAddonPeer(name)
+    local seenAt = recentPeers[self:NormalizeName(name)]
+    return seenAt ~= nil and now - seenAt <= 30
+end
 function addon:DebugMsg() end
 function addon:Text(key) return key end
 function addon:SendAddonTraffic(prefix, message, distribution, target)
-    assert(prefix == "iRCLayerV1" and (distribution == "WHISPER" or distribution == "GUILD"), "the layer prefix is preserved")
+    assert(prefix == "iRCLayerV1" and (distribution == "WHISPER" or distribution == "GUILD" or distribution == "PARTY" or distribution == "RAID"), "the layer prefix is preserved")
     sent[#sent + 1] = { target = target, distribution = distribution, message = message }
-    return true
+    return distribution ~= "GUILD" or guildDeliveryAccepted
 end
 assert(loadfile("iRC_RaceGrid.lua", "t", env))("iRC", private)
 local grid, frame = addon.RaceGrid, frames[#frames]
@@ -59,9 +67,8 @@ local function broadcast(expected)
     layer.zoneUID = layer.zoneUID + 1
     layer.layerSwapId = "4621-" .. layer.zoneUID
     local result = grid:RequestLayerAssignment(layer)
-    assert(result == (#expected > 0), "send availability follows the verified iRC roster")
-    assert(#sent == #expected, "send to every unique current peer, excluding ourselves")
-    for index, name in ipairs(expected) do assert(sent[index].target == name, "the intended iRC peer receives the packet") end
+    assert(not result and #sent == 0, "roster names alone never trigger discovery whispers")
+    for _, name in ipairs(expected) do assert(grid:IsKnownChannelMember(name), "membership still follows the verified iRC roster") end
 end
 
 broadcast({ "Peer One", "Peer Two" })
@@ -120,7 +127,7 @@ assert(joined == 1 and grid:IsKnownChannelMember("Rejoined Peer"), "rejoining di
 broadcast({ "Rejoined Peer" })
 
 -- A large channel must not turn routine state updates into a whisper to
--- every listed character. Only lookup bootstrap may use a bounded sample.
+-- every listed character. Unknown names must not receive bootstrap probes.
 env.C_Timer = nil
 channels[4].members = { "Self Name", "Guild Mate" }
 for index = 1, 498 do channels[4].members[#channels[4].members + 1] = "Peer " .. index end
@@ -129,16 +136,15 @@ guildKey = "test guild"
 sent = {}
 assert(grid:BroadcastLayerState(layer))
 assert(#sent == 1 and sent[1].distribution == "GUILD", "one guild packet replaces a 500-member whisper fan-out")
-assert(sent[1].message:match("^LAYER_STATE\t6\t"), "raw layer state keeps its existing format")
+assert(sent[1].message:match("^LAYER_STATE\t7\t"), "raw layer state keeps its existing format")
 sent = {}
 assert(grid:BroadcastLayerTransition(1415))
 assert(#sent == 1 and sent[1].distribution == "GUILD", "transitions do not probe unknown channel members")
 
 layer.zoneUID, layer.layerSwapId = 987, "4621-987"
 sent = {}
-assert(grid:RequestLayerAssignment(layer) and #sent == 3, "a new layer lookup asks at most three of 500 members")
-for _, packet in ipairs(sent) do assert(packet.distribution == "WHISPER" and packet.message:match("^LAYER_REQUEST\t6\t")) end
-assert(not grid:RequestLayerAssignment(layer) and #sent == 3, "repeated same-route calls cannot start a whisper loop")
+assert(not grid:RequestLayerAssignment(layer) and #sent == 0, "none of 500 unknown channel members receives a layer probe")
+assert(not grid:RequestLayerAssignment(layer) and #sent == 0, "repeated unknown lookups remain silent")
 
 local receivedStates, receivedTransitions = {}, {}
 addon.GuildMap = {
@@ -148,7 +154,7 @@ addon.GuildMap = {
     GetAssignedLayerNumber = function() return 4 end,
 }
 local function receive(kind, sender, distribution, mapId)
-    local payload = table.concat({ kind, "6", "123", "4621", "0", tostring(mapId or 1415), "4", "", "4621-123" }, "\t")
+    local payload = table.concat({ kind, "7", "123", "4621", "0", tostring(mapId or 1415), "4", "", "4621-123" }, "\t")
     frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", payload, distribution or "WHISPER", sender)
 end
 receive("LAYER_STATE", "Guild Mate", "GUILD")
@@ -156,23 +162,60 @@ assert(receivedStates[#receivedStates] == "Guild Mate", "guild raw identities ar
 local statesBefore = #receivedStates
 receive("LAYER_STATE", "Peer 1", "GUILD")
 assert(#receivedStates == statesBefore, "a guild-distribution layer packet still requires actual guild membership")
-for index = 1, 5 do receive("LAYER_STATE", "Peer " .. index) end
+for index = 1, 498 do receive("LAYER_STATE", "Peer " .. index) end
 receive("LAYER_STATE", "Peer 6", "WHISPER", 9999)
 local unavailable = "peer 1"
 function addon:IsAddonWhisperTargetUnavailable(name) return self:NormalizeName(name) == unavailable end
 sent = {}
 assert(grid:BroadcastLayerState(layer))
-assert(#sent == 4 and sent[1].distribution == "GUILD", "state reaches the guild and at most three confirmed same-zone peers")
-for index = 2, #sent do
-    assert(sent[index].target ~= "Guild Mate" and sent[index].target ~= "Peer 1" and sent[index].target ~= "Peer 6",
-        "guild, offline-paused, and other-zone recipients do not add background whispers")
-end
-
-local reply = table.concat({ "LAYER_REQUEST", "6", "123", "4621", "0", "1415", "4621-123" }, "\t")
+assert(#sent == 1 and sent[1].distribution == "GUILD", "even confirmed peers in a 500-member channel receive no routine state whispers")
 sent = {}
-frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", reply, "WHISPER", "Peer 2")
-frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", reply, "WHISPER", "Peer 2")
-assert(#sent == 1 and sent[1].message:match("^LAYER_ASSIGN\t6\t"), "old clients receive a valid assignment reply with duplicate-response pacing")
+assert(grid:BroadcastLayerTransition(1415) and #sent == 1 and sent[1].distribution == "GUILD",
+    "even fresh same-zone peers receive no transition whispers")
+guildDeliveryAccepted = false
+sent = {}
+assert(not grid:BroadcastLayerState(layer) and #sent == 1 and sent[1].distribution == "GUILD",
+    "a rejected guild state send cannot fall back to peer whispers")
+sent = {}
+assert(not grid:BroadcastLayerTransition(1415) and #sent == 1 and sent[1].distribution == "GUILD",
+    "a rejected guild transition send cannot fall back to peer whispers")
+guildDeliveryAccepted = true
+local lookups, registryMessages = 0, 0
+addon.LayerSync = {
+    Request = function(_, candidate) assert(candidate.zoneUID == layer.zoneUID); lookups = lookups + 1; return true end,
+    Publish = function() return false end,
+    IsExpectedReply = function() return false end,
+    IsMessage = function(_, kind) return kind == "LAYER_QUERY" or kind == "LAYER_BOOK" or kind == "LAYER_MISSING" end,
+    Receive = function() registryMessages = registryMessages + 1; return true end,
+}
+sent = {}
+assert(grid:RequestLayerAssignment(layer) and lookups == 1 and #sent == 0,
+    "the layer sender delegates one verification to the registry protocol without sampling channel names")
+local query = table.concat({ "LAYER_QUERY", "7", "qabc", "4621", "1415", "987" }, "\t")
+frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", query, "GUILD", "Guild Mate")
+assert(registryMessages == 1, "trusted registry queries reach the dedicated protocol")
+frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", query, "GUILD", "Peer 2")
+assert(registryMessages == 1, "another channel member cannot impersonate guild transport")
+frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", "LAYER_REQUEST\t6\t123\t4621\t0\t1415\t4621-123", "WHISPER", "Peer 2")
+assert(#sent == 0, "old numeric-vote requests never restart direct whisper responses")
+
+local groupDistribution
+function addon.GuildMap:GetLayerGroupDistribution() return groupDistribution end
+function addon.GuildMap:IsLayerGroupMember(name) return name == "Group Peer" end
+groupDistribution = "PARTY"
+sent = {}
+assert(grid:BroadcastLayerState(layer) and #sent == 2 and sent[1].distribution == "GUILD" and sent[2].distribution == "PARTY",
+    "group state uses shared transport without member-by-member whispers")
+receive("LAYER_STATE", "Group Peer", "PARTY")
+assert(receivedStates[#receivedStates] == "Group Peer", "a cross-guild group member's raw state is trusted")
+local groupStates = #receivedStates
+receive("LAYER_STATE", "Peer 2", "PARTY")
+assert(#receivedStates == groupStates, "channel membership alone cannot impersonate a group sender")
+groupDistribution = "RAID"
+sent = {}
+assert(grid:BroadcastLayerTransition(1415) and #sent == 2 and sent[2].distribution == "RAID", "raid transitions use shared transport")
+groupDistribution = nil
+addon.LayerSync = nil
 
 -- Guild layer delivery works even while the hidden channel is unavailable.
 channelId = 0
@@ -182,5 +225,9 @@ assert(grid:IsLayerChannelReady() and grid:BroadcastLayerState(layer))
 assert(#sent == 1 and sent[1].distribution == "GUILD", "guild sharing does not wait for the public channel")
 guildKey = nil
 assert(not grid:IsLayerChannelReady())
+channelId = 6
+sent = {}
+assert(not grid:BroadcastLayerState(layer) and not grid:BroadcastLayerTransition(1415) and #sent == 0,
+    "having peers but no guild never turns routine layer sharing into whispers")
 
-print("PASS: verified channel indexes, bounded 500-member discovery, guild raw layer state, trusted same-zone peers, old replies, and offline guards")
+print("PASS: shared guild/group transports, no whisper fanout, validated channel metadata, registry delegation, and sender trust")
