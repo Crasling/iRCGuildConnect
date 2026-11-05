@@ -5119,7 +5119,7 @@ local function ensurePersonalSettings(frame)
 
     local mapCard = makeCard(mapSection, iRC:Text("PERSONAL_MAP_HEADER"))
     makeToggle(mapCard, iRC:Text("LAYER_PANEL_SHOW"), iRC:Text("PERSONAL_LAYER_PANEL_DESC"),
-        function() return iRC:GetSettings().showLayerPanel ~= false end,
+        function() return iRC:GetSettings().showLayerPanel == true end,
         function(value)
             if iRC.GuildMap then iRC.GuildMap:SetLayerPanelShown(value)
             else iRC:GetSettings().showLayerPanel = value and true or false end

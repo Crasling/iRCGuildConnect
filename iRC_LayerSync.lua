@@ -6,7 +6,7 @@ if not iRC then return end
 -- Relayed observations retain their original age and claim identity.
 local Sync = {}
 iRC.LayerSync = Sync
-local PREFIX, VERSION = "iRCLayerV1", tostring(iRC.LayerWireVersion or "7")
+local PREFIX, VERSION = "iRCLayerV1", tostring(iRC.LayerWireVersion or "8")
 local LIFETIME, CHUNK_SIZE, MAX_PARTS = 300, 120, 192
 local requests, replies, transfers, sentBooks, reconciliations, relays = {}, {}, {}, {}, {}, {}
 local sequence = 0
@@ -40,7 +40,7 @@ end
 local function encode(rows, omitObservation)
     local encoded = {}
     for _, row in ipairs(rows) do
-        encoded[#encoded + 1] = table.concat({ row.zoneUID, row.preferredNumber,
+        encoded[#encoded + 1] = table.concat({ row.identityKey, row.preferredNumber,
             row.createdAt, omitObservation and 0 or row.observedAt, hex(row.owner) }, ",")
     end
     return table.concat(encoded, ";")
@@ -49,10 +49,10 @@ local function decode(value)
     local rows = {}
     if #value > CHUNK_SIZE * MAX_PARTS then return nil end
     for line in value:gmatch("[^;]+") do
-        local id, preferred, created, observed, owner = line:match("^(%d+),(%d+),([%d%.]+),([%d%.]+),(%x+)$")
+        local id, preferred, created, observed, owner = line:match("^([%d%-]+),(%d+),([%d%.]+),([%d%.]+),(%x+)$")
         owner = owner and unhex(owner)
         if not owner or #rows >= 99 then return nil end
-        rows[#rows + 1] = { zoneUID = tonumber(id), preferredNumber = tonumber(preferred),
+        rows[#rows + 1] = { identityKey = id, preferredNumber = tonumber(preferred),
             createdAt = tonumber(created), observedAt = tonumber(observed), owner = owner }
     end
     return rows
@@ -103,12 +103,13 @@ local function transferKey(id, sender, serverId, mapId)
 end
 local function notify(serverId, mapId, rows)
     local confirmed = {}
-    for _, row in ipairs(rows) do confirmed[row.zoneUID] = true end
+    for _, row in ipairs(rows) do confirmed[row.identityKey] = true end
     if iRC.GuildMap and iRC.GuildMap.OnLayerRegistryMerged then iRC.GuildMap:OnLayerRegistryMerged(serverId, mapId, confirmed) end
 end
 local answer
 local function sendBook(id, serverId, mapId, distribution, target, response)
     local rows = iRC.LayerRegistry:Export(serverId, mapId)
+    if iRC.GuildMap and iRC.GuildMap.OnLayerRegistryMerged then iRC.GuildMap:OnLayerRegistryMerged(serverId, mapId, false) end
     local wire, identity = encode(rows), fingerprint(rows)
     if wire == "" then return false end
     local hash, total = checksum(wire), math.ceil(#wire / CHUNK_SIZE)
@@ -192,7 +193,7 @@ function Sync:OnPacketSent(kind, message, distribution, target)
             for _, response in pairs(replies) do
                 if response.serverId == outgoing.serverId and response.mapId == outgoing.mapId
                     and response.distribution == distribution and response.createdAt <= outgoing.startedAt
-                    and iRC.LayerRegistry:GetNumber(response.rawId, outgoing.serverId, outgoing.mapId) then
+                    and iRC.LayerRegistry:GetNumber(response.identityKey, outgoing.serverId, outgoing.mapId) then
                     response.covered = true
                 end
             end
@@ -202,14 +203,14 @@ end
 
 function Sync:Request(layer)
     if type(layer) ~= "table" or not iRC.LayerRegistry then return false end
-    local serverId, mapId, rawId = integer(layer.serverId, 0, 2147483647),
-        integer(layer.mapId, 1, 2147483647), integer(layer.zoneUID, 1, 2147483647)
-    if not serverId or not mapId or not rawId then return false end
+    local serverId, mapId = integer(layer.serverId, 0, 2147483647), integer(layer.mapId, 1, 2147483647)
+    local identityKey = iRC.LayerRegistry:MakeKey(layer.serverId, layer.instanceId, layer.mapId)
+    if not serverId or not mapId or not identityKey then return false end
     clean()
     local id = nonce(false)
-    local request = { serverId = serverId, mapId = mapId, rawId = rawId, peers = {}, peerNames = {}, responders = {}, startedAt = now(), expiresAt = now() + LIFETIME }
+    local request = { serverId = serverId, mapId = mapId, identityKey = identityKey, peers = {}, peerNames = {}, responders = {}, startedAt = now(), expiresAt = now() + LIFETIME }
     requests[id] = request
-    local payload = table.concat({ "LAYER_QUERY", VERSION, id, serverId, mapId, rawId }, "\t")
+    local payload = table.concat({ "LAYER_QUERY", VERSION, id, serverId, mapId, identityKey }, "\t")
     local sent = false
     for _, distribution in ipairs(channels()) do if send(payload, distribution) then sent = true end end
     if iRC.LayerPeers then
@@ -222,7 +223,7 @@ function Sync:Request(layer)
             end)
         end
     end
-    iRC:DebugMsg("Layer registry lookup started for " .. serverId .. "-" .. rawId .. " in map " .. mapId .. ".", 3)
+    iRC:DebugMsg("Estimated layer lookup started for " .. identityKey .. ".", 3)
     return sent or next(request.peers) ~= nil
 end
 
@@ -231,7 +232,8 @@ function Sync:Publish(layer)
     clean()
     local id, latest, sent = nil, -1, false
     for requestId, request in pairs(requests) do
-        if request.serverId == layer.serverId and request.mapId == layer.mapId and request.rawId == layer.zoneUID
+        if request.serverId == layer.serverId and request.mapId == layer.mapId
+            and request.identityKey == iRC.LayerRegistry:MakeKey(layer.serverId, layer.instanceId, layer.mapId)
             and request.startedAt >= latest then id, latest = requestId, request.startedAt end
     end
     id = id or nonce(true)
@@ -241,7 +243,8 @@ function Sync:Publish(layer)
     -- A friend who answered "missing" also receives the newly created row.
     -- Only responders in this still-active lookup may get a private update.
     for requestId, request in pairs(requests) do
-        if request.serverId == layer.serverId and request.mapId == layer.mapId and request.rawId == layer.zoneUID then
+        if request.serverId == layer.serverId and request.mapId == layer.mapId
+            and request.identityKey == iRC.LayerRegistry:MakeKey(layer.serverId, layer.instanceId, layer.mapId) then
             for peerKey in pairs(request.responders) do
                 if sendBook(requestId, layer.serverId, layer.mapId, "WHISPER", request.peerNames[peerKey]) then sent = true end
             end
@@ -256,11 +259,11 @@ answer = function(context)
         if C_Timer and C_Timer.After then C_Timer.After(context.receivingUntil - now(), function() answer(context) end) end
         return
     end
-    if not iRC.LayerRegistry:GetNumber(context.rawId, context.serverId, context.mapId) then
+    if not iRC.LayerRegistry:GetNumber(context.identityKey, context.serverId, context.mapId) then
         if context.distribution == "WHISPER" then
             local contextKey = transferKey(context.id, context.sender, context.serverId, context.mapId) .. ":WHISPER"
             sentBooks[contextKey] = { expiresAt = now() + LIFETIME }
-            send(table.concat({ "LAYER_MISSING", VERSION, context.id, context.serverId, context.mapId, context.rawId }, "\t"), "WHISPER", context.sender)
+            send(table.concat({ "LAYER_MISSING", VERSION, context.id, context.serverId, context.mapId, context.identityKey }, "\t"), "WHISPER", context.sender)
         end
         return
     end
@@ -283,8 +286,8 @@ function Sync:Receive(message, distribution, sender)
     if not id or not id:match("^[qu]%x+$") or #id > 24 or not serverId or not mapId then return false end
     clean()
     if parts[1] == "LAYER_QUERY" then
-        local rawId = integer(parts[6], 1, 2147483647)
-        if not rawId or id:sub(1, 1) ~= "q" then return false end
+        local identityKey = parts[6]
+        if not iRC.LayerRegistry:IsKey(identityKey, serverId, mapId) or id:sub(1, 1) ~= "q" then return false end
         local contextKey = transferKey(id, sender, serverId, mapId)
         if replies[contextKey] then return true end
         if iRC.GuildMap and iRC.GuildMap.RefreshLocalLayerEvidence
@@ -294,7 +297,7 @@ function Sync:Receive(message, distribution, sender)
             iRC.GuildMap:RefreshLocalLayerEvidence()
         end
         local context = { key = contextKey, id = id, sender = sender, distribution = distribution,
-            serverId = serverId, mapId = mapId, rawId = rawId, createdAt = now(), expiresAt = now() + LIFETIME }
+            serverId = serverId, mapId = mapId, identityKey = identityKey, createdAt = now(), expiresAt = now() + LIFETIME }
         replies[contextKey] = context
         scheduleAnswer(context)
         return true
@@ -302,10 +305,10 @@ function Sync:Receive(message, distribution, sender)
     local request = requests[id]
     if distribution == "WHISPER" and not self:IsExpectedReply(message, sender) then return false end
     if parts[1] == "LAYER_MISSING" then
-        if not request or tonumber(parts[6]) ~= request.rawId then return false end
+        if not request or parts[6] ~= request.identityKey then return false end
         if distribution == "WHISPER" then
             request.responders[key(sender)] = true
-            if iRC.LayerRegistry:GetNumber(request.rawId, serverId, mapId) then sendBook(id, serverId, mapId, "WHISPER", sender) end
+            if iRC.LayerRegistry:GetNumber(request.identityKey, serverId, mapId) then sendBook(id, serverId, mapId, "WHISPER", sender) end
         end
         return true
     end
@@ -356,7 +359,7 @@ function Sync:Receive(message, distribution, sender)
     transfers[contextKey] = nil
     if checksum(wire) ~= hash then return false end
     local rows = decode(wire)
-    if not rows or #rows == 0 or not iRC.LayerRegistry:ValidateRows(rows) then return false end
+    if not rows or #rows == 0 or not iRC.LayerRegistry:ValidateRows(rows, mapId) then return false end
     if request and distribution == "WHISPER" then request.responders[key(sender)] = true end
     local previousIdentity = fingerprint(iRC.LayerRegistry:Export(serverId, mapId))
     iRC.LayerRegistry:Merge(serverId, mapId, rows)
@@ -370,7 +373,7 @@ function Sync:Receive(message, distribution, sender)
             and (distribution ~= "WHISPER" and response.distribution == distribution
                 or distribution == "WHISPER" and response.distribution == "WHISPER" and response.id == id and key(response.sender) == key(sender)) then
             response.receivingUntil = nil
-            response.covered = mergedHash == receivedIdentity and iRC.LayerRegistry:GetNumber(response.rawId, serverId, mapId) ~= nil
+            response.covered = mergedHash == receivedIdentity and iRC.LayerRegistry:GetNumber(response.identityKey, serverId, mapId) ~= nil
             exchange = true
         end
     end
@@ -391,7 +394,7 @@ function Sync:Receive(message, distribution, sender)
                 -- does not broadcast the identical correction at once.
                 local responseKey = "merge:" .. id .. ":" .. serverId .. ":" .. mapId .. ":" .. distribution
                 local response = { key = responseKey, id = id, sender = sender, distribution = distribution,
-                    serverId = serverId, mapId = mapId, rawId = rows[1].zoneUID, createdAt = now(), expiresAt = now() + LIFETIME }
+                    serverId = serverId, mapId = mapId, identityKey = rows[1].identityKey, createdAt = now(), expiresAt = now() + LIFETIME }
                 replies[responseKey] = response
                 scheduleAnswer(response)
             end
@@ -443,6 +446,6 @@ function Sync:Receive(message, distribution, sender)
             end
         end
     end
-    iRC:DebugMsg("Layer registry received from " .. tostring(sender) .. ": " .. #rows .. " raw IDs for map " .. mapId .. ".", 3)
+    iRC:DebugMsg("Estimated layer registry received from " .. tostring(sender) .. ": " .. #rows .. " world references for map " .. mapId .. ".", 3)
     return true
 end

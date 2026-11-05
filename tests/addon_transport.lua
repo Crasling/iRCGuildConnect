@@ -225,3 +225,14 @@ state:advance(120)
 assert(state:whisper("CACHE_DATA\t7\trequest\tpart", "Long Report Recipient", "iRCGridV1"),
     "long requested guild report transfers are independent of background peer freshness")
 print("PASS: paced retries, secret guards, offline recovery, no blind probes, no routine layer whispers, and requested report transfers")
+
+state = client({})
+assert(state.addon:GetSettings().showLayerPanel == false, "the experimental panel starts hidden before saved settings are ready")
+state.env.iRCDB.settings = { showLayerPanel = true }
+state:event("ADDON_LOADED", "iRC")
+assert(state.addon:GetSettings().showLayerPanel == false, "old default-on settings are disabled once when upgrading")
+state.addon:GetSettings().showLayerPanel = true
+assert(state.addon:GetSettings().showLayerPanel == true, "manual experimental opt-in survives subsequent settings reads")
+state:event("ADDON_LOADED", "iRC")
+assert(state.addon:GetSettings().showLayerPanel == true, "an existing experimental opt-in is not reset again")
+print("PASS: experimental panel default, upgrade reset, and persistent manual opt-in")

@@ -1177,7 +1177,7 @@ minimapCheck, y = CreateSettingsCheckbox(generalContent, "Show minimap button", 
 _, y = CreateSectionHeader(generalContent, L.GUILD_MAP_PERSONAL_HEADER, y - 4)
 local layerPanelCheck
 layerPanelCheck, y = CreateSettingsCheckbox(generalContent, L.LAYER_PANEL_SHOW, L.LAYER_PANEL_SHOW_DESC, y,
-    function() return iRC:GetSettings().showLayerPanel ~= false end,
+    function() return iRC:GetSettings().showLayerPanel == true end,
     function(value)
         if iRC.GuildMap then iRC.GuildMap:SetLayerPanelShown(value)
         else iRC:GetSettings().showLayerPanel = value and true or false end

@@ -1,3 +1,4 @@
+local function key(instance, server, map) return tostring(server) .. "-" .. tostring(instance) .. "-" .. tostring(map) end
 -- Exercise shared replies with a large audience. A queue deliberately delays
 -- bulk chunks so responders must yield before a full snapshot has arrived.
 local function run(count, queryCount, concurrent, interrupted)
@@ -81,27 +82,27 @@ local function run(count, queryCount, concurrent, interrupted)
         -- timestamp. Those timestamps must not trigger return snapshots.
         if index > 1 and not concurrent then
             for rawId = 100, 108 do
-                addon.LayerRegistry:Claim(rawId, 4621, 1415, 1, "origin", 1800000800,
+                addon.LayerRegistry:Claim(key(rawId, 4621, 1415), 4621, 1415, 1, "origin", 1800000800,
                     1800000900 + index % 90)
             end
         end
     end
-    local layer = { serverId = 4621, mapId = 1415, zoneUID = 100 }
+    local layer = { serverId = 4621, mapId = 1415, instanceId = 100, zoneUID = 2 }
     if concurrent then
         for _, client in ipairs(clients) do assert(client.LayerSync:Request(layer)) end
         advance(2)
         for _, client in ipairs(clients) do
-            client.LayerRegistry:Claim(100, 4621, 1415, 1, client:GetPlayerName(), 1800001002, 1800001002)
+            client.LayerRegistry:Claim(key(100, 4621, 1415), 4621, 1415, 1, client:GetPlayerName(), 1800001002, 1800001002)
             assert(client.LayerSync:Publish(layer))
         end
     else
         for _ = 1, queryCount do assert(clients[1].LayerSync:Request(layer)) end
     end
     advance(20)
-    local expected = clients[1].LayerRegistry:GetNumber(100, 4621, 1415)
+    local expected = clients[1].LayerRegistry:GetNumber(key(100, 4621, 1415), 4621, 1415)
     assert(expected ~= nil, "the requester receives the shared book")
     for _, client in ipairs(clients) do
-        assert(client.LayerRegistry:GetNumber(100, 4621, 1415) == expected, "all clients retain the same numbering")
+        assert(client.LayerRegistry:GetNumber(key(100, 4621, 1415), 4621, 1415) == expected, "all clients retain the same numbering")
         assert(client.LayerRegistry:Export(4621, 1415)[1].owner == clients[1].LayerRegistry:Export(4621, 1415)[1].owner,
             "simultaneous creators converge on the same original claim")
     end

@@ -2,6 +2,11 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.3 - Layer Display
+--------------------------------------------------------------------------------
+[CHANGED] Layer panel is now off by default. Enable it in Personal Settings for testing
+[REMOVED] Layer numbers from guild map pins
+
 v0.7.2 - Layer & Whisper Fixes
 --------------------------------------------------------------------------------
 [FIXED] Removed unnecessary background whispers

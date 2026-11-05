@@ -2,7 +2,8 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 
--- Shared layer claims are merged before assigning the short display numbers.
+-- Shared server/instance/map references receive short estimated layer names.
+-- NPC ZoneUID and spawn GUIDs are client-local and never enter these keys.
 -- Relaying a row never renews its observation time or changes its claim owner.
 local Registry = {}
 iRC.LayerRegistry = Registry
@@ -33,12 +34,33 @@ end
 
 local function identifier(value, minimum)
     value = finite(value)
-    if value and value >= minimum and value == math.floor(value) then return value end
+    if value and value >= minimum and value <= 2147483647 and value == math.floor(value) then return value end
+end
+
+function Registry:MakeKey(serverId, instanceId, mapId)
+    serverId, instanceId, mapId = identifier(serverId, 0), identifier(instanceId, 0), identifier(mapId, 1)
+    if serverId and instanceId and mapId then return serverId .. "-" .. instanceId .. "-" .. mapId end
+end
+
+local function keyParts(value)
+    if not readable(value) or type(value) ~= "string" or #value > 32 then return nil end
+    local serverId, instanceId, mapId = value:match("^(%d+)%-(%d+)%-(%d+)$")
+    serverId, instanceId, mapId = identifier(serverId, 0), identifier(instanceId, 0), identifier(mapId, 1)
+    if serverId and instanceId and mapId and Registry:MakeKey(serverId, instanceId, mapId) == value then
+        return serverId, instanceId, mapId
+    end
+end
+
+function Registry:IsKey(value, serverId, mapId)
+    if not readable(serverId) or not readable(mapId) then return false end
+    local server, _, map = keyParts(value)
+    return server ~= nil and (serverId == nil or server == serverId) and (mapId == nil or map == mapId)
 end
 
 local function scope(serverId, mapId)
     serverId, mapId = identifier(serverId, 0), identifier(mapId, 1)
-    if serverId and mapId then return tostring(serverId) .. ":" .. tostring(mapId) end
+    -- Number all server/instance references together within the same zone.
+    if serverId and mapId then return tostring(mapId) end
 end
 
 local function ownerKey(value)
@@ -49,14 +71,14 @@ end
 
 local function validRow(row, clock)
     if not readable(row) or type(row) ~= "table" then return nil end
-    local id = identifier(row.zoneUID, 1)
+    local id = row.identityKey
     local preferred = identifier(row.preferredNumber, 1)
     local owner = ownerKey(row.owner)
     local created, observed = finite(row.createdAt), finite(row.observedAt)
-    if not id or not preferred or preferred > MAX_ROWS or not owner or not created or not observed
+    if not Registry:IsKey(id) or not preferred or preferred > MAX_ROWS or not owner or not created or not observed
         or created < 0 or observed < 0 or created > clock + CLOCK_TOLERANCE
         or observed > clock + CLOCK_TOLERANCE or clock - observed > ROW_LIFETIME then return nil end
-    return { zoneUID = id, preferredNumber = preferred, owner = owner, createdAt = created, observedAt = observed }
+    return { identityKey = id, preferredNumber = preferred, owner = owner, createdAt = created, observedAt = observed }
 end
 
 local function earlierClaim(a, b)
@@ -69,7 +91,7 @@ end
 local function priority(a, b)
     if a.createdAt ~= b.createdAt then return a.createdAt < b.createdAt end
     if a.owner ~= b.owner then return a.owner < b.owner end
-    return a.zoneUID < b.zoneUID
+    return a.identityKey < b.identityKey
 end
 
 local function rebuild(book)
@@ -80,7 +102,7 @@ local function rebuild(book)
             if a.observedAt ~= b.observedAt then return a.observedAt > b.observedAt end
             return priority(a, b)
         end)
-        for index = MAX_ROWS + 1, #rows do book.rows[rows[index].zoneUID] = nil end
+        for index = MAX_ROWS + 1, #rows do book.rows[rows[index].identityKey] = nil end
         for index = #rows, MAX_ROWS + 1, -1 do rows[index] = nil end
     end
     table.sort(rows, priority)
@@ -91,7 +113,7 @@ local function rebuild(book)
             number = 1
             while used[number] do number = number + 1 end
         end
-        numbers[row.zoneUID], used[number] = number, true
+        numbers[row.identityKey], used[number] = number, true
         local expiresAt = row.observedAt + ROW_LIFETIME
         if not book.nextExpiry or expiresAt < book.nextExpiry then book.nextExpiry = expiresAt end
     end
@@ -127,17 +149,20 @@ local function getBook(serverId, mapId, create)
 end
 
 local function copyRow(row, number)
-    return { zoneUID = row.zoneUID, preferredNumber = row.preferredNumber, owner = row.owner,
+    return { identityKey = row.identityKey, preferredNumber = row.preferredNumber, owner = row.owner,
         createdAt = row.createdAt, observedAt = row.observedAt, number = number }
 end
 
-function Registry:GetNumber(zoneUID, serverId, mapId)
-    zoneUID = identifier(zoneUID, 1)
+function Registry:GetNumber(identityKey, serverId, mapId)
+    -- A zone book can contain several servers. Replies carry the requesting
+    -- server as context, while each row retains its own complete identity.
+    if not self:IsKey(identityKey, nil, mapId) then return nil end
     local book = getBook(serverId, mapId)
-    return zoneUID and book and book.numbers[zoneUID] or nil
+    return identityKey and book and book.numbers[identityKey] or nil
 end
 
-function Registry:Claim(zoneUID, serverId, mapId, preferredNumber, owner, createdAt, observedAt)
+function Registry:Claim(identityKey, serverId, mapId, preferredNumber, owner, createdAt, observedAt)
+    if not self:IsKey(identityKey, serverId, mapId) then return nil end
     local clock = now()
     local book = getBook(serverId, mapId, true)
     if not book then return nil end
@@ -148,30 +173,30 @@ function Registry:Claim(zoneUID, serverId, mapId, preferredNumber, owner, create
         while used[preferredNumber] and preferredNumber <= MAX_ROWS do preferredNumber = preferredNumber + 1 end
         if preferredNumber > MAX_ROWS then preferredNumber = 1 end
     end
-    local incoming = validRow({ zoneUID = zoneUID, preferredNumber = preferredNumber, owner = owner,
+    local incoming = validRow({ identityKey = identityKey, preferredNumber = preferredNumber, owner = owner,
         createdAt = createdAt == nil and clock or createdAt, observedAt = observedAt == nil and clock or observedAt }, clock)
     if not incoming then return nil end
-    local existing = book.rows[incoming.zoneUID]
+    local existing = book.rows[incoming.identityKey]
     if existing then
         if incoming.observedAt > existing.observedAt then
             existing.observedAt = incoming.observedAt
             rebuild(book)
         end
     else
-        book.rows[incoming.zoneUID] = incoming
+        book.rows[incoming.identityKey] = incoming
         rebuild(book)
     end
-    local row = book.rows[incoming.zoneUID]
-    return row and copyRow(row, book.numbers[incoming.zoneUID]) or nil
+    local row = book.rows[incoming.identityKey]
+    return row and copyRow(row, book.numbers[incoming.identityKey]) or nil
 end
 
-function Registry:ValidateRows(rows)
+function Registry:ValidateRows(rows, mapId)
     if not readable(rows) or type(rows) ~= "table" or #rows > MAX_ROWS then return false end
     local clock, seen = now(), {}
     for _, row in ipairs(rows) do
         local valid = validRow(row, clock)
-        if not valid or seen[valid.zoneUID] then return false end
-        seen[valid.zoneUID] = true
+        if not valid or not self:IsKey(valid.identityKey, nil, mapId) or seen[valid.identityKey] then return false end
+        seen[valid.identityKey] = true
     end
     return true
 end
@@ -183,15 +208,15 @@ function Registry:Merge(serverId, mapId, rows)
     local changed = false
     for _, row in ipairs(rows) do
         local incoming = validRow(row, clock)
-        if incoming then
-            local existing = book.rows[incoming.zoneUID]
+        if incoming and self:IsKey(incoming.identityKey, nil, mapId) then
+            local existing = book.rows[incoming.identityKey]
             if not existing then
-                book.rows[incoming.zoneUID], changed = incoming, true
+                book.rows[incoming.identityKey], changed = incoming, true
             else
                 local observedAt = math.max(existing.observedAt, incoming.observedAt)
                 if earlierClaim(incoming, existing) then
                     incoming.observedAt = observedAt
-                    book.rows[incoming.zoneUID], changed = incoming, true
+                    book.rows[incoming.identityKey], changed = incoming, true
                 elseif observedAt > existing.observedAt then
                     existing.observedAt, changed = observedAt, true
                 end
@@ -206,7 +231,7 @@ function Registry:Export(serverId, mapId)
     local book, rows = getBook(serverId, mapId), {}
     if not book then return rows end
     for id, row in pairs(book.rows) do rows[#rows + 1] = copyRow(row, book.numbers[id]) end
-    table.sort(rows, function(a, b) return a.zoneUID < b.zoneUID end)
+    table.sort(rows, function(a, b) return a.identityKey < b.identityKey end)
     return rows
 end
 
@@ -217,15 +242,14 @@ end
 
 function Registry:AttachStore(store)
     if not readable(store) or type(store) ~= "table" then return false end
-    local saved = store.layerNumberBooks
+    local saved = store.worldNumberBooks
     if saved == books then return true end
     if type(saved) == "table" and readable(saved) then
         local count = 0
         for savedScope, savedBook in pairs(saved) do
             if count >= 128 then break end
-            local serverId, mapId
-            if type(savedScope) == "string" then serverId, mapId = savedScope:match("^(%d+):(%d+)$") end
-            if serverId and type(savedBook) == "table" and readable(savedBook)
+            local mapId = type(savedScope) == "string" and savedScope:match("^(%d+)$")
+            if mapId and type(savedBook) == "table" and readable(savedBook)
                 and type(savedBook.rows) == "table" and readable(savedBook.rows) then
                 local rows = {}
                 for _, row in pairs(savedBook.rows) do
@@ -233,11 +257,12 @@ function Registry:AttachStore(store)
                     local valid = type(row) == "table" and validRow(row, now())
                     if valid then rows[#rows + 1] = valid end
                 end
-                self:Merge(tonumber(serverId), tonumber(mapId), rows)
+                self:Merge(0, tonumber(mapId), rows)
                 count = count + 1
             end
         end
     end
-    store.layerNumberBooks = books
+    store.worldNumberBooks = books
+    store.layerNumberBooks = nil
     return true
 end

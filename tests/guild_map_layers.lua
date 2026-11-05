@@ -6,7 +6,7 @@ local guids, timers, frames = {}, {}, {}
 local ready = true
 local secretValue = {}
 local settings = { showLayerPanel = true }
-local addon = { LayerWireVersion = "7", Prefix = "iRCConnV1" }
+local addon = { LayerWireVersion = "8", Prefix = "iRCConnV1" }
 
 function issecretvalue(value) return value == secretValue end
 function GetTime() return now end
@@ -49,7 +49,7 @@ function LibStub(name)
 end
 local private = {}
 assert(loadfile(root .. "iRC_Core.lua"))("iRC", private)
-addon.LayerWireVersion = "7"
+addon.LayerWireVersion = "8"
 
 function addon:GetSettings() return settings end
 function addon:IsForeverClient() return true end
@@ -60,7 +60,7 @@ function addon:DebugMsg() end
 addon.RaceGrid = {
     IsLayerChannelReady = function() return ready end,
     RequestLayerAssignment = function(_, candidate)
-        requests[#requests + 1] = candidate.layerSwapId
+        requests[#requests + 1] = candidate.identityKey
         return true
     end,
     BroadcastLayerState = function(_, layer)
@@ -92,7 +92,7 @@ local function advance(seconds)
     now = target
 end
 local function observe(route, npc)
-    guids.target = "Creature-0-4621-1-" .. route .. "-100-" .. npc
+    guids.target = "Creature-0-4621-" .. route .. "-2-100-" .. npc
     return map:ObserveLocalLayer("target", "target")
 end
 local function evidence(route)
@@ -102,11 +102,11 @@ local function evidence(route)
 end
 
 evidence(111)
-assert(#requests == 1 and requests[1] == "4621-111", "confirmed evidence requests a layer assignment")
+assert(#requests == 1 and requests[1] == "4621-111-1415", "confirmed evidence requests a world reference assignment")
 assert(not map:GetLocalLayer(), "wait for the assignment lookup before showing a layer")
 advance(2)
 local layer = assert(map:GetLocalLayer(), "finish assigning the detected layer outside combat")
-assert(layer.zoneUID == 111 and layer.number == 1, "the detected raw route receives a display number")
+assert(layer.instanceId == 111 and layer.number == 1, "the detected world reference receives a display number")
 assert(layer.provisional == true, "an unanswered bounded lookup remains a local estimate")
 assert(#broadcasts == 1, "the detected layer is shared")
 assert(map:BroadcastLocalLayer(true), "layer sharing is allowed outside combat")
@@ -137,7 +137,7 @@ advance(2)
 assert(not map:GetLocalLayer(), "an assignment that reaches combat must wait")
 combat = false
 events.scripts.OnEvent(events, "PLAYER_REGEN_ENABLED")
-assert(map:GetLocalLayer().zoneUID == 222, "pending assignment resumes after combat")
+assert(map:GetLocalLayer().instanceId == 222, "pending assignment resumes after combat")
 
 map:ClearLocalLayer()
 ready = false
@@ -146,7 +146,7 @@ evidence(333)
 assert(#requests == requestsBefore and not map:GetLocalLayer(), "wait while the layer channel is unavailable")
 ready = true
 advance(3)
-assert(map:GetLocalLayer().zoneUID == 333, "channel readiness resumes assignment and sharing")
+assert(map:GetLocalLayer().instanceId == 333, "channel readiness resumes assignment and sharing")
 
 map:ClearLocalLayer()
 requestsBefore = #requests
@@ -154,7 +154,7 @@ assert(not observe(444, 1) and not observe(444, 1) and not observe(444, 1), "rep
 assert(#requests == requestsBefore, "one repeated NPC cannot trigger assignment")
 assert(not observe(444, 2) and observe(444, 3), "two additional unique NPCs complete the evidence")
 advance(2)
-assert(map:GetLocalLayer().zoneUID == 444, "unique evidence still completes normally")
+assert(map:GetLocalLayer().instanceId == 444, "unique evidence still completes normally")
 
 identitySecret = true
 readsBefore = guidReads
@@ -175,13 +175,13 @@ assert(transitions == 2, "the deferred transfer announcement resumes after comba
 
 map.UpdatePins = function() end
 addon.LayerRegistry:Merge(4621, 1415, {
-    { zoneUID = 111, preferredNumber = 1, owner = "local paladin", createdAt = time() - 20, observedAt = time() },
+    { identityKey = "4621-111-1415", preferredNumber = 1, owner = "local paladin", createdAt = time() - 20, observedAt = time() },
 })
 map:OnLayerRegistryMerged(4621, 1415)
-assert(map:ReceiveLayerState({ "LAYER_STATE", "7", "111", "4621", "0", "1415", "4", "", "4621-111" }, "Guild Peer One"))
-assert(map:ReceiveLayerState({ "LAYER_STATE", "7", "111", "4621", "99", "1415", "7", "", "4621-111" }, "Guild Peer Two"))
+assert(map:ReceiveLayerState({ "LAYER_STATE", "8", "2", "4621", "111", "1415", "4", "", "4621-2" }, "Guild Peer One"))
+assert(map:ReceiveLayerState({ "LAYER_STATE", "8", "4", "4621", "111", "1415", "7", "", "4621-4" }, "Guild Peer Two"))
 local firstPeer, secondPeer = assert(map:GetUserLayer("Guild Peer One")), assert(map:GetUserLayer("Guild Peer Two"))
-assert(firstPeer.number == secondPeer.number and firstPeer.zoneUID == secondPeer.zoneUID,
-    "raw guild identities keep the same layer together despite different reported numbers and NPC instances")
+assert(firstPeer.number == secondPeer.number and firstPeer.zoneUID ~= secondPeer.zoneUID,
+    "shared world references agree despite client-local ZoneUID and reported numbers")
 
 print("PASS: local detection, bounded-lookup fallback, raw guild normalization, sharing, combat/secret guards, channel readiness, unique NPC votes, and transfers")

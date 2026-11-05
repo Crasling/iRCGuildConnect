@@ -8,7 +8,7 @@ local channels = {
     [1] = { name = "General", members = { "Unrelated Player" } },
     [2] = { name = "iRCCommsV1", members = { "Self Name", "Peer One", "PEER-ONE", "Peer Two" } },
 }
-local env, addon, private = {}, { LayerWireVersion = "7" }, {}
+local env, addon, private = {}, { LayerWireVersion = "8" }, {}
 setmetatable(env, { __index = _G })
 env._G = env
 env.GetTime = function() return now end
@@ -136,7 +136,7 @@ guildKey = "test guild"
 sent = {}
 assert(grid:BroadcastLayerState(layer))
 assert(#sent == 1 and sent[1].distribution == "GUILD", "one guild packet replaces a 500-member whisper fan-out")
-assert(sent[1].message:match("^LAYER_STATE\t7\t"), "raw layer state keeps its existing format")
+assert(sent[1].message:match("^LAYER_STATE\t8\t"), "the new estimated layer protocol is versioned separately")
 sent = {}
 assert(grid:BroadcastLayerTransition(1415))
 assert(#sent == 1 and sent[1].distribution == "GUILD", "transitions do not probe unknown channel members")
@@ -154,7 +154,7 @@ addon.GuildMap = {
     GetAssignedLayerNumber = function() return 4 end,
 }
 local function receive(kind, sender, distribution, mapId)
-    local payload = table.concat({ kind, "7", "123", "4621", "0", tostring(mapId or 1415), "4", "", "4621-123" }, "\t")
+    local payload = table.concat({ kind, "8", "123", "4621", "0", tostring(mapId or 1415), "4", "", "4621-123" }, "\t")
     frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", payload, distribution or "WHISPER", sender)
 end
 receive("LAYER_STATE", "Guild Mate", "GUILD")
@@ -191,7 +191,7 @@ addon.LayerSync = {
 sent = {}
 assert(grid:RequestLayerAssignment(layer) and lookups == 1 and #sent == 0,
     "the layer sender delegates one verification to the registry protocol without sampling channel names")
-local query = table.concat({ "LAYER_QUERY", "7", "qabc", "4621", "1415", "987" }, "\t")
+local query = table.concat({ "LAYER_QUERY", "8", "qabc", "4621", "1415", "4621-0-1415" }, "\t")
 frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", query, "GUILD", "Guild Mate")
 assert(registryMessages == 1, "trusted registry queries reach the dedicated protocol")
 frame.OnEvent(frame, "CHAT_MSG_ADDON", "iRCLayerV1", query, "GUILD", "Peer 2")

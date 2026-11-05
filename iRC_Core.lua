@@ -30,7 +30,7 @@ iRC.Prefix = "iRCConnV1"
 -- Independent versions for the public cross-guild transports. Third-party
 -- LayerSwap packets and the separate guild-map position schema are independent.
 iRC.GridWireVersion = "7"
-iRC.LayerWireVersion = "7"
+iRC.LayerWireVersion = "8"
 iRC.AdminWireVersion = "6"
 -- Testing-only controls are locked to exact full character names. Forever may
 -- transport the separating space as a hyphen; NormalizeName handles that wire
@@ -1013,7 +1013,7 @@ local DEFAULT_SETTINGS = {
     showGuildMap = true,
     guildMapPinSize = 12,
     shareGuildMapPosition = true,
-    showLayerPanel = true,
+    showLayerPanel = false,
     layerPanelPoint = "TOP",
     layerPanelRelativePoint = "TOP",
     layerPanelX = 0,
@@ -1602,6 +1602,12 @@ function iRC:GetSettings()
         return startupSettings
     end
     local settings = ensureAccountSettingsStore()
+    -- Retire the old default-on indicator once. A later manual opt-in stays
+    -- enabled across reloads while the experimental reader is being tested.
+    if settings.experimentalLayerPanelInitialized ~= true then
+        settings.showLayerPanel = false
+        settings.experimentalLayerPanelInitialized = true
+    end
     for key, value in pairs(DEFAULT_SETTINGS) do
         if settings[key] == nil then
             settings[key] = value

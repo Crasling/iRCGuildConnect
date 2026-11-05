@@ -16,7 +16,7 @@ local LAYER_PREFIX = "iRCLayerV1"
 local ADMIN_PREFIX = "iRCAdminV1"
 local CHANNEL_NAME = "iRCCommsV1"
 local WIRE_VERSION = tostring(iRC.GridWireVersion or "7")
-local LAYER_WIRE_VERSION = tostring(iRC.LayerWireVersion or "7")
+local LAYER_WIRE_VERSION = tostring(iRC.LayerWireVersion or "8")
 local ADMIN_WIRE_VERSION = tostring(iRC.AdminWireVersion or "6")
 local PACKET_PROTOCOLS = {
     GUILD_REPORT = { prefix = GRID_PREFIX, version = WIRE_VERSION },
@@ -679,7 +679,7 @@ function RaceGrid:BroadcastLayerState(layer)
     local mapId = math.floor(tonumber(layer.mapId) or 0)
     local number = math.max(1, math.min(99, math.floor(tonumber(layer.number) or 1)))
     local layerSwapId = tostring(layer.layerSwapId or (tostring(serverId) .. "-" .. tostring(zoneUID)))
-    if zoneUID <= 0 or serverId < 0 or instanceId < 0 or mapId <= 0 then return false end
+    if zoneUID < 0 or serverId < 0 or instanceId < 0 or mapId <= 0 then return false end
     if layerSwapId ~= tostring(serverId) .. "-" .. tostring(zoneUID) then return false end
     self:EnsureChannel()
 

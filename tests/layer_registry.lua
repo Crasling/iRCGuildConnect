@@ -1,3 +1,4 @@
+local function key(instance, server, map) return tostring(server) .. "-" .. tostring(instance) .. "-" .. tostring(map) end
 -- Independent clients must derive the same display numbers after merging claims.
 local clock, secret = 1800000000, {}
 local function client(clockMode)
@@ -15,11 +16,11 @@ end
 
 local server, map = 4621, 1415
 local fallback = client("time")
-assert(fallback:Claim(1, server, map, 1, "fallback", clock + 999, clock + 999), "local epoch clock is used when server time is unavailable")
+assert(fallback:Claim(key(1, server, map), server, map, 1, "fallback", clock + 999, clock + 999), "local epoch clock is used when server time is unavailable")
 fallback = client("monotonic")
-assert(fallback:Claim(1, server, map, 1, "fallback", 100, 100), "test clients can fall back to their monotonic clock")
+assert(fallback:Claim(key(1, server, map), server, map, 1, "fallback", 100, 100), "test clients can fall back to their monotonic clock")
 local function row(id, preferred, owner, created, observed)
-    return { zoneUID = id, preferredNumber = preferred, owner = owner,
+    return { identityKey = type(id) == "number" and key(id, server, map) or id, preferredNumber = preferred, owner = owner,
         createdAt = created or clock, observedAt = observed or clock }
 end
 local function same(a, b)
@@ -28,7 +29,7 @@ local function same(a, b)
     local used = {}
     for index, entry in ipairs(first) do
         local other = second[index]
-        assert(entry.zoneUID == other.zoneUID and entry.preferredNumber == other.preferredNumber
+        assert(entry.identityKey == other.identityKey and entry.preferredNumber == other.preferredNumber
             and entry.owner == other.owner and entry.createdAt == other.createdAt
             and entry.observedAt == other.observedAt and entry.number == other.number,
             "merged claim metadata and effective numbers are identical")
@@ -38,13 +39,13 @@ local function same(a, b)
 end
 
 local a, b = client(), client()
-assert(a:Claim(111, server, map, 1, "Player-A", clock - 10, clock))
-assert(b:Claim(222, server, map, 1, "Player-B", clock - 20, clock))
-assert(b:Claim(111, server, map, 2, "Player-B", clock - 5, clock))
+assert(a:Claim(key(111, server, map), server, map, 1, "Player-A", clock - 10, clock))
+assert(b:Claim(key(222, server, map), server, map, 1, "Player-B", clock - 20, clock))
+assert(b:Claim(key(111, server, map), server, map, 2, "Player-B", clock - 5, clock))
 local first, second = a:Export(server, map), b:Export(server, map)
 assert(a:Merge(server, map, second) and b:Merge(server, map, first))
 same(a, b)
-assert(a:GetNumber(222, server, map) == 1 and a:GetNumber(111, server, map) == 2,
+assert(a:GetNumber(key(222, server, map), server, map) == 1 and a:GetNumber(key(111, server, map), server, map) == 2,
     "earlier distinct claims reserve their preferred number before a collision is reassigned")
 assert(not a:Merge(server, map, b:Export(server, map)), "replaying identical registry rows is idempotent")
 
@@ -71,7 +72,7 @@ assert(ordered:Export(server, map)[6].createdAt == clock - 30,
 
 local changes = a:GetRevision(server, map)
 clock = clock + 20
-local known = a:Claim(111, server, map, 99, "Someone-Else", clock, clock)
+local known = a:Claim(key(111, server, map), server, map, 99, "Someone-Else", clock, clock)
 assert(known.owner == "player-a" and known.preferredNumber == 1 and known.createdAt == clock - 30,
     "a direct observation renews an existing claim without replacing its origin")
 assert(a:GetRevision(server, map) > changes and known.observedAt == clock, "direct observations advance registry freshness")
@@ -94,12 +95,12 @@ local conflict1, conflict2 = row(777, 9, "Owner", clock - 1), row(777, 4, "OWNER
 conflictA:Merge(server, map, { conflict1, conflict2 })
 conflictB:Merge(server, map, { conflict2, conflict1 })
 same(conflictA, conflictB)
-assert(conflictA:GetNumber(777, server, map) == 4, "exact-claim conflicts have a deterministic final tie-break")
-assert(conflictA:Claim(777, server + 1, map, 2, "other server", clock, clock))
-assert(conflictA:Claim(777, server, map + 1, 3, "other map", clock, clock))
-assert(conflictA:GetNumber(777, server, map) == 4
-    and conflictA:GetNumber(777, server + 1, map) == 2
-    and conflictA:GetNumber(777, server, map + 1) == 3, "server and zone map scopes are independent")
+assert(conflictA:GetNumber(key(777, server, map), server, map) == 4, "exact-claim conflicts have a deterministic final tie-break")
+assert(conflictA:Claim(key(777, server + 1, map), server + 1, map, 2, "other server", clock, clock))
+assert(conflictA:Claim(key(777, server, map + 1), server, map + 1, 3, "other map", clock, clock))
+assert(conflictA:GetNumber(key(777, server, map), server, map) == 4
+    and conflictA:GetNumber(key(777, server + 1, map), server + 1, map) == 2
+    and conflictA:GetNumber(key(777, server, map + 1), server, map + 1) == 3, "server and zone map scopes are independent")
 
 local relay = client()
 local observedAt = clock
@@ -107,22 +108,22 @@ assert(relay:Merge(server, map, { row(888, 1, "old owner", clock - 10, observedA
 clock = clock + 3599
 assert(not relay:Merge(server, map, { row(888, 1, "old owner", observedAt - 10, observedAt) }),
     "forwarding an unchanged observation does not refresh its lifetime")
-assert(relay:GetNumber(888, server, map) == 1)
+assert(relay:GetNumber(key(888, server, map), server, map) == 1)
 clock = clock + 2
-assert(relay:GetNumber(888, server, map) == nil, "entries expire one hour after the original direct observation")
+assert(relay:GetNumber(key(888, server, map), server, map) == nil, "entries expire one hour after the original direct observation")
 assert(not relay:Merge(server, map, { row(888, 1, "old owner", observedAt - 10, observedAt) }),
     "expired relays cannot resurrect old layers")
 
 local bounded = client()
-for id = 1, 105 do assert(bounded:Claim(id, server, map, 1, "owner " .. id, clock - 100, clock - 200 + id)) end
-assert(#bounded:Export(server, map) == 99 and not bounded:GetNumber(1, server, map)
-    and bounded:GetNumber(105, server, map), "capacity evicts the oldest observations and retains at most 99 layers")
+for id = 1, 105 do assert(bounded:Claim(key(id, server, map), server, map, 1, "owner " .. id, clock - 100, clock - 200 + id)) end
+assert(#bounded:Export(server, map) == 99 and not bounded:GetNumber(key(1, server, map), server, map)
+    and bounded:GetNumber(key(105, server, map), server, map), "capacity evicts the oldest observations and retains at most 99 layers")
 local unique = {}
 for _, entry in ipairs(bounded:Export(server, map)) do
     assert(not unique[entry.number] and entry.number <= 99, "capacity never creates duplicate or out-of-range aliases")
     unique[entry.number] = true
 end
-assert(bounded:Claim(106, server, map, nil, "newest", clock, clock), "a full registry still accepts a fresh claim with an automatic preference")
+assert(bounded:Claim(key(106, server, map), server, map, nil, "newest", clock, clock), "a full registry still accepts a fresh claim with an automatic preference")
 assert(#bounded:Export(server, map) == 99)
 
 local invalid = client()
@@ -132,12 +133,28 @@ for _, candidate in ipairs({ row(1, 0, "x"), row(1, 100, "x"), row(1, 1, ""),
     assert(not invalid:Merge(server, map, { candidate }), "invalid, secret, non-finite, and far-future metadata are rejected")
 end
 assert(invalid:GetRevision(server, map) == 0 and #invalid:Export(server, map) == 0)
-assert(not invalid:Claim(1, secret, map, 1, "x", clock, clock), "secret scope identifiers are never used")
+assert(not invalid:Claim(key(1, secret, map), secret, map, 1, "x", clock, clock), "secret scope identifiers are never used")
 local store, beforeReload = {}, client()
 assert(beforeReload:AttachStore(store))
-assert(beforeReload:Claim(456, server, map, 2, "remembered owner", clock - 10, clock))
+assert(beforeReload:Claim(key(456, server, map), server, map, 2, "remembered owner", clock - 10, clock))
 local afterReload = client()
-assert(afterReload:AttachStore(store) and afterReload:GetNumber(456, server, map) == 2,
+assert(afterReload:AttachStore(store) and afterReload:GetNumber(key(456, server, map), server, map) == 2,
     "original claims and their assigned numbers survive a reload")
 assert(afterReload:Export(server, map)[1].createdAt == clock - 10, "restoring a book never renews claim age")
+local oldStore = { layerNumberBooks = { ["7098:1420"] = { rows = { [2] = { zoneUID = 2, preferredNumber = 1,
+    owner = "old", createdAt = clock - 10, observedAt = clock } } } } }
+local migrated = client()
+assert(migrated:AttachStore(oldStore) and oldStore.layerNumberBooks == nil and #migrated:Export(7098, 1420) == 0,
+    "client-local ZoneUID books are discarded rather than mixed with shared world references")
+assert(not migrated:Claim(2, 7098, 1420, 1, "old", clock, clock), "old numeric keys cannot create a new reference")
+assert(migrated:MakeKey(7098, 0, 1420) == "7098-0-1420", "the instance field may be zero")
+assert(not migrated:MakeKey(7098, secret, 1420) and not migrated:MakeKey(7098, -1, 1420))
+assert(not migrated:ValidateRows({ { identityKey = "7098-0-1421", preferredNumber = 1,
+    owner = "wrong zone", createdAt = clock, observedAt = clock } }, 1420), "cross-zone snapshots are rejected")
+local worlds = client()
+assert(worlds:Claim("7098-0-1420", 7098, 1420, nil, "one", clock - 3, clock).number == 1)
+assert(worlds:Claim("7099-0-1420", 7099, 1420, nil, "two", clock - 2, clock).number == 2)
+assert(worlds:Claim("7098-1-1420", 7098, 1420, nil, "three", clock - 1, clock).number == 3)
+assert(worlds:Claim("7098-0-1421", 7098, 1421, nil, "other zone", clock, clock).number == 1,
+    "different servers and instances are distinct within a zone; another zone has its own numbering")
 print("PASS: independent shared layer books, deterministic claim merging, collision-free numbers, scopes, TTL, bounded rows, and relay safety")
