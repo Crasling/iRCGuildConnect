@@ -31,7 +31,7 @@ function CreateFrame()
     return frame
 end
 function SendChatMessage(...) notices[#notices + 1] = { at = now, ... } end
-local function sendAddon(...) addonMessages[#addonMessages + 1] = { at = now, ... } end
+local function sendAddon(...) addonMessages[#addonMessages + 1] = { at = now, ... }; return 0 end
 C_ChatInfo = { SendAddonMessage = sendAddon, RegisterAddonMessagePrefix = function() end }
 C_Timer = {
     After = function(delay, callback) timers[#timers + 1] = { at = now + delay, callback = callback } end,
@@ -56,6 +56,7 @@ local guildFrame = frames[#frames]
 assert(loadfile("iRC_Connection.lua"))("iRC", private)
 local iRC = private.iRC
 iRCDB, iRCCharDB = {}, {}
+iRC.Frame.OnEvent(nil, "ADDON_LOADED", "iRC")
 function iRC:DebugMsg() end
 function iRC:GetSelfFoundEvidence() return { status = "UNVERIFIED" } end
 local db = iRC:GetConnection()
@@ -63,16 +64,25 @@ local function reset(login)
     iRC:ResetPresenceNotificationChecks()
     timers, addonMessages, notices = {}, {}, {}
     db.active, own = true, "Bofficer"
+    db.rulesBootstrap, db.rulesEstablished = nil, true
+    db.guildNotifications.enableOfficerWarnings = true
+    db.guildNotifications.enableWhisperWarnings = true
+    db.guildNotifications.enableGuildWarnings = true
+    db.guildNotifications.welcomeNewMembers = true
     db.rules.raceLock = true
     db.members, db.newMemberChecks, db.newMemberWelcomeNotices = {}, {}, {}
     db.rosterBaselineReady = false
     roster[2].online, roster[3].online = false, true
     C_ChatInfo.SendAddonMessage = sendAddon
     iRC.ConnectionSessionStartedAt = now - (login and 0 or 1000)
+    iRC:InvalidateGuildRosterSnapshot()
+    iRC:InvalidateGuildMemberRows()
 end
 
 local function respond(name)
     db.members[iRC:NormalizeName(name)] = { name = name, race = "Troll", lastSeen = now, addonVersion = "0.2.4" }
+    iRC:InvalidateGuildRosterSnapshot()
+    iRC:InvalidateGuildMemberRows(name)
 end
 local function probeCount()
     local count = 0
@@ -126,7 +136,7 @@ advance(44); assert(#notices == 0, "no warnings during first 60 seconds after re
 advance(1)
 assert(#notices == 2 and notices[1].at == started + 60, "first confirmed officer/whisper notice after startup grace")
 local firstNotice = now
-advance(270); assert(probeCount() == 6)
+advance(270); assert(probeCount() == 5)
 advance(15); assert(probeCount() == 6 and #notices == 2)
 advance(15)
 local escalationChannels = {}
@@ -141,7 +151,7 @@ assert(iRC:GetMemberVerification("Target", true, db.members.target).state == "st
     "an expired iRC profile remains stale until iRC responds again")
 
 reset()
-iRC:CheckPresenceMismatches(); advance(30)
+iRC:CheckPresenceMismatches(); advance(45)
 assert(#notices == 2)
 advance(270); respond("Target"); advance(30)
 assert(#notices == 2, "response to escalation probe prevents guild escalation")
@@ -152,10 +162,10 @@ roster[3].online = false
 guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(60)
 assert(#notices == 0, "offline member is never warned")
 roster[3].online = true
-guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(1)
+guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(2)
 local reconnectedAt = now
-advance(59); assert(#notices == 0)
-advance(1); assert(#notices == 2 and now == reconnectedAt + 60, "relogin requires a full confirmation window")
+advance(44); assert(#notices == 0)
+advance(1); assert(#notices == 2 and now == reconnectedAt + 45, "relogin requires a full confirmation window")
 
 reset()
 iRC:ScheduleNewMemberAddonCheck("guid:Player-1-Target")
@@ -164,7 +174,7 @@ assert(#notices == 0, "new member gets a response window before welcome/missing 
 reset()
 iRC:ScheduleNewMemberAddonCheck("guid:Player-1-Target")
 advance(31); assert(#notices == 0)
-advance(30); assert(#notices == 0)
+advance(15); assert(#notices == 0)
 advance(1)
 local welcomeGuildNotice = false
 for _, notice in ipairs(notices) do if notice[2] == "GUILD" then welcomeGuildNotice = true end end
@@ -178,10 +188,10 @@ roster[2].online = true; respond("Aofficer")
 advance(60)
 assert(#notices == 0, "old notifier cannot send when another iRC officer now wins")
 roster[2].online = false
-guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(1)
+guildFrame.OnEvent(nil, "GUILD_ROSTER_UPDATE"); advance(2)
 local handoffAt = now
-advance(59); assert(#notices == 0)
-advance(1); assert(#notices == 2 and now == handoffAt + 60, "officer logout elects next client and requires a full fresh confirmation window")
+advance(44); assert(#notices == 0)
+advance(1); assert(#notices == 2 and now == handoffAt + 45, "officer logout elects next client and requires a full fresh confirmation window")
 
 reset()
 roster[2].online = true; respond("Aofficer")

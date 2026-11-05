@@ -44,6 +44,7 @@ local layerPanel
 local groupMemberTooltipHooked
 local openMapCallbacksRegistered
 local lastSentMapId, lastSentXWire, lastSentYWire, lastPositionSentAt
+local positionStatus = { state = "No position update attempted yet." }
 local lastSentMapLayerSignature, lastMapLayerSentAt
 local positionDeferredDuringCombat
 local positionDeferredGeneration = 0
@@ -68,7 +69,9 @@ local lastLayerBroadcastSignature
 local lastLayerBroadcastAt = 0
 
 local function layerScanBlockedByCombat()
-    return iRC.IsCombatTrafficBlocked and iRC:IsCombatTrafficBlocked() or true
+    -- A false result allows scanning; only a missing helper blocks by default.
+    if not iRC.IsCombatTrafficBlocked then return true end
+    return iRC:IsCombatTrafficBlocked()
 end
 
 local function savedLayerUsers()
@@ -1666,19 +1669,62 @@ end
 
 -- Position transmission ----------------------------------------------------
 
+local function recordPositionResult(state, accepted)
+    local now = GetTime()
+    if positionStatus.state ~= state and iRC.Diagnostics then
+        iRC.Diagnostics:Trace("MAP_POSITION", state)
+    end
+    positionStatus.state, positionStatus.checkedAt = state, now
+    if accepted then positionStatus.acceptedAt = now end
+    return accepted and true or false
+end
+
+-- These reports only use settings and already stored state. They never read
+-- live coordinates and can also explain a failed update during combat.
+function GuildMap:GetPositionDebugLines(name)
+    local now = GetTime()
+    local function age(timestamp)
+        return timestamp and string.format("%.1fs ago", math.max(0, now - timestamp)) or "Never"
+    end
+    if name then
+        local key = iRC:NormalizeName(name)
+        local position = self.positions[key]
+        return {
+            "Cached map position: " .. tostring(position ~= nil),
+            "Last position received: " .. age(position and position.receivedAt),
+            "Cached map ID: " .. tostring(position and position.mapId or "Unknown"),
+            "Replaced by party/raid pin at last map refresh: " .. tostring(lastGroupedMembers[key] == true),
+        }
+    end
+    return {
+        "Position sharing enabled: " .. tostring(iRC:GetSettings().shareGuildMapPosition ~= false),
+        "Map markers enabled: " .. tostring(iRC:GetSettings().showGuildMap ~= false),
+        "Last position check: " .. age(positionStatus.checkedAt),
+        "Position status: " .. positionStatus.state,
+        "Last position accepted by transport: " .. age(positionStatus.acceptedAt),
+        "Last safe map ID: " .. tostring(lastSentMapId or "Unknown"),
+    }
+end
+
 local function isOutdoorPositionReadable()
-    if iRC:IsSecretValue(GetInstanceInfo) or type(GetInstanceInfo) ~= "function" then return false end
+    if iRC:IsSecretValue(GetInstanceInfo) or type(GetInstanceInfo) ~= "function" then return false, "Instance information unavailable." end
     local ok, _, instanceType = pcall(GetInstanceInfo)
-    if not ok or iRC:IsSecretValue(instanceType) then return false end
-    return not instanceType or instanceType == "none"
+    if not ok or iRC:IsSecretValue(instanceType) then return false, "Instance information unavailable." end
+    return not instanceType or instanceType == "none", "Position sharing pauses inside instances."
 end
 
 local function broadcastCachedCombatPosition(force)
-    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false
-        or not lastSentMapId or not lastSentXWire or not lastSentYWire then return false end
-    if not isOutdoorPositionReadable() then return false end
+    if not enabled() then return recordPositionResult("Guild Map is disabled for this guild.") end
+    if iRC:GetSettings().shareGuildMapPosition == false then return recordPositionResult("Personal position sharing is disabled.") end
+    if not lastSentMapId or not lastSentXWire or not lastSentYWire then
+        return recordPositionResult("Combat: waiting for the first safe position.")
+    end
+    local outdoor, reason = isOutdoorPositionReadable()
+    if not outdoor then return recordPositionResult(reason) end
     local now = GetTime and GetTime() or 0
-    if not force and now - (lastPositionSentAt or 0) < POSITION_HEARTBEAT then return false end
+    if not force and now - (lastPositionSentAt or 0) < POSITION_HEARTBEAT then
+        return recordPositionResult("Combat: cached position heartbeat is not due yet.")
+    end
     -- Forever can protect live map coordinates during combat. Repeating the
     -- last successfully read position keeps the existing pin alive without
     -- accessing any protected map or unit-position values.
@@ -1688,25 +1734,25 @@ local function broadcastCachedCombatPosition(force)
     }, "\t")
     local sent = iRC:SendAddonTraffic(iRC.Prefix, message, "GUILD")
     if sent then lastPositionSentAt = now end
-    return sent and true or false
+    return recordPositionResult(sent and "Cached combat position accepted by transport." or "Cached combat position rejected by transport.", sent)
 end
 
 local function readCurrentPositionWire()
-    if iRC:IsSecretValue(C_Map) or type(C_Map) ~= "table" then return nil end
+    if iRC:IsSecretValue(C_Map) or type(C_Map) ~= "table" then return nil, "Map API unavailable." end
     local getBestMap = C_Map.GetBestMapForUnit
     local getMapPosition = C_Map.GetPlayerMapPosition
     if iRC:IsSecretValue(getBestMap) or type(getBestMap) ~= "function"
-        or iRC:IsSecretValue(getMapPosition) or type(getMapPosition) ~= "function" then return nil end
+        or iRC:IsSecretValue(getMapPosition) or type(getMapPosition) ~= "function" then return nil, "Map API unavailable." end
     local mapOK, mapId = pcall(getBestMap, "player")
-    if not mapOK or iRC:IsSecretValue(mapId) or type(mapId) ~= "number" or mapId <= 0 then return nil end
+    if not mapOK or iRC:IsSecretValue(mapId) or type(mapId) ~= "number" or mapId <= 0 then return nil, "Live map ID unavailable." end
     local positionOK, position = pcall(getMapPosition, mapId, "player")
-    if not positionOK or iRC:IsSecretValue(position) or not position then return nil end
+    if not positionOK or iRC:IsSecretValue(position) or not position then return nil, "Live map position unavailable." end
     local getXY = position.GetXY
-    if iRC:IsSecretValue(getXY) or type(getXY) ~= "function" then return nil end
+    if iRC:IsSecretValue(getXY) or type(getXY) ~= "function" then return nil, "Live coordinates unavailable." end
     local coordinatesOK, x, y = pcall(getXY, position)
     if not coordinatesOK or iRC:HasSecretValues(x, y)
         or type(x) ~= "number" or type(y) ~= "number"
-        or x < 0 or x > 1 or y < 0 or y > 1 or (x == 0 and y == 0) then return nil end
+        or x < 0 or x > 1 or y < 0 or y > 1 or (x == 0 and y == 0) then return nil, "Live coordinates unavailable." end
     return mapId, math.floor(x * 10000 + 0.5), math.floor(y * 10000 + 0.5)
 end
 
@@ -1731,13 +1777,17 @@ function GuildMap:BroadcastPosition(force, postCombat)
         return broadcastCachedCombatPosition(force)
     end
     if not iRC:IsLowTrafficMode() then postCombatPositionSent = nil end
-    if not enabled() or iRC:GetSettings().shareGuildMapPosition == false then return false end
-    if not isOutdoorPositionReadable() then return false end
+    if not enabled() then return recordPositionResult("Guild Map is disabled for this guild.") end
+    if iRC:GetSettings().shareGuildMapPosition == false then return recordPositionResult("Personal position sharing is disabled.") end
+    local outdoor, reason = isOutdoorPositionReadable()
+    if not outdoor then return recordPositionResult(reason) end
     local mapId, xWire, yWire = readCurrentPositionWire()
-    if not mapId then return false end
+    if not mapId then return recordPositionResult(xWire) end
     local now = GetTime and GetTime() or 0
     local unchanged = lastSentMapId == mapId and lastSentXWire == xWire and lastSentYWire == yWire
-    if not force and unchanged and now - (lastPositionSentAt or 0) < POSITION_HEARTBEAT then return false end
+    if not force and unchanged and now - (lastPositionSentAt or 0) < POSITION_HEARTBEAT then
+        return recordPositionResult("Position unchanged; heartbeat is not due yet.")
+    end
     local message = table.concat({ "MAP_POS", POSITION_VERSION, tostring(mapId), tostring(xWire), tostring(yWire) }, "\t")
     local sent = iRC:SendAddonTraffic(iRC.Prefix, message, "GUILD")
     if sent then
@@ -1757,7 +1807,7 @@ function GuildMap:BroadcastPosition(force, postCombat)
             end
         end
     end
-    return sent
+    return recordPositionResult(sent and "Current position accepted by transport." or "Current position rejected by transport.", sent)
 end
 
 function GuildMap:SchedulePosition(maximumDelay, minimumDelay, force)

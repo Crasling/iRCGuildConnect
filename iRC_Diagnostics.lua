@@ -206,6 +206,11 @@ function Diagnostics:BuildHealthReport()
         string.format("Last 60 seconds: %d incoming / %d outgoing bytes", incoming, outgoing),
         string.format("Queues: %d incoming / %d outgoing", queue.incoming or 0, queue.outgoing or 0),
     }
+    if iRC.GuildMap and iRC.GuildMap.GetPositionDebugLines then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "-- Guild map --"
+        for _, line in ipairs(iRC.GuildMap:GetPositionDebugLines()) do lines[#lines + 1] = line end
+    end
     if connection then
         lines[#lines + 1] = ""
         lines[#lines + 1] = "-- Ruleset --"
@@ -240,6 +245,9 @@ function Diagnostics:BuildMemberReport(name)
     lines[#lines + 1] = "Guild-Found verified: " .. tostring(found and found.verified)
     lines[#lines + 1] = "Gold clean: " .. tostring(found and found.clean)
     lines[#lines + 1] = "Status source: " .. tostring(found and (found.source or found.gmSource))
+    if iRC.GuildMap and iRC.GuildMap.GetPositionDebugLines then
+        for _, line in ipairs(iRC.GuildMap:GetPositionDebugLines(name)) do lines[#lines + 1] = line end
+    end
     return table.concat(lines, "\n")
 end
 

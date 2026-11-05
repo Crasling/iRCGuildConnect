@@ -4678,48 +4678,158 @@ local function ensurePersonalSettings(frame)
     if frame.personalSettings then return frame.personalSettings end
 
     local page = CreateFrame("Frame", nil, frame.scrollContent)
-    page:SetSize(675, 905)
+    page:SetSize(675, 1)
     page:SetPoint("TOPLEFT")
-    page.controls = {}
+    page.controls, page.sections, page.sectionOrder = {}, {}, {}
 
-    local function makeCard(y, height, title)
-        local card = CreateFrame("Frame", nil, page, "BackdropTemplate")
-        card:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -y)
-        card:SetPoint("TOPRIGHT", page, "TOPRIGHT", 0, -y)
-        card:SetHeight(height)
-        createBackdrop(card, { 0.07, 0.055, 0.038, 0.96 }, { 0.34, 0.27, 0.17, 1 })
+    local function makeSection(key, label, description)
+        local section = CreateFrame("Frame", nil, page)
+        section:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -62)
+        section:SetPoint("TOPRIGHT", page, "TOPRIGHT", 0, -62)
+        section:SetHeight(1)
+        section.cards, section.key, section.description = {}, key, description
+        section.tab = makeIRCActionButton(page, 160, 29, label, false)
+        section.tab:SetScript("OnClick", function() page:ShowSection(key, true) end)
+        section:Hide()
+        page.sections[key] = section
+        page.sectionOrder[#page.sectionOrder + 1] = section
+        return section
+    end
+
+    page.sectionDescription = page:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    page.sectionDescription:SetPoint("TOPLEFT", 4, -39)
+    page.sectionDescription:SetPoint("TOPRIGHT", -4, -39)
+    page.sectionDescription:SetJustifyH("LEFT")
+    local windowSection = makeSection("window", iRC:Text("PERSONAL_WINDOW_TAB"), iRC:Text("PERSONAL_WINDOW_DESC"))
+    local chatSection = makeSection("chat", iRC:Text("PERSONAL_CHAT_TAB"), iRC:Text("PERSONAL_CHAT_DESC"))
+    local mapSection = makeSection("map", iRC:Text("PERSONAL_MAP_TAB"), iRC:Text("PERSONAL_MAP_DESC"))
+    local characterSection = makeSection("character", iRC:Text("PERSONAL_CHARACTERS_TAB"), iRC:Text("PERSONAL_CHARACTERS_DESC"))
+
+    local function makeCard(section, title)
+        local card = CreateFrame("Frame", nil, section, "BackdropTemplate")
+        card:SetHeight(1)
+        card.rows = {}
+        createBackdrop(card, { 0.035, 0.030, 0.023, 0.96 }, { 0.34, 0.27, 0.17, 1 })
         card.title = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        card.title:SetPoint("TOPLEFT", 14, -11)
+        card.title:SetPoint("TOPLEFT", 16, -12)
         card.title:SetText(title)
         card.title:SetTextColor(unpack(COLORS.gold))
+        local line = card:CreateTexture(nil, "ARTWORK")
+        line:SetPoint("TOPLEFT", 15, -33)
+        line:SetPoint("TOPRIGHT", -15, -33)
+        line:SetHeight(1)
+        line:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.22)
+        section.cards[#section.cards + 1] = card
         return card
     end
 
-    local function makeToggle(card, y, label, description, getter, setter)
-        local title = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        title:SetPoint("TOPLEFT", 16, y)
-        title:SetText(label)
-        local detail = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        detail:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
-        detail:SetPoint("RIGHT", card, "RIGHT", -135, 0)
-        detail:SetJustifyH("LEFT")
-        detail:SetText(description)
-        local button = makeIRCActionButton(card, 102, 26, "", false)
-        button:SetPoint("TOPRIGHT", card, "TOPRIGHT", -15, y + 5)
+    local function makeRow(card, label, description, minimumHeight, available)
+        local row = CreateFrame("Frame", nil, card)
+        row.minimumHeight, row.available = minimumHeight or 58, available
+        row.title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.title:SetPoint("TOPLEFT", 12, -11)
+        row.title:SetJustifyH("LEFT")
+        row.title:SetWordWrap(true)
+        row.title:SetText(label)
+        row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        row.detail:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -4)
+        row.detail:SetJustifyH("LEFT")
+        row.detail:SetWordWrap(true)
+        row.detail:SetText(description or "")
+        row.line = row:CreateTexture(nil, "ARTWORK")
+        row.line:SetPoint("BOTTOMLEFT", 12, 0)
+        row.line:SetPoint("BOTTOMRIGHT", -12, 0)
+        row.line:SetHeight(1)
+        row.line:SetColorTexture(1, 0.83, 0.55, 0.06)
+        card.rows[#card.rows + 1] = row
+        return row
+    end
+
+    local function makeToggle(card, label, description, getter, setter, available)
+        local row = makeRow(card, label, description, 58, available)
+        local button = makeIRCActionButton(row, 110, 27, "", false)
+        button:SetPoint("RIGHT", row, "RIGHT", -12, 0)
         button:SetScript("OnClick", function()
             setter(not getter())
-            UI:Refresh()
+            button:Refresh()
         end)
         button.Refresh = function(self)
             local enabled = getter() == true
-            self:SetText(enabled and "Enabled" or "Disabled")
-            self:SetBackdropColor(enabled and 0.12 or 0.055, enabled and 0.10 or 0.045,
-                enabled and 0.035 or 0.035, 0.98)
-            self:SetBackdropBorderColor(enabled and COLORS.gold[1] or 0.28,
-                enabled and COLORS.gold[2] or 0.23, enabled and COLORS.gold[3] or 0.16, 1)
+            self:SetText(iRC:Text(enabled and "PERSONAL_ENABLED" or "PERSONAL_DISABLED"))
+            self:SetBackdropColor(enabled and 0.045 or 0.055, enabled and 0.10 or 0.045, 0.035, 0.98)
+            self:SetBackdropBorderColor(enabled and 0.25 or 0.28,
+                enabled and 0.70 or 0.23, enabled and 0.32 or 0.16, 1)
+            self.text:SetTextColor(unpack(enabled and COLORS.green or COLORS.muted))
         end
         page.controls[#page.controls + 1] = button
         return button
+    end
+
+    local function makeAction(card, label, description, buttonLabel, callback)
+        local row = makeRow(card, label, description)
+        local button = makeIRCActionButton(row, 180, 27, buttonLabel, false)
+        button:SetPoint("RIGHT", row, "RIGHT", -12, 0)
+        button:SetScript("OnClick", callback)
+        return button
+    end
+
+    function page:Layout()
+        local width = self:GetWidth()
+        local tabWidth = (width - 24) / 4
+        for index, section in ipairs(self.sectionOrder) do
+            section.tab:ClearAllPoints()
+            section.tab:SetPoint("TOPLEFT", self, "TOPLEFT", (index - 1) * (tabWidth + 8), 0)
+            section.tab:SetWidth(tabWidth)
+            local cardOffset = 0
+            for _, card in ipairs(section.cards) do
+                card:ClearAllPoints()
+                card:SetPoint("TOPLEFT", section, "TOPLEFT", 0, -cardOffset)
+                card:SetPoint("TOPRIGHT", section, "TOPRIGHT", 0, -cardOffset)
+                local rowOffset, lastRow = 38, nil
+                for _, row in ipairs(card.rows) do
+                    local available = not row.available or row.available() == true
+                    row:SetShown(available)
+                    if available then
+                        row:ClearAllPoints()
+                        row:SetPoint("TOPLEFT", card, "TOPLEFT", 6, -rowOffset)
+                        row:SetPoint("TOPRIGHT", card, "TOPRIGHT", -6, -rowOffset)
+                        -- Reserve the same right-hand column for every control.
+                        -- Wrapped descriptions determine the row height.
+                        row.title:SetWidth(width - 300)
+                        row.detail:SetWidth(width - 300)
+                        local textHeight = row.title:GetStringHeight() + row.detail:GetStringHeight() + 4
+                        local height = math.max(row.minimumHeight, textHeight + 24)
+                        row:SetHeight(height)
+                        row.line:Show()
+                        rowOffset, lastRow = rowOffset + height, row
+                    end
+                end
+                if lastRow then lastRow.line:Hide() end
+                card:SetHeight(rowOffset + 6)
+                cardOffset = cardOffset + card:GetHeight() + 12
+            end
+            section:SetHeight(math.max(1, cardOffset - 12))
+        end
+        local active = self.sections[self.activeSection or "window"]
+        self:SetHeight(62 + active:GetHeight() + 8)
+        frame.scrollContent:SetHeight(self:GetHeight())
+    end
+
+    function page:ShowSection(key, resetScroll)
+        if not self.sections[key] then key = "window" end
+        self.activeSection = key
+        for _, dropdown in ipairs(self.customDropdowns or {}) do dropdown.menu:Hide() end
+        for _, section in ipairs(self.sectionOrder) do
+            local selected = section.key == key
+            section:SetShown(selected)
+            section.tab:SetBackdropColor(selected and 0.16 or 0.055, selected and 0.09 or 0.045, 0.025, 0.98)
+            section.tab:SetBackdropBorderColor(selected and COLORS.gold[1] or 0.28,
+                selected and COLORS.gold[2] or 0.23, selected and COLORS.gold[3] or 0.16, 1)
+            section.tab.text:SetTextColor(unpack(selected and COLORS.gold or COLORS.muted))
+        end
+        self.sectionDescription:SetText(self.sections[key].description)
+        self:Layout()
+        if resetScroll and frame.scroll then frame.scroll:SetVerticalScroll(0) end
     end
 
     page.customDropdowns = {}
@@ -4749,7 +4859,7 @@ local function ensurePersonalSettings(frame)
         dropdown.menu:Hide()
 
         function dropdown:Refresh()
-            local currentValue, label = getValue(), "Select"
+            local currentValue, label = getValue(), iRC:Text("PERSONAL_SELECT")
             for _, option in ipairs(getOptions() or {}) do
                 if option.value == currentValue then label = option.label break end
             end
@@ -4770,6 +4880,7 @@ local function ensurePersonalSettings(frame)
                     button.text:SetPoint("LEFT", button, "LEFT", 12, 0)
                     button.text:SetPoint("RIGHT", button, "RIGHT", -10, 0)
                     button.text:SetJustifyH("LEFT")
+                    button.text:SetWordWrap(false)
                     button.check = button:CreateTexture(nil, "ARTWORK")
                     button.check:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
                     button.check:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 3, 3)
@@ -4850,37 +4961,9 @@ local function ensurePersonalSettings(frame)
         return slider
     end
 
-    local identityCard = makeCard(0, 102, "Personal Characters")
-    local identityDescription = identityCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    identityDescription:SetPoint("TOPLEFT", 16, -35)
-    identityDescription:SetText("Choose which of your registered guild characters is treated as your Main.")
-    local mainLabel = identityCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    mainLabel:SetPoint("TOPLEFT", 16, -62)
-    mainLabel:SetText("Main character")
-    local mainDropdown = makePersonalDropdown(identityCard, 250, function()
-        if iRC.Identity then iRC.Identity:RegisterCharacter(iRC:GetPlayerName()) end
-        local options = {}
-        for _, character in ipairs(iRC.Identity and iRC.Identity:GetCharacters() or {}) do
-            options[#options + 1] = { value = character.name, label = iRC:FormatPlayerName(character.name) }
-        end
-        return options
-    end, function()
-        return iRC.Identity and iRC.Identity:GetMainName() or ""
-    end, function(value)
-        if iRC.Identity then iRC.Identity:SetMain(value) end
-        UI:Refresh()
-    end)
-    mainDropdown:SetPoint("LEFT", mainLabel, "RIGHT", 14, -2)
-    page.mainDropdown = mainDropdown
-
-    local startupCard = makeCard(112, 96, "Panel Startup")
-    local startupDescription = startupCard:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    startupDescription:SetPoint("TOPLEFT", 16, -35)
-    startupDescription:SetText("Choose which page opens when you launch iRC normally.")
-    local startupLabel = startupCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    startupLabel:SetPoint("TOPLEFT", 16, -64)
-    startupLabel:SetText("Opening page")
-    local startupDropdown = makePersonalDropdown(startupCard, 250, function()
+    local windowCard = makeCard(windowSection, iRC:Text("PERSONAL_WINDOW_HEADER"))
+    local startupRow = makeRow(windowCard, iRC:Text("PERSONAL_OPENING_PAGE"), iRC:Text("PERSONAL_OPENING_PAGE_DESC"))
+    local startupDropdown = makePersonalDropdown(startupRow, 248, function()
         local options = { { value = DEFAULT_OPEN_LAST, label = getNavigationLabel(DEFAULT_OPEN_LAST) } }
         for _, item in ipairs(getOrderedNavigationItems()) do
             local tab = not item.header and frame.tabs[item.id]
@@ -4894,60 +4977,24 @@ local function ensurePersonalSettings(frame)
     end, function(value)
         iRC:GetSettings().mainPanelDefaultTab = value
     end)
-    startupDropdown:SetPoint("LEFT", startupLabel, "RIGHT", 14, -2)
+    startupDropdown:SetPoint("RIGHT", startupRow, "RIGHT", -12, 0)
     page.startupDropdown = startupDropdown
 
-    local visibilityCard = makeCard(218, 233, "Visibility & Chat")
-    makeToggle(visibilityCard, -38, "Show minimap button", "Show the iRC launcher beside the minimap.",
-        function() return not iRC:GetSettings().minimapButton.hide end,
-        function(value)
-            iRC:GetSettings().minimapButton.hide = not value
-            if iRC.Minimap then iRC.Minimap:UpdateVisibility() end
-        end)
-    makeToggle(visibilityCard, -87, iRC:Text("HIDE_MY_CHAT_ICON"), iRC:Text("HIDE_MY_CHAT_ICON_DESC"),
-        function() return iRCCharDB and iRCCharDB.hideChatIcon == true end,
-        function(value)
-            if iRC.GuildAnnouncements then iRC.GuildAnnouncements:SetHidden(value) end
-        end)
-    makeToggle(visibilityCard, -136, iRC:Text("HIDE_ALL_CHAT_ICONS"), iRC:Text("HIDE_ALL_CHAT_ICONS_DESC"),
-        function() return iRCCharDB and iRCCharDB.hideAllChatIcons == true end,
-        function(value)
-            iRCCharDB = iRCCharDB or {}
-            iRCCharDB.hideAllChatIcons = value and true or false
-        end)
-    makeToggle(visibilityCard, -185, "Show linked mains in chat",
-        "Show confirmed Alt and BankAlt labels with main-character details on hover.",
-        function() return not iRCCharDB or iRCCharDB.showLinkedMainsInChat ~= false end,
-        function(value)
-            iRCCharDB = iRCCharDB or {}
-            iRCCharDB.showLinkedMainsInChat = value and true or false
-        end)
+    local function makeSliderRow(card, label, description, minimum, maximum, step, lowText, highText)
+        local row = makeRow(card, label, description, 80)
+        local control = CreateFrame("Frame", nil, row)
+        control:SetSize(248, 50)
+        control:SetPoint("RIGHT", row, "RIGHT", -12, 0)
+        local value = control:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        value:SetPoint("TOPRIGHT", 0, 0)
+        value:SetTextColor(unpack(COLORS.gold))
+        local slider = makePersonalSlider(control, 248, minimum, maximum, step, lowText, highText)
+        slider:SetPoint("TOPLEFT", control, "TOPLEFT", 0, -17)
+        return slider, value
+    end
 
-    local layoutCard = makeCard(461, 200, "Panel & Map Appearance")
-    local pinLabel = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    pinLabel:SetPoint("TOPLEFT", 16, -39)
-    pinLabel:SetText(iRC:Text("GUILD_MAP_PIN_SIZE"))
-    local pinValue = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    pinValue:SetPoint("LEFT", pinLabel, "RIGHT", 8, 0)
-    pinValue:SetTextColor(unpack(COLORS.gold))
-    local pinSlider = makePersonalSlider(layoutCard, 250, 5, 15, 1, "5", "15")
-    pinSlider:SetPoint("TOPLEFT", 15, -59)
-    pinSlider:SetScript("OnValueChanged", function(_, value)
-        value = math.floor(value + 0.5)
-        pinValue:SetText(tostring(value))
-        if page.refreshing then return end
-        if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
-    end)
-    page.pinSlider, page.pinValue = pinSlider, pinValue
-
-    local scaleLabel = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    scaleLabel:SetPoint("TOPLEFT", 340, -39)
-    scaleLabel:SetText(iRC:Text("IRC_MAIN_WINDOW_SCALE"))
-    local scaleValue = layoutCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 8, 0)
-    scaleValue:SetTextColor(unpack(COLORS.gold))
-    local scaleSlider = makePersonalSlider(layoutCard, 250, 0.6, 2.0, 0.05, "60%", "200%")
-    scaleSlider:SetPoint("TOPLEFT", 339, -59)
+    local scaleSlider, scaleValue = makeSliderRow(windowCard, iRC:Text("IRC_MAIN_WINDOW_SCALE"),
+        iRC:Text("IRC_MAIN_WINDOW_SCALE_DESC"), 0.6, 2.0, 0.05, "60%", "200%")
     local function applyScaleSliderValue()
         if page.refreshing then return end
         local value = scaleSlider.pendingValue
@@ -4963,9 +5010,7 @@ local function ensurePersonalSettings(frame)
         scaleSlider.pendingValue = value
         if not scaleSlider.dragging then applyScaleSliderValue() end
     end)
-    scaleSlider:HookScript("OnMouseDown", function()
-        scaleSlider.dragging = true
-    end)
+    scaleSlider:HookScript("OnMouseDown", function() scaleSlider.dragging = true end)
     local function finishScaleSliderDrag()
         scaleSlider.dragging = nil
         if C_Timer and C_Timer.After then C_Timer.After(0, applyScaleSliderValue)
@@ -4982,25 +5027,84 @@ local function ensurePersonalSettings(frame)
         page.refreshing = wasRefreshing
     end
 
-    makeToggle(layoutCard, -104, iRC:Text("LAYER_PANEL_SHOW"), iRC:Text("LAYER_PANEL_SHOW_DESC"),
-        function() return iRC:GetSettings().showLayerPanel ~= false end,
-        function(value)
-            if iRC.GuildMap then iRC.GuildMap:SetLayerPanelShown(value)
-            else iRC:GetSettings().showLayerPanel = value and true or false end
-        end)
-
-    local reset = makeIRCActionButton(layoutCard, 180, 27, iRC:Text("IRC_MAIN_WINDOW_RESET"), false)
-    reset:SetPoint("BOTTOM", layoutCard, "BOTTOM", 0, 12)
-    reset:SetScript("OnClick", function()
+    makeAction(windowCard, iRC:Text("PERSONAL_WINDOW_POSITION"), iRC:Text("IRC_MAIN_WINDOW_RESET_DESC"), iRC:Text("PERSONAL_CENTER_WINDOW"), function()
         frame:ClearAllPoints()
         frame:SetPoint("CENTER")
         iRC:Print(iRC:Text("MAIN_WINDOW_RESET_DONE"))
     end)
 
-    local roleplayCard = makeCard(671, 234, "Character Speech")
-    page.roleplayControls = {}
-    local function addRoleplayToggle(y, label, description, settingKey, available)
-        local button = makeToggle(roleplayCard, y, label, description,
+    local accessCard = makeCard(windowSection, iRC:Text("PERSONAL_ACCESS_HEADER"))
+    makeToggle(accessCard, iRC:Text("PERSONAL_MINIMAP_BUTTON"), iRC:Text("PERSONAL_MINIMAP_BUTTON_DESC"),
+        function() return not iRC:GetSettings().minimapButton.hide end,
+        function(value)
+            iRC:GetSettings().minimapButton.hide = not value
+            if iRC.Minimap then iRC.Minimap:UpdateVisibility() end
+        end)
+    makeAction(accessCard, iRC:Text("PERSONAL_MENU_PAGES"), iRC:Text("PERSONAL_MENU_PAGES_DESC"), iRC:Text("PERSONAL_EDIT_MENU"), function()
+        if frame.navigationEditor then
+            frame.navigationEditor:Refresh()
+            frame.navigationEditor:Show()
+            frame.navigationEditor:Raise()
+        end
+    end)
+
+    local chatCard = makeCard(chatSection, iRC:Text("PERSONAL_CHAT_HEADER"))
+    makeToggle(chatCard, iRC:Text("PERSONAL_SHOW_MY_ICON"), iRC:Text("PERSONAL_SHOW_MY_ICON_DESC"),
+        function() return not iRCCharDB or iRCCharDB.hideChatIcon ~= true end,
+        function(value)
+            if iRC.GuildAnnouncements then iRC.GuildAnnouncements:SetHidden(not value) end
+        end)
+    makeToggle(chatCard, iRC:Text("PERSONAL_SHOW_ICONS"), iRC:Text("PERSONAL_SHOW_ICONS_DESC"),
+        function() return not iRCCharDB or iRCCharDB.hideAllChatIcons ~= true end,
+        function(value)
+            iRCCharDB = iRCCharDB or {}
+            iRCCharDB.hideAllChatIcons = not value
+        end)
+    makeToggle(chatCard, iRC:Text("PERSONAL_LINKED_MAINS"), iRC:Text("PERSONAL_LINKED_MAINS_DESC"),
+        function() return not iRCCharDB or iRCCharDB.showLinkedMainsInChat ~= false end,
+        function(value)
+            iRCCharDB = iRCCharDB or {}
+            iRCCharDB.showLinkedMainsInChat = value and true or false
+        end)
+
+    local mapCard = makeCard(mapSection, iRC:Text("PERSONAL_MAP_HEADER"))
+    makeToggle(mapCard, iRC:Text("LAYER_PANEL_SHOW"), iRC:Text("PERSONAL_LAYER_PANEL_DESC"),
+        function() return iRC:GetSettings().showLayerPanel ~= false end,
+        function(value)
+            if iRC.GuildMap then iRC.GuildMap:SetLayerPanelShown(value)
+            else iRC:GetSettings().showLayerPanel = value and true or false end
+        end)
+    local pinSlider, pinValue = makeSliderRow(mapCard, iRC:Text("GUILD_MAP_PIN_SIZE"),
+        iRC:Text("PERSONAL_MAP_PIN_DESC"), 5, 15, 1, "5", "15")
+    pinSlider:SetScript("OnValueChanged", function(_, value)
+        value = math.floor(value + 0.5)
+        pinValue:SetText(tostring(value))
+        if page.refreshing then return end
+        if iRC.GuildMap then iRC.GuildMap:SetPinSize(value) else iRC:GetSettings().guildMapPinSize = value end
+    end)
+    page.pinSlider, page.pinValue = pinSlider, pinValue
+
+    local identityCard = makeCard(characterSection, iRC:Text("PERSONAL_MAIN_HEADER"))
+    local mainRow = makeRow(identityCard, iRC:Text("PERSONAL_MAIN_CHARACTER"), iRC:Text("PERSONAL_MAIN_CHARACTER_DESC"))
+    local mainDropdown = makePersonalDropdown(mainRow, 248, function()
+        if iRC.Identity then iRC.Identity:RegisterCharacter(iRC:GetPlayerName()) end
+        local options = {}
+        for _, character in ipairs(iRC.Identity and iRC.Identity:GetCharacters() or {}) do
+            options[#options + 1] = { value = character.name, label = iRC:FormatPlayerName(character.name) }
+        end
+        return options
+    end, function()
+        return iRC.Identity and iRC.Identity:GetMainName() or ""
+    end, function(value)
+        if iRC.Identity then iRC.Identity:SetMain(value) end
+        UI:Refresh()
+    end)
+    mainDropdown:SetPoint("RIGHT", mainRow, "RIGHT", -12, 0)
+    page.mainDropdown = mainDropdown
+
+    local roleplayCard = makeCard(characterSection, iRC:Text("PERSONAL_SPEECH_HEADER"))
+    local function addRoleplayToggle(label, description, settingKey, available)
+        makeToggle(roleplayCard, label, description,
             function()
                 local settings = iRC.Roleplay and iRC.Roleplay:GetPlayerSettings()
                 return settings and settings[settingKey] == true
@@ -5008,17 +5112,20 @@ local function ensurePersonalSettings(frame)
             function(value)
                 local settings = iRC.Roleplay and iRC.Roleplay:GetPlayerSettings()
                 if settings then settings[settingKey] = value and true or false end
-            end)
-        page.roleplayControls[#page.roleplayControls + 1] = { button = button, available = available }
+            end, available)
     end
-    addRoleplayToggle(-38, "Enable Troll Talk", "Adds simple troll wording to normal chat messages.",
+    addRoleplayToggle(iRC:Text("PERSONAL_TROLL_TALK"), iRC:Text("PERSONAL_TROLL_TALK_DESC"),
         "trollTalk", function() return iRC.Roleplay and iRC.Roleplay:IsTroll() end)
-    addRoleplayToggle(-87, iRC:Text("TAUREN_TALK_ENABLE"), iRC:Text("TAUREN_TALK_DESC"),
+    addRoleplayToggle(iRC:Text("TAUREN_TALK_ENABLE"), iRC:Text("TAUREN_TALK_DESC"),
         "taurenTalk", function() return iRC.Roleplay and iRC.Roleplay:IsTauren() end)
-    addRoleplayToggle(-136, iRC:Text("NIGHT_ELF_TALK_ENABLE"), iRC:Text("NIGHT_ELF_TALK_DESC"),
+    addRoleplayToggle(iRC:Text("NIGHT_ELF_TALK_ENABLE"), iRC:Text("NIGHT_ELF_TALK_DESC"),
         "nightElfTalk", function() return iRC.Roleplay and iRC.Roleplay:IsNightElf() end)
-    addRoleplayToggle(-185, iRC:Text("UNDEAD_SPEAK_ENABLE"), iRC:Text("UNDEAD_SPEAK_DESC"),
+    addRoleplayToggle(iRC:Text("UNDEAD_SPEAK_ENABLE"), iRC:Text("UNDEAD_SPEAK_DESC"),
         "undeadSpeak", function() return iRC.Roleplay and iRC.Roleplay:IsUndead() end)
+    makeRow(roleplayCard, iRC:Text("PERSONAL_SPEECH_UNAVAILABLE"), iRC:Text("PERSONAL_SPEECH_UNAVAILABLE_DESC"), 58, function()
+        return not iRC.Roleplay or not (iRC.Roleplay:IsTroll() or iRC.Roleplay:IsTauren()
+            or iRC.Roleplay:IsNightElf() or iRC.Roleplay:IsUndead())
+    end)
 
     page:HookScript("OnHide", function(self)
         for _, dropdown in ipairs(self.customDropdowns or {}) do dropdown.menu:Hide() end
@@ -5044,11 +5151,6 @@ local function updatePersonalSettings(frame)
     end
     page.startupDropdown:Refresh()
     for _, control in ipairs(page.controls) do control:Refresh() end
-    for _, entry in ipairs(page.roleplayControls or {}) do
-        local available = entry.available() == true
-        entry.button:SetEnabled(available)
-        entry.button:SetAlpha(available and 1 or 0.42)
-    end
     local pinSize = math.max(5, math.min(15, math.floor(tonumber(iRC:GetSettings().guildMapPinSize) or 12)))
     page.pinSlider:SetValue(pinSize)
     page.pinValue:SetText(tostring(pinSize))
@@ -5056,10 +5158,11 @@ local function updatePersonalSettings(frame)
     page.scaleSlider:SetValue(scale)
     page.scaleValue:SetText(math.floor(scale * 100 + 0.5) .. "%")
     page.refreshing = nil
+    page:ShowSection(page.activeSection or "window")
     page:Show()
     frame.scrollContent:SetHeight(page:GetHeight())
-    frame.contentTitle:SetText("Personal Settings")
-    frame.contentSubtitle:SetText("Your character identity, visibility, chat icons, map markers, panel appearance, and character speech.")
+    frame.contentTitle:SetText(iRC:Text("PERSONAL_SETTINGS_TITLE"))
+    frame.contentSubtitle:SetText(iRC:Text("PERSONAL_SETTINGS_DESC"))
 end
 
 function UI:ConfirmDisableGuildConnection()

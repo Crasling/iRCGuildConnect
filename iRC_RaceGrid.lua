@@ -63,6 +63,7 @@ local RECENT_REPORT_WINDOW = 60
 local CACHE_REQUEST_WINDOW = 5
 local CACHE_OPEN_REQUEST_COOLDOWN = 30
 local CACHE_TRANSFER_TIMEOUT = 15
+local MAX_CACHE_REQUEST_LIFETIME = 300
 local CACHE_CHUNK_SIZE = 100
 local MAX_CHANNEL_PAYLOAD = 1024
 local MAX_CACHE_PARTS = 16
@@ -77,12 +78,16 @@ local channelJoinReady = false
 local channelJoinStartedAt = 0
 local channelJoinGeneration = 0
 
+local function cacheTime()
+    return GetTime()
+end
+
 local function setCacheUpdating(active)
-    cacheUpdatingUntil = active and ((GetTime and GetTime() or 0) + CACHE_TRANSFER_TIMEOUT) or 0
+    cacheUpdatingUntil = active and (cacheTime() + CACHE_TRANSFER_TIMEOUT) or 0
 end
 
 function RaceGrid:IsCacheUpdating()
-    return cacheUpdatingUntil > (GetTime and GetTime() or 0)
+    return cacheUpdatingUntil > cacheTime()
 end
 local SEP = "\t"
 local ALLIANCE_RACES = { HUMAN = true, DWARF = true, NIGHTELF = true, GNOME = true, DRAENEI = true }
@@ -797,10 +802,12 @@ function RaceGrid:GetLocalReport()
     }
 end
 
-function RaceGrid:StoreGuildReport(report, silent)
+function RaceGrid:StoreGuildReport(report, silent, received)
     if type(report) ~= "table" or type(report.guildName) ~= "string" or report.guildName == "" then return false end
     if isMutedOlympusGuild(report.guildName) then return false end
-    if iRC:IsLowTrafficMode() then return false end
+    -- Received reports only contain validated saved fields. Rebuilding our
+    -- own live roster remains separate and can still wait for a safe moment.
+    if iRC:IsLowTrafficMode() and not received then return false end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.race = normalizeRaceToken(report.race)
     if not report.race then return false end
@@ -1316,12 +1323,64 @@ local handleMessage
 local cacheChunkWorkQueue, cacheChunkWorkHead, cacheChunkWorkTail = {}, 1, 0
 local cacheChunkWorkScheduled = false
 local MAX_CACHE_CHUNK_WORK = MAX_CACHE_PACKAGES * MAX_CACHE_PARTS
+local reportWorkPaused = false
+local pendingPublicDetails = {}
+local PUBLIC_DETAILS_LIFETIME, MAX_PUBLIC_DETAIL_SENDERS = 120, 64
+local cacheSendQueue, cacheSendHead, cacheSendTail = {}, 1, 0
+local cacheSendScheduled = false
+
+local function processNextCacheSend()
+    local packet = cacheSendQueue[cacheSendHead]
+    if not packet then cacheSendScheduled = false; return end
+    local status = iRC:GetPerformanceQueueStatus()
+    if status.outgoing >= 32 or iRC:IsChatMessagingLocked() then
+        C_Timer.After(0.5, processNextCacheSend)
+        return
+    end
+    cacheSendQueue[cacheSendHead] = nil
+    cacheSendHead = cacheSendHead + 1
+    if packet.guildKey == iRC:GetGuildKey() then
+        if send(GRID_PREFIX, packet.message, "WHISPER", packet.target) == false then
+            iRC:DebugMsg("Cached guild report packet send was not confirmed for " .. tostring(packet.target) .. ".", 2)
+        end
+    end
+    if cacheSendHead <= cacheSendTail then C_Timer.After(0.35, processNextCacheSend)
+    else cacheSendQueue, cacheSendHead, cacheSendTail, cacheSendScheduled = {}, 1, 0, false end
+end
+
+local function queueCachePayload(requestId, guildName, checksum, payload, target)
+    local hex = bytesToHex(payload)
+    local total = math.ceil(#hex / CACHE_CHUNK_SIZE)
+    if total < 1 or total > MAX_CACHE_PARTS then return false end
+    if cacheSendTail - cacheSendHead + 1 + total > MAX_CACHE_PACKAGES * MAX_CACHE_PARTS then
+        iRC:DebugMsg("Cached guild report send buffer is full; the transfer can be requested again.", 2)
+        return false
+    end
+    local guildKey = iRC:GetGuildKey()
+    for part = 1, total do
+        local chunk = hex:sub((part - 1) * CACHE_CHUNK_SIZE + 1, part * CACHE_CHUNK_SIZE)
+        local message = table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName, part, total, checksum, chunk }, SEP)
+        cacheSendTail = cacheSendTail + 1
+        cacheSendQueue[cacheSendTail] = { message = message, target = target, guildKey = guildKey }
+    end
+    -- Saved packets contain no live unit data. Send them steadily, including
+    -- in combat, without filling the shared addon-message queue in one burst.
+    if not cacheSendScheduled then
+        cacheSendScheduled = true
+        C_Timer.After(0, processNextCacheSend)
+    end
+    iRC:DebugMsg("Queued " .. tostring(total) .. " cached guild report packet(s) for " .. tostring(guildName) .. ".", 3)
+    return true
+end
 
 local function cacheChunkQueueSize()
     return math.max(0, cacheChunkWorkTail - cacheChunkWorkHead + 1)
 end
 
 local function processNextCacheChunks()
+    -- Keep complete packet sequences in this bounded buffer, rather than putting
+    -- every chunk into the small shared queue where other chunks could replace it.
+    local combat = iRC:IsCombatTrafficBlocked()
     for _ = 1, 2 do
         local work = cacheChunkWorkQueue[cacheChunkWorkHead]
         if not work then break end
@@ -1333,7 +1392,7 @@ local function processNextCacheChunks()
     cacheChunkWorkScheduled = false
     if cacheChunkWorkHead <= cacheChunkWorkTail then
         cacheChunkWorkScheduled = true
-        C_Timer.After(0.03, processNextCacheChunks)
+        C_Timer.After(combat and 0.1 or 0.03, processNextCacheChunks)
     else
         cacheChunkWorkQueue, cacheChunkWorkHead, cacheChunkWorkTail = {}, 1, 0
     end
@@ -1352,9 +1411,37 @@ local function queueCacheChunk(prefix, message, sender, distribution)
 end
 
 local function processNextReportWork()
-    local work = reportWorkQueue[reportWorkHead]
-    reportWorkQueue[reportWorkHead] = nil
-    reportWorkHead = reportWorkHead + 1
+    if reportWorkHead > reportWorkTail then reportWorkScheduled = false; return end
+    local workIndex = reportWorkHead
+    local paused = iRC:IsLowTrafficMode()
+    if paused then
+        -- Received reports and cached replies only use saved fields. Let these
+        -- small jobs run while live roster reads and UI work remain paused.
+        while workIndex <= reportWorkTail and not reportWorkQueue[workIndex].combatSafe do
+            workIndex = workIndex + 1
+        end
+    end
+    if paused and workIndex > reportWorkTail then
+        if not reportWorkPaused then iRC:DebugMsg("Guild report processing paused until combat traffic resumes.", 3) end
+        reportWorkPaused = true
+        C_Timer.After(0.5, processNextReportWork)
+        return
+    end
+    if not paused then
+        if reportWorkPaused then iRC:DebugMsg("Guild report processing resumed after combat.", 3) end
+        reportWorkPaused = false
+    end
+    local work = reportWorkQueue[workIndex]
+    if workIndex == reportWorkHead then
+        reportWorkQueue[reportWorkHead] = nil
+        reportWorkHead = reportWorkHead + 1
+    else
+        -- This queue has at most 64 entries. Close the gap so paused jobs keep
+        -- their order and completed cached replies do not consume queue slots.
+        for index = workIndex, reportWorkTail - 1 do reportWorkQueue[index] = reportWorkQueue[index + 1] end
+        reportWorkQueue[reportWorkTail] = nil
+        reportWorkTail = reportWorkTail - 1
+    end
     if work then
         reportWorkByKey[work.key] = nil
         local ok, err = pcall(work.run)
@@ -1373,7 +1460,7 @@ local function processNextReportWork()
     end
 end
 
-local function queueReportWork(key, callback, timestamp)
+local function queueReportWork(key, callback, timestamp, combatSafe)
     if not C_Timer or not C_Timer.After then
         callback()
         return
@@ -1391,7 +1478,7 @@ local function queueReportWork(key, callback, timestamp)
         reportWorkHead = reportWorkHead + 1
         if dropped then reportWorkByKey[dropped.key] = nil end
     end
-    local work = { key = key, run = callback, timestamp = timestamp }
+    local work = { key = key, run = callback, timestamp = timestamp, combatSafe = combatSafe == true }
     reportWorkTail = reportWorkTail + 1
     reportWorkQueue[reportWorkTail] = work
     reportWorkByKey[key] = work
@@ -1401,9 +1488,45 @@ local function queueReportWork(key, callback, timestamp)
     end
 end
 
+local function holdPublicDetail(parts, sender)
+    local now, count, oldestKey, oldestAt = cacheTime(), 0, nil, math.huge
+    for key, entry in pairs(pendingPublicDetails) do
+        if now - entry.seenAt > PUBLIC_DETAILS_LIFETIME then pendingPublicDetails[key] = nil
+        else
+            count = count + 1
+            if entry.seenAt < oldestAt then oldestKey, oldestAt = key, entry.seenAt end
+        end
+    end
+    local key, kind = fullNameKey(sender), parts[1]
+    local entry = pendingPublicDetails[key]
+    if not entry then
+        if count >= MAX_PUBLIC_DETAIL_SENDERS then pendingPublicDetails[oldestKey] = nil end
+        entry = { seenAt = now, packets = {} }
+        pendingPublicDetails[key] = entry
+    end
+    local previous, timestamp = entry.packets[kind], tonumber(parts[3]) or 0
+    if previous and timestamp <= previous.timestamp then return end
+    entry.seenAt = now
+    entry.packets[kind] = { timestamp = timestamp, sender = sender, message = table.concat(parts, SEP) }
+    iRC:DebugMsg("Guild report details saved until the base report arrives from " .. tostring(sender) .. ".", 3)
+end
+
 local function storeIncomingReport(report)
     local lowCpu = iRC:IsPerformanceMode() and C_Timer and C_Timer.After
-    local stored = RaceGrid:StoreGuildReport(report, lowCpu)
+    local stored = RaceGrid:StoreGuildReport(report, lowCpu, true)
+    if stored then
+        local key = fullNameKey(report.name)
+        local pending = pendingPublicDetails[key]
+        pendingPublicDetails[key] = nil
+        if pending and cacheTime() - pending.seenAt <= PUBLIC_DETAILS_LIFETIME then
+            -- Use the normal validation again, now that the matching base exists.
+            -- Class details for a newer snapshot can wait for that snapshot too.
+            for _, kind in ipairs({ "GUILD_DESC", "GUILD_CLASS_BREAKDOWN" }) do
+                local packet = pending.packets[kind]
+                if packet then handleMessage(GRID_PREFIX, packet.message, packet.sender, "CHANNEL", true) end
+            end
+        end
+    end
     if stored and lowCpu then reportWorkDirty = true end
     return stored
 end
@@ -1429,11 +1552,14 @@ function RaceGrid:ClearCachedReportsForTesting()
     reportWorkDirty = false
     wipe(cacheChunkWorkQueue)
     cacheChunkWorkHead, cacheChunkWorkTail = 1, 0
+    wipe(cacheSendQueue)
+    cacheSendHead, cacheSendTail = 1, 0
     wipe(incomingChunks)
     wipe(completedChannelPackages)
     wipe(incomingCacheTransfers)
     wipe(cacheRequests)
     wipe(cacheRequestBySender)
+    wipe(pendingPublicDetails)
     setCacheUpdating(false)
     if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
     return removed
@@ -1444,35 +1570,37 @@ end
 -- Peers advertise timestamps first. The requester chooses only newer data and
 -- asks one sender for the payload, avoiding repeated copies of the same report.
 local function cleanCacheState()
-    local now = GetTime()
+    local now = cacheTime()
+    local wallTime = GetTime()
     for sender, request in pairs(cacheRequestBySender) do
-        if type(request) ~= "table" or now - (request.receivedAt or 0) > CACHE_TRANSFER_TIMEOUT then
+        if type(request) ~= "table" or wallTime - (request.receivedAt or 0) > CACHE_TRANSFER_TIMEOUT then
             cacheRequestBySender[sender] = nil
         end
     end
     for requestId, request in pairs(cacheRequests) do
-        if type(request) ~= "table" or now - (request.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then cacheRequests[requestId] = nil end
+        if type(request) ~= "table"
+            or now - (request.lastActivityAt or request.startedAt or 0) > CACHE_TRANSFER_TIMEOUT
+            or now - (request.startedAt or 0) > MAX_CACHE_REQUEST_LIFETIME then cacheRequests[requestId] = nil end
     end
     for requestId, observed in pairs(observedCacheOffers) do
-        if type(observed) ~= "table" or now - (observed.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then observedCacheOffers[requestId] = nil end
+        if type(observed) ~= "table" or wallTime - (observed.lastActivityAt or observed.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then observedCacheOffers[requestId] = nil end
     end
     for requestId, offered in pairs(offeredCachePayloads) do
-        if type(offered) ~= "table" or now - (offered.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then offeredCachePayloads[requestId] = nil end
+        if type(offered) ~= "table" or wallTime - (offered.lastActivityAt or offered.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then offeredCachePayloads[requestId] = nil end
     end
     local count, oldestKey, oldestAt = 0, nil, nil
     for key, transfer in pairs(incomingCacheTransfers) do
-        if type(transfer) ~= "table" or now - (transfer.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then
+        if type(transfer) ~= "table" or now - (transfer.lastActivityAt or transfer.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then
             incomingCacheTransfers[key] = nil
         else
             count = count + 1
             if not oldestAt or transfer.startedAt < oldestAt then oldestKey, oldestAt = key, transfer.startedAt end
         end
     end
-    if count >= MAX_CACHE_PACKAGES and oldestKey then incomingCacheTransfers[oldestKey] = nil end
+    return count, oldestKey
 end
 
 local function sendCacheOffers(requestId, requester)
-    if iRC:DeferLowTraffic("traffic:cache-offers", function() sendCacheOffers(requestId, requester) end) then return end
     local store, now = getServerStore(), time()
     observedCacheOffers[requestId] = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
     for _, report in pairs(store.guildReports) do
@@ -1486,7 +1614,8 @@ local function sendCacheOffers(requestId, requester)
             local function offer()
                 if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(requester) then return end
                 local observed = observedCacheOffers[requestId]
-                if not observed or GetTime() - (observed.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then return end
+                if not observed or GetTime() - (observed.lastActivityAt or observed.startedAt or 0) > CACHE_TRANSFER_TIMEOUT then return end
+                observed.lastActivityAt = GetTime()
                 local payload = serializeGuildReport(snapshot, true)
                 local checksum = payloadChecksum(payload)
                 local cacheHop = math.max(0, math.min(1, math.floor(tonumber(snapshot.cacheHop) or 0)))
@@ -1504,6 +1633,7 @@ local function sendCacheOffers(requestId, requester)
                     or { startedAt = GetTime(), requester = requester, guilds = {} }
                 offeredCachePayloads[requestId] = offered
                 offered.requester = requester
+                offered.lastActivityAt = GetTime()
                 offered.guilds[guildKey] = {
                     payload = payload, timestamp = reportTimestamp, checksum = checksum, cacheHop = cacheHop,
                 }
@@ -1511,15 +1641,30 @@ local function sendCacheOffers(requestId, requester)
                     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
                 end
             end
-            queueReportWork("cache-offer:" .. requestId .. ":" .. guildKey, offer, timestamp)
+            queueReportWork("cache-offer:" .. requestId .. ":" .. guildKey, offer, timestamp, true)
         end
     end
 end
 
 local function requestBestCacheOffers(requestId)
-    if iRC:DeferLowTraffic("traffic:cache-selection", function() requestBestCacheOffers(requestId) end) then return end
     local request = cacheRequests[requestId]
     if not request then return end
+    -- A delayed discovery may outlive the other clients' retained offers.
+    -- Ask again rather than requesting a snapshot they have already discarded.
+    if GetTime() - (request.lastOfferAtWall or request.createdAt) > CACHE_TRANSFER_TIMEOUT then
+        cacheRequests[requestId] = nil
+        iRC:DebugMsg("Cached guild report offers expired; requesting fresh offers.", 3)
+        RaceGrid:RequestGuildCache()
+        return
+    end
+    if not request.discoveryDone then
+        local quietFor = cacheTime() - (request.lastOfferAt or request.startedAt)
+        if quietFor < CACHE_REQUEST_WINDOW then
+            C_Timer.After(CACHE_REQUEST_WINDOW - quietFor, function() requestBestCacheOffers(requestId) end)
+            return
+        end
+        request.discoveryDone = true
+    end
     local requested = 0
     for guildKey, offer in pairs(request.offers) do
         local localReport = getServerStore().guildReports[guildKey]
@@ -1529,7 +1674,7 @@ local function requestBestCacheOffers(requestId)
         -- not make the same snapshot newer and previously caused it to be
         -- downloaded again whenever the short recent-receive window expired.
         local shouldRequest = offer.timestamp > localTimestamp
-        if shouldRequest then
+        if shouldRequest and not request.selected[guildKey] then
             request.selected[guildKey] = offer
             requested = requested + 1
             send(GRID_PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName,
@@ -1537,9 +1682,12 @@ local function requestBestCacheOffers(requestId)
             iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REQUEST_SENT", offer.guildName, offer.sender), 3)
         end
     end
+    if requested > 0 then request.lastActivityAt = cacheTime(); setCacheUpdating(true) end
     if requested == 0 then
-        cacheRequests[requestId] = nil
-        setCacheUpdating(false)
+        if next(request.selected) == nil and next(request.offers) ~= nil then
+            request.complete = true
+            setCacheUpdating(false)
+        end
     end
 end
 
@@ -1548,13 +1696,13 @@ function RaceGrid:RequestGuildCache()
     if not self:IsEnabled() or not iRC:IsGuildConnectionActive() then return false end
     cleanCacheState()
     for _, request in pairs(cacheRequests) do
-        if type(request) == "table" and GetTime() - (request.startedAt or 0) <= CACHE_TRANSFER_TIMEOUT then
+        if type(request) == "table" and not request.complete then
             iRC:DebugMsg("Cached Guild Leaderboard request skipped because another request is still active.", 3)
             return false
         end
     end
     local requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
-    cacheRequests[requestId] = { startedAt = GetTime(), offers = {}, selected = {} }
+    cacheRequests[requestId] = { startedAt = cacheTime(), createdAt = GetTime(), offers = {}, selected = {} }
     if not send(GRID_PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId }, SEP), "GUILD") then
         cacheRequests[requestId] = nil
         return false
@@ -1577,7 +1725,7 @@ local function handleCacheMessage(parts, sender, distribution)
     local kind, requestId = parts[1], parts[3]
     if parts[2] ~= WIRE_VERSION or type(requestId) ~= "string" or not requestId:match("^[0-9a-f]+$")
         or #requestId > 24 or not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(sender) then return true end
-    cleanCacheState()
+    local transferCount, oldestTransfer = cleanCacheState()
     if kind == "CACHE_REQUEST" and distribution == "GUILD" then
         local senderKey, now = fullNameKey(sender), GetTime()
         local previous = cacheRequestBySender[senderKey]
@@ -1597,6 +1745,7 @@ local function handleCacheMessage(parts, sender, distribution)
         local guildKey = normalizeGuildName(guildName)
         local observed = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
         observedCacheOffers[requestId] = observed
+        observed.lastActivityAt = GetTime()
         local current = observed.guilds[guildKey]
         if not current or timestamp > current.timestamp
             or (timestamp == current.timestamp and cacheHop < (current.cacheHop or 1))
@@ -1616,45 +1765,43 @@ local function handleCacheMessage(parts, sender, distribution)
                         guildName = guildName, timestamp = timestamp, checksum = checksum,
                         cacheHop = cacheHop, sender = sender,
                     }
+                    request.lastOfferAt, request.lastActivityAt = cacheTime(), cacheTime()
+                    request.lastOfferAtWall, request.complete = GetTime(), nil
+                    setCacheUpdating(true)
+                    if request.discoveryDone then requestBestCacheOffers(requestId) end
                 end
             end
         end
         return true
     elseif kind == "CACHE_GET" and distribution == "WHISPER" then
-        if iRC:DeferLowTraffic("traffic:cache-data", function()
-            handleCacheMessage(parts, sender, distribution)
-        end) then return true end
         local guildName, timestamp, checksum = tostring(parts[4] or ""), tonumber(parts[5]), tostring(parts[6] or ""):lower()
         if isMutedOlympusGuild(guildName) then return true end
         local offered = offeredCachePayloads[requestId]
         if not offered or iRC:NormalizeName(offered.requester) ~= iRC:NormalizeName(sender) then return true end
         local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]
         if not snapshot or snapshot.timestamp ~= timestamp or snapshot.checksum ~= checksum then return true end
+        if not parts.cacheSendQueued then
+            parts.cacheSendQueued = true
+            queueReportWork("cache-send:" .. fullNameKey(sender) .. ":" .. requestId .. ":"
+                .. normalizeGuildName(guildName) .. ":" .. checksum,
+                function() handleCacheMessage(parts, sender, distribution) end, nil, true)
+            return true
+        end
         local now = GetTime()
         if snapshot.servedAt and now - snapshot.servedAt <= CACHE_TRANSFER_TIMEOUT then
             iRC:DebugMsg("Duplicate cached Guild Leaderboard transfer request ignored for "
                 .. guildName .. " from " .. iRC:FormatPlayerName(sender) .. ".", 3)
             return true
         end
-        snapshot.servedAt = now
-        local payload = snapshot.payload
-        local hex = bytesToHex(payload)
-        local total = math.ceil(#hex / CACHE_CHUNK_SIZE)
-        if total < 1 or total > MAX_CACHE_PARTS then return true end
-        for part = 1, total do
-            local chunk = hex:sub((part - 1) * CACHE_CHUNK_SIZE + 1, part * CACHE_CHUNK_SIZE)
-            send(GRID_PREFIX, table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName, part, total, checksum, chunk }, SEP), "WHISPER", sender)
-            iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_PACKAGE_SENT", part, total, guildName, sender), 3)
+        if queueCachePayload(requestId, guildName, checksum, snapshot.payload, sender) then
+            snapshot.servedAt = now
+            offered.lastActivityAt = now
         end
         return true
     elseif kind == "CACHE_DATA" and distribution == "WHISPER" then
         local guildName = tostring(parts[4] or "")
         if isMutedOlympusGuild(guildName) then return true end
         local part, total = tonumber(parts[5]), tonumber(parts[6])
-        if iRC:DeferLowTraffic("traffic:racegrid-cache:" .. iRC:NormalizeName(sender) .. ":"
-            .. requestId .. ":" .. tostring(part or ""), function()
-                handleCacheMessage(parts, sender, distribution)
-            end) then return true end
         local checksum, chunk = tostring(parts[7] or ""):lower(), tostring(parts[8] or "")
         local request = cacheRequests[requestId]
         local selected = request and request.selected[normalizeGuildName(guildName)]
@@ -1664,11 +1811,18 @@ local function handleCacheMessage(parts, sender, distribution)
             or not part or not total or total < 1 or total > MAX_CACHE_PARTS or part < 1 or part > total
             or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") or not chunk:match("^[0-9a-fA-F]+$") then return true end
         setCacheUpdating(true)
-        local key = fullNameKey(sender) .. ":" .. requestId .. ":" .. checksum
+        local key = fullNameKey(sender) .. ":" .. requestId .. ":" .. normalizeGuildName(guildName) .. ":" .. checksum
         local transfer = incomingCacheTransfers[key]
         if not transfer or transfer.total ~= total then
-            transfer = { startedAt = GetTime(), total = total, parts = {}, guildName = guildName, checksum = checksum }
+            if not transfer and transferCount >= MAX_CACHE_PACKAGES and oldestTransfer then
+                incomingCacheTransfers[oldestTransfer] = nil
+            end
+            transfer = { startedAt = cacheTime(), total = total, parts = {}, guildName = guildName, checksum = checksum }
             incomingCacheTransfers[key] = transfer
+        end
+        if not transfer.parts[part] then
+            request.lastActivityAt = cacheTime()
+            transfer.lastActivityAt = cacheTime()
         end
         transfer.parts[part] = chunk
         iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_PACKAGE_RECEIVED", part, total, guildName, sender), 3)
@@ -1686,12 +1840,12 @@ local function handleCacheMessage(parts, sender, distribution)
                 iRC:CheckForNewVersion(report.addonVersion)
                 iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REPORT_RECEIVED", report.guildName, sender), 3)
             end
-        end)
+        end, selected.timestamp, true)
         request.selected[normalizeGuildName(guildName)] = nil
         local pending
         for _ in pairs(request.selected) do pending = true; break end
         if not pending then
-            cacheRequests[requestId] = nil
+            request.complete = true
             setCacheUpdating(false)
         end
         return true
@@ -1748,7 +1902,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             if not queued and C_Timer and C_Timer.After then
                 queueReportWork("public:" .. guildKey, function()
                     handleMessage(prefix, message, sender, distribution, true)
-                end, tonumber(publicParts[11]) or 0)
+                end, tonumber(publicParts[11]) or 0, true)
                 return
             end
         end
@@ -1771,14 +1925,20 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         and C_Timer and C_Timer.After then
         queueReportWork("public-description:" .. fullNameKey(sender), function()
             handleMessage(prefix, message, sender, distribution, true)
-        end, tonumber((split(message))[3]) or 0)
+        end, tonumber((split(message))[3]) or 0, true)
         return
     end
-    if (message:match("^GUILD_REPORT") or message:match("^GUILD_DESC")
-        or message:match("^GUILD_CLASS_BREAKDOWN"))
-        and iRC:DeferLowTraffic("traffic:racegrid-report:" .. iRC:NormalizeName(sender), function()
-            handleMessage(prefix, message, sender, distribution)
-        end) then return end
+    local reportKind = message:match("^([A-Z_]+)\t")
+    if (reportKind == "GUILD_REPORT" or reportKind == "GUILD_DESC" or reportKind == "GUILD_CLASS_BREAKDOWN")
+        and not queued and C_Timer and C_Timer.After then
+        -- Base reports and their extra details must keep separate queue entries.
+        local fields = publicParts or split(message)
+        local key = "public:" .. reportKind .. ":" .. fullNameKey(sender)
+        if reportKind == "GUILD_REPORT" then key = key .. ":" .. normalizeGuildName(fields[5]) end
+        queueReportWork(key, function() handleMessage(prefix, message, sender, distribution, true) end,
+            tonumber(fields[reportKind == "GUILD_REPORT" and 11 or 3]) or 0, true)
+        return
+    end
     local parts = publicParts or split(message)
     if parts[1] == "ADMIN_PRESENCE_REQUEST" and distribution == "CHANNEL" then
         local requestId, requester = tostring(parts[3] or ""), tostring(parts[4] or "")
@@ -1826,7 +1986,9 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         if timestamp and timestamp > 0 and timestamp <= time() + 300 and #editedBy <= 40 and not editedBy:find("[%c]")
             and #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]")
             and not iRC:ContainsProfanity(value) then
+            local hasBase = false
             for _, report in pairs(getServerStore().guildReports) do
+                if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender) then hasBase = true end
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and timestamp > math.floor(tonumber(report.guildDescriptionTimestamp) or 0) then
                     report.guildDescription, report.guildDescriptionTimestamp, report.guildDescriptionEditedBy = value, timestamp, editedBy
@@ -1834,6 +1996,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                     break
                 end
             end
+            if not hasBase then holdPublicDetail(parts, sender) end
         end
         return
     elseif parts[1] == "GUILD_CLASS_BREAKDOWN" and parts[2] == WIRE_VERSION then
@@ -1852,11 +2015,15 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         local guildPreferredLanguage = cleanGuildLanguage(parts[19])
         local validClassLock = (classLockFlag == "0" or classLockFlag == "1")
             and (classLockFlag ~= "1" or guildClass ~= "")
-        if reportTimestamp and (mode == "ALL" or mode == "RANGE" or mode == "MAX")
+        if reportTimestamp and reportTimestamp > 0 and reportTimestamp <= time() + 300
+            and (mode == "ALL" or mode == "RANGE" or mode == "MAX")
             and minLevel and minLevel == math.floor(minLevel) and minLevel >= 1 and minLevel <= 60
             and maxLevel and maxLevel == math.floor(maxLevel) and maxLevel >= minLevel and maxLevel <= 60
             and validClasses and validClassLock then
+            local needsBase = true
             for _, report in pairs(getServerStore().guildReports) do
+                if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
+                    and (tonumber(report.timestamp) or 0) >= reportTimestamp then needsBase = false end
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and tonumber(report.timestamp) == reportTimestamp and filteredTotal <= (tonumber(report.members) or 0)
                     and not (classLockFlag == "1" and report.rules and report.rules.raceLock == true) then
@@ -1877,6 +2044,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                     break
                 end
             end
+            if needsBase then holdPublicDetail(parts, sender) end
         end
         return
     end

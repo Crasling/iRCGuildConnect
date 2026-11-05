@@ -324,11 +324,25 @@ function iRC:IsPresenceNotificationLeader()
         local _, _, playerRankIndex = GetGuildInfo("player")
         ownRankIndex = playerRankIndex
     end
-    if not self:HasGuildPermission("presence") then return false end
     local ownName = self:NormalizeName(self:GetPlayerName())
+    local roster = self:GetGuildRosterSnapshot()
+    if type(ownRankIndex) ~= "number" then
+        for _, member in ipairs(roster) do
+            if self:NormalizeName(member.name) == ownName then ownRankIndex = member.rankIndex; break end
+        end
+    end
+    -- Use real guild ranks or an explicit member permission. A local testing
+    -- override may open settings, but it must not elect an officer-chat sender.
+    local function canNotify(name, rankIndex)
+        if type(rankIndex) ~= "number" then return false end
+        local entry = connection.memberPermissions and connection.memberPermissions[self:NormalizeName(name)]
+        return self:GuildRankHasPermission(rankIndex, "presence")
+            or entry and entry.permissions and entry.permissions.presence == true
+    end
+    if not canNotify(self:GetPlayerName(), ownRankIndex) then return false end
     local candidate = { name = self:GetPlayerName(), rankIndex = ownRankIndex }
     local now, sessionStartedAt = time(), self.ConnectionSessionStartedAt or 0
-    for _, member in ipairs(self:GetGuildRosterSnapshot()) do
+    for _, member in ipairs(roster) do
         local name, rankIndex, online = member.name, member.rankIndex, member.online
         if name and online and self:NormalizeName(name) ~= ownName then
             local profile = connection.members[self:NormalizeName(name)]
@@ -336,7 +350,7 @@ function iRC:IsPresenceNotificationLeader()
             -- Only direct, current-session iRC profiles can participate in
             -- notification leadership.
             if lastSeen and lastSeen >= sessionStartedAt and lastSeen <= now and now - lastSeen <= IRC_PRESENCE_TIMEOUT then
-                if self:GuildMemberHasPermission(name, "presence")
+                if canNotify(name, rankIndex)
                     and (rankIndex < candidate.rankIndex or (rankIndex == candidate.rankIndex and self:NormalizeName(name) < self:NormalizeName(candidate.name))) then
                     candidate = { name = name, rankIndex = rankIndex }
                 end

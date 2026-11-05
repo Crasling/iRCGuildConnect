@@ -2,6 +2,16 @@
 iRC - Changelog
 ================================================================================
 
+v0.6.3 - Settings & Sharing Improvements
+--------------------------------------------------------------------------------
+[IMPROVED] Personal Settings now has clear categories
+[FIXED] Layer detection works again
+[FIXED] Guild reports share more reliably during combat
+[FIXED] Updates no longer get stuck between fights
+[FIXED] Messages retry when WoW temporarily limits sending
+[FIXED] Guild reports keep their descriptions and class details
+[FIXED] Officer warnings respect guild permissions
+
 v0.6.2 - Level Cap Update
 --------------------------------------------------------------------------------
 [FIXED] Oops! The Guild Leaderboard max level is now correctly updated from 30 to 60

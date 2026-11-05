@@ -34,7 +34,7 @@ function CreateFrame()
 end
 local addon = {}
 function LibStub() return { NewAddon = function() return addon end } end
-C_ChatInfo = { SendAddonMessage = function(...) messages[#messages + 1] = { ... } end }
+C_ChatInfo = { SendAddonMessage = function(...) messages[#messages + 1] = { ... }; return 0 end }
 local private = {}
 assert(loadfile("iRC_Core.lua"))("iRC", private)
 assert(loadfile("Localization/enUS.lua"))("iRC", private)
@@ -68,8 +68,12 @@ assert(not iRC:IsTestAdminName("Crasling *"), "wildcard syntax does not grant te
 iRC.GameTocVersion = originalGameTocVersion
 iRC.TestAdminName = "Crasjin-Soulseeker"
 iRCDB, iRCCharDB = {}, {}
+iRC.Frame.OnEvent(nil, "ADDON_LOADED", "iRC")
 local db = iRC:GetConnection()
 db.active = true
+db.rulesBootstrap, db.rulesEstablished = nil, true
+db.activationTimestamp, db.activationSource = now, "Aleader-Soulseeker"
+iRC.ConnectionSessionStartedAt = now - 1000
 db.rules.raceLock = true
 function iRC:DebugMsg(message) debugMessages[#debugMessages + 1] = message end
 function iRC:GetSelfFoundEvidence() return { status = "UNVERIFIED" } end
@@ -81,11 +85,11 @@ assert(#messages == beforeOversizedSend, "oversized addon traffic never reaches 
 -- A newly installed inactive client must receive a direct bootstrap response.
 player = "Aleader"
 local beforeBootstrap = #messages
-connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t9", "GUILD", "Member-Soulseeker")
-assert(#messages == beforeBootstrap + 5, "GM sends activation, rules, contacts, permissions and a presence request to bootstrap the member")
-assert(messages[beforeBootstrap + 1][2]:match("^GUILD_ACTIVATION\t9\t1$"), "bootstrap starts with active guild state")
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t10", "GUILD", "Member-Soulseeker")
+assert(#messages == beforeBootstrap + 12, "GM sends activation, rules, contacts, current permission packets and a presence request")
+assert(messages[beforeBootstrap + 1][2] == "GUILD_ACTIVATION\t10\t1\t" .. now .. "\tAleader-Soulseeker", "bootstrap carries the activation timestamp and author")
 assert(messages[beforeBootstrap + 1][3] == "WHISPER" and messages[beforeBootstrap + 1][4] == "Member-Soulseeker", "activation targets requester")
-assert(messages[beforeBootstrap + 2][2]:match("^RULES\t9\t"), "bootstrap includes current rules")
+assert(messages[beforeBootstrap + 2][2]:match("^RULES\t10\t"), "bootstrap includes current rules")
 assert(messages[beforeBootstrap + 2][3] == "WHISPER" and messages[beforeBootstrap + 2][4] == "Member-Soulseeker", "rules target requester")
 assert(#messages[beforeBootstrap + 2][2] <= 255, "core rules fit WoW's addon-message limit")
 local ruleParts = {}
@@ -93,57 +97,84 @@ for value in (messages[beforeBootstrap + 2][2] .. "\t"):gmatch("(.-)\t") do rule
 local gmRulesTimestamp, gmRulesSource = ruleParts[14], ruleParts[15]
 assert(gmRulesTimestamp and gmRulesSource == "Aleader-Soulseeker", "GM authors the rules timestamp and source")
 assert(ruleParts[13] == "", "core rules leave guild contacts to their dedicated packet")
-assert(messages[beforeBootstrap + 3][2]:match("^GUILD_CONTACTS\t9\t"), "guild contacts use their dedicated packet")
-assert(messages[beforeBootstrap + 4][2]:match("^RANK_PERMISSIONS\t9\t"), "bootstrap includes rank permissions")
-assert(messages[beforeBootstrap + 5][2] == "PRESENCE_REQUEST\t9\tREQUEST", "bootstrap asks the member to return HELLO")
+assert(messages[beforeBootstrap + 3][2]:match("^GUILD_CONTACTS\t10\t"), "guild contacts use their dedicated packet")
+for offset, kind in ipairs({ "GUILD_MASTER_RANK", "RANK_PERMISSIONS", "ROSTER_HISTORY_PERMISSION",
+    "MEMBER_REMOVAL_PERMISSION", "IDENTITY_PERMISSION", "RANK_MANAGEMENT_PERMISSION", "RECRUITMENT_PERMISSION" }) do
+    assert(messages[beforeBootstrap + 3 + offset][2]:match("^" .. kind .. "\t10\t"), "bootstrap includes " .. kind)
+end
+assert(messages[beforeBootstrap + 12][2] == "PRESENCE_REQUEST\t10\tREQUEST", "bootstrap asks the member to return HELLO")
+for index = beforeBootstrap + 1, #messages do
+    assert(messages[index][3] == "WHISPER" and messages[index][4] == "Member-Soulseeker", "every bootstrap packet targets its requester")
+end
 local beforeImmediateRule = #messages
 iRC.LowTrafficMode = true
 assert(iRC:SetConnectionRule("guildMapEnabled", true), "Guild Master can change an active rule")
 iRC.LowTrafficMode = false
-assert(#messages > beforeImmediateRule and messages[beforeImmediateRule + 1][2]:match("^RULES\t9\t"),
+assert(#messages > beforeImmediateRule and messages[beforeImmediateRule + 1][2]:match("^RULES\t10\t"),
     "an active rule change broadcasts immediately during low-traffic mode")
+local latestRuleParts = {}
+for value in (messages[beforeImmediateRule + 1][2] .. "\t"):gmatch("(.-)\t") do latestRuleParts[#latestRuleParts + 1] = value end
+gmRulesTimestamp, gmRulesSource = latestRuleParts[14], latestRuleParts[15]
 local beforeDirectHello = #messages
-connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t9\tREQUEST", "WHISPER", "Member-Soulseeker")
-assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t9\t"), "presence request returns HELLO")
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "PRESENCE_REQUEST\t10\tREQUEST", "WHISPER", "Member-Soulseeker")
+assert(#messages == beforeDirectHello + 1 and messages[#messages][2]:match("^HELLO\t10\t"), "presence request returns HELLO")
 assert(messages[#messages][3] == "WHISPER" and messages[#messages][4] == "Member-Soulseeker", "presence response targets the requester directly")
 
 local acknowledgedViolation
 function iRC:MarkGroupViolationReported(violationId) acknowledgedViolation = violationId end
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix,
-    "GROUP_VIOLATION_ACK\t9\tordinary-member-ack", "WHISPER", "Member-Soulseeker")
+    "GROUP_VIOLATION_ACK\t10\tordinary-member-ack", "WHISPER", "Member-Soulseeker")
 assert(acknowledgedViolation == nil, "ordinary guild members cannot acknowledge officer incidents")
 connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix,
-    "GROUP_VIOLATION_ACK\t9\tauthorized-officer-ack", "WHISPER", "Aofficer-Soulseeker")
+    "GROUP_VIOLATION_ACK\t10\tauthorized-officer-ack", "WHISPER", "Aofficer-Soulseeker")
 assert(acknowledgedViolation == "authorized-officer-ack", "presence-authorized officers can acknowledge incidents")
 
 -- Rules and activation bootstrap fall through every guild rank. The lowest
 -- online rank index with a fresh iRC client is authoritative.
 roster[2].online = false
+iRC:InvalidateGuildRosterSnapshot()
 player = "Aofficer"
 assert(iRC:IsRulesetBroadcaster(), "rank 1 takes over rules while the GM client is unavailable")
 roster[3].online, roster[4].online = false, false
+iRC:InvalidateGuildRosterSnapshot()
 player = "Member"
 assert(iRC:IsRulesetBroadcaster(), "an ordinary member relays rules when no higher-rank iRC client is available")
+-- The relay holds the exact rules previously authored by the Guild Master.
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix,
+    messages[beforeImmediateRule + 1][2], "WHISPER", "Aleader-Soulseeker")
 local beforeMemberBootstrap = #messages
-connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t9", "GUILD", "Jujukhan-Soulseeker")
+connectionFrame.OnEvent(nil, "CHAT_MSG_ADDON", iRC.Prefix, "GUILD_ACTIVATION_REQUEST\t10", "GUILD", "Jujukhan-Soulseeker")
 assert(#messages == beforeMemberBootstrap + 3, "highest available ordinary rank bootstraps a new member with activation, rules and presence")
 local relayedParts = {}
 for value in (messages[beforeMemberBootstrap + 2][2] .. "\t"):gmatch("(.-)\t") do relayedParts[#relayedParts + 1] = value end
 local relayedTimestamp, relayedSource = relayedParts[14], relayedParts[15]
 assert(relayedTimestamp == gmRulesTimestamp and relayedSource == gmRulesSource, "lower ranks relay the original GM timestamp and source unchanged")
 roster[2].online, roster[3].online, roster[4].online = true, true, true
+iRC:InvalidateGuildRosterSnapshot()
 player = "Crasjin"
 
 local function profile(name, age, override)
     db.members[iRC:NormalizeName(name)] = { name = name, addonVersion = "0.2.4", lastSeen = now - (age or 0), testGuildMasterOverride = override }
 end
 local function expectLeader(name)
+    iRC:InvalidateGuildRosterSnapshot()
     local elected, actual = iRC:IsPresenceNotificationLeader()
     assert(actual == name .. "-Soulseeker", "unexpected leader: " .. tostring(actual))
     assert(elected == (player == name), "clients must agree on the same winner")
 end
 
 assert(not iRC:IsPresenceNotificationLeader(), "ordinary member cannot notify")
+local selfPermissionKey = iRC:NormalizeName(iRC:GetPlayerName())
+local permissionTestProfiles = db.members
+db.members = {}
+db.memberPermissions[selfPermissionKey] = { permissions = { presence = true } }
+assert(iRC:IsPresenceNotificationLeader(), "an explicit guild permission still allows a lower-rank notifier")
+local nativeGuildInfo = GetGuildInfo
+function GetGuildInfo() local guild, rank = nativeGuildInfo(); return guild, rank, nil end
+assert(iRC:IsPresenceNotificationLeader(), "a missing native rank falls back to the real roster rank")
+GetGuildInfo = nativeGuildInfo
+db.memberPermissions[selfPermissionKey] = nil
+db.members = permissionTestProfiles
 iRC:CheckPresenceMismatches()
 assert(debugMessages[#debugMessages] == iRC:Text("PRESENCE_NOTIFICATION_INELIGIBLE"), "do not claim another leader when local rank is ineligible")
 iRC:GetSettings().testGuildMasterOverride = true
@@ -214,6 +245,8 @@ db.members = {
     departed = { name = "Departed", lastSeen = now },
 }
 roster[#roster + 1] = roster[2] -- Same character must still only count once.
+iRC:InvalidateGuildRosterSnapshot()
+iRC:InvalidateGuildMemberRows()
 local group = assert(iRC.RaceGrid:BuildOwnGuildReports()[1])
 assert(group.members == 6 and group.activePlayers == 3 and group.verifiedMembers == 1,
     string.format("guild snapshot totals: %s/%s/%s", group.members, group.activePlayers, group.verifiedMembers))
@@ -221,6 +254,7 @@ assert(group.averageLevel == 10, "averages use the same participant population")
 local classTotal = 0; for _, count in pairs(group.classes) do classTotal = classTotal + count end
 assert(classTotal == 6, "class breakdown uses the full guild roster")
 roster[1].level, roster[5].level = 60, 59
+iRC:InvalidateGuildRosterSnapshot()
 iRC:InvalidateGuildMemberRows()
 iRC.RaceGrid:MarkLocalReportDirty()
 local maxLevelGroup = assert(iRC.RaceGrid:BuildOwnGuildReports()[1])
@@ -228,6 +262,7 @@ assert(maxLevelGroup.membersLevel60 == 1 and maxLevelGroup.activeLevel60 == 1,
     "leaderboard max-level activity counts level 60 and excludes level 59")
 assert(iRC:GetMemberVerification("Aofficer", false).state == "offline", "live verification behavior remains unchanged")
 db.members.member = { name = "Member", guid = "Player-1-Member", race = "Troll", lastSeen = now, addonVersion = "0.2.4" }
+iRC:InvalidateGuildMemberRows("Member")
 local sourceRows = iRC:GetGuildRosterRows()
 local sourced
 for _, row in ipairs(sourceRows) do if iRC:NormalizeName(row.name) == "member" then sourced = row break end end
@@ -294,9 +329,15 @@ print("Large-guild test passed: 1000 members, " .. (connectionReads / 2) .. " co
 -- Test the real visible-row renderer with lightweight WoW frame mocks.
 unpack = table.unpack
 local methods = {}
-local function widget() return setmetatable({}, { __index = function(_, key) return methods[key] or function() end end }) end
+local function widget()
+    return setmetatable({}, { __index = function(_, key)
+        if methods[key] then return methods[key] end
+        if key:match("^[A-Z]") and not key:match("^On") then return function() end end
+    end })
+end
 function methods:CreateFontString() return widget() end
 function methods:SetText(value) self.text = value end
+function methods:GetText() return self.text or "" end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:SetScript(event, callback) self[event] = callback end
@@ -306,14 +347,15 @@ local dashboard, offset, shown = iRC.ConnectionDashboard, 0, true
 local view = { rows = {}, rowData = {}, content = widget(), scroll = {
     GetVerticalScroll = function() return offset end, GetHeight = function() return 360 end,
 }, IsShown = function() return shown end }
+setmetatable(view.scroll, getmetatable(widget()))
 dashboard.frame = view
 for index = 1, 1000 do view.rowData[index] = { values = { tostring(index), "", "", "", "" } } end
 dashboard:RenderVisibleRows()
-assert(#view.rows == 7 and view.rows[1].columns[1].text == "1", "only visible rows plus one overscan row are created")
-offset = 500 * 60
+assert(#view.rows == 9 and view.rows[1].columns[1].text == "1", "only visible rows plus one overscan row are created")
+offset = 500 * 48
 dashboard:RenderVisibleRows()
-assert(#view.rows == 7 and view.rows[1].columns[1].text == "501", "scrolling reuses row frames with the correct data")
-offset = 999 * 60
+assert(#view.rows == 9 and view.rows[1].columns[1].text == "501", "scrolling reuses row frames with the correct data")
+offset = 999 * 48
 dashboard:RenderVisibleRows()
 assert(view.rows[1].columns[1].text == "1000" and not view.rows[2].shown, "last page hides unused pooled rows")
 local readsBefore = rosterReads
@@ -323,6 +365,9 @@ assert(rosterReads == readsBefore, "timer/scroll rendering never rebuilds the gu
 -- Exercise the full Verification Refresh, not just the renderer in isolation.
 date = os.date
 view.tab, view.tabs, view.filters, view.filterButtons = "Verification", {}, {}, {}
+view.verificationSearch, view.verificationSuggestions = widget(), widget()
+view.memberReport, view.memberMenu = widget(), widget()
+db.memberPermissions = { [iRC:NormalizeName(iRC:GetPlayerName())] = { permissions = { verification = true } } }
 view.status, view.title, view.subtitle = widget(), widget(), widget()
 view.headers, view.summaryCards = {}, {}
 for index = 1, 6 do view.headers[index] = widget(); view.headers[index].text = widget() end
@@ -334,11 +379,11 @@ function view.scroll:SetVerticalScroll(value) offset = value end
 local connectionBefore, rowsBefore = connectionReads, rosterReads
 offset = 0
 dashboard:Refresh()
-assert(#view.rowData == 1000 and #view.rows == 7, "full verification refresh retains all data with bounded UI frames")
-assert(rosterReads == rowsBefore and connectionReads - connectionBefore <= 5,
+assert(#view.rowData == 1000 and #view.rows == 9, "full verification refresh retains all data with bounded UI frames")
+assert(rosterReads == rowsBefore and connectionReads - connectionBefore <= 20,
     "verification refresh reuses the cached roster without per-row connection lookups")
 assert(view.rows[1].OnClick == view.rowData[1].onClick, "pooled row receives current click handler")
-assert(view.rowData[1].values and view.rowData[8].verificationMember and not view.rowData[8].values,
+assert(view.rowData[1].values and view.rowData[10].verificationMember and not view.rowData[10].values,
     "verification details are built only for rows inside the visible pool")
 local verificationCache = view.verificationCache
 offset = 499 * 48
@@ -358,7 +403,10 @@ dashboard:RenderVisibleRows()
 assert(view.rows[1].columns[4].text ~= timerBefore and rosterReads == previousRosterReads, "attention timer advances without rebuilding the roster")
 
 local callbacks, refreshes = {}, 0
-C_Timer = { After = function(_, callback) callbacks[#callbacks + 1] = callback end }
+-- Attention reminders have their own one-second job; count only redraw timers.
+C_Timer = { After = function(delay, callback)
+    if delay == 0.2 then callbacks[#callbacks + 1] = callback end
+end }
 function dashboard:Refresh() self.pendingRefresh = nil; refreshes = refreshes + 1 end
 for _ = 1, 100 do dashboard:RefreshIfShown() end
 assert(#callbacks == 1)

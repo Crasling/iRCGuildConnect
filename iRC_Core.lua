@@ -141,8 +141,23 @@ function iRC:GetItemInfo(itemID)
     if C_Item and C_Item.GetItemInfo then return C_Item.GetItemInfo(itemID) end
 end
 
-local lowTrafficPending, lowTrafficPendingCount, lowTrafficGeneration = {}, 0, 0
+local lowTrafficPending, lowTrafficPendingCount, lowTrafficOrder = {}, 0, 0
 local LOW_TRAFFIC_QUEUE_LIMIT = 32
+local lowTrafficWake, lowTrafficRunning, lowTrafficExecutingKey, lowTrafficExecutingSafe
+local lowTrafficOverflowWarned = false
+
+-- These jobs only relay saved guild state or send small control requests.
+-- Live positions, Guild Found measurements, and UI actions are not on this list.
+local COMBAT_SAFE_TRAFFIC = {
+    activation = true, ["activation-request"] = true,
+    ["member-permissions"] = true, ["rank-permissions"] = true,
+    ["management-conflict"] = true, management = true,
+    ["contact-metadata"] = true, contacts = true,
+    ["homepage-description"] = true, ["homepage-description-receive"] = true,
+    ["homepage-icon"] = true, ["homepage-tag"] = true, ["homepage-classes"] = true,
+    ["trade-exceptions"] = true, rules = true, ["rules-request"] = true,
+    ["guild-cache-request"] = true,
+}
 
 local function combatStateBlocksTraffic()
     local secretChecker = _G and _G.issecretvalue
@@ -173,54 +188,97 @@ function iRC:CanOpenPanel()
     return true
 end
 
-function iRC:DeferLowTraffic(key, callback)
-    if not self:IsLowTrafficMode() then return false end
-    if type(key) == "string" and type(callback) == "function" then
-        if not lowTrafficPending[key] then
-            if lowTrafficPendingCount >= LOW_TRAFFIC_QUEUE_LIMIT then return true end
-            lowTrafficPendingCount = lowTrafficPendingCount + 1
-        end
-        lowTrafficPending[key] = callback
+local drainLowTrafficQueue
+local function scheduleLowTrafficQueue(delay)
+    if lowTrafficWake or lowTrafficRunning then return end
+    if not C_Timer or not C_Timer.After then
+        if not combatStateBlocksTraffic() then drainLowTrafficQueue() end
+        return
     end
+    local ticket = {}
+    lowTrafficWake = ticket
+    C_Timer.After(delay, function()
+        if lowTrafficWake ~= ticket then return end
+        lowTrafficWake = nil
+        drainLowTrafficQueue()
+    end)
+end
+
+drainLowTrafficQueue = function()
+    if lowTrafficRunning then return end
+    local blocked = combatStateBlocksTraffic()
+    if not blocked and iRC.LowTrafficMode then
+        iRC.LowTrafficMode = false
+        iRC:DebugMsg("Combat ended: queued work resumes without another cooldown.", 3)
+    end
+    local selected
+    for _, entry in pairs(lowTrafficPending) do
+        if (not blocked or entry.combatSafe) and (not selected or entry.order < selected.order) then selected = entry end
+    end
+    if not selected then
+        if lowTrafficPendingCount > 0 or iRC.LowTrafficMode then scheduleLowTrafficQueue(0.35) end
+        return
+    end
+    -- Read the current callback only when it runs. Nothing is detached into
+    -- delayed closures that could later overwrite a newer update for this key.
+    lowTrafficPending[selected.key] = nil
+    lowTrafficPendingCount = lowTrafficPendingCount - 1
+    lowTrafficOverflowWarned = false
+    lowTrafficRunning, lowTrafficExecutingKey, lowTrafficExecutingSafe = true, selected.key, selected.combatSafe
+    local ok, err = pcall(selected.callback)
+    lowTrafficRunning, lowTrafficExecutingKey, lowTrafficExecutingSafe = false, nil, nil
+    if lowTrafficPendingCount > 0 then scheduleLowTrafficQueue(0.35) end
+    if not ok then
+        iRC:DebugMsg("Queued work failed for " .. selected.key .. ": " .. tostring(err), 1)
+        if geterrorhandler then geterrorhandler()(err) end
+    end
+end
+
+function iRC:DeferLowTraffic(key, callback)
+    -- A paced saved-data job may pass its own entry guard during combat.
+    -- This never bypasses the combat check for a different or protected job.
+    if key == lowTrafficExecutingKey and lowTrafficExecutingSafe then return false end
+    if not self:IsLowTrafficMode() then
+        -- A live update supersedes an older copy still waiting between ticks.
+        if lowTrafficPending[key] then
+            lowTrafficPending[key] = nil
+            lowTrafficPendingCount = lowTrafficPendingCount - 1
+        end
+        return false
+    end
+    if type(key) ~= "string" or type(callback) ~= "function" then return true end
+    local entry = lowTrafficPending[key]
+    if entry then
+        entry.callback = callback
+    else
+        if lowTrafficPendingCount >= LOW_TRAFFIC_QUEUE_LIMIT then
+            if not lowTrafficOverflowWarned then self:DebugMsg("Deferred work queue is full; new work was not queued.", 2) end
+            lowTrafficOverflowWarned = true
+            return true
+        end
+        lowTrafficOrder = lowTrafficOrder + 1
+        local family = key:match("^traffic:([^:]+)")
+        lowTrafficPending[key] = {
+            key = key, callback = callback, order = lowTrafficOrder,
+            combatSafe = COMBAT_SAFE_TRAFFIC[family] == true,
+        }
+        lowTrafficPendingCount = lowTrafficPendingCount + 1
+    end
+    scheduleLowTrafficQueue(0.35)
     return true
 end
 
 function iRC:EnterLowTrafficMode()
     self.LowTrafficMode = true
-    lowTrafficGeneration = lowTrafficGeneration + 1
+    if lowTrafficPendingCount > 0 then scheduleLowTrafficQueue(0.35) end
     self:DebugMsg("Low Traffic Mode enabled: combat started.", 3)
 end
 
 function iRC:LeaveLowTrafficMode()
-    if combatStateBlocksTraffic() then return end
-    lowTrafficGeneration = lowTrafficGeneration + 1
-    local generation = lowTrafficGeneration
-    local delay = self:GetStartupTrafficDelay()
-    if not C_Timer or not C_Timer.After then self.LowTrafficMode = false; return end
-    C_Timer.After(delay, function()
-        if generation ~= lowTrafficGeneration or combatStateBlocksTraffic() then return end
-        iRC.LowTrafficMode = false
-        local keys = {}
-        for key in pairs(lowTrafficPending) do keys[#keys + 1] = key end
-        table.sort(keys)
-        local callbacks = lowTrafficPending
-        lowTrafficPending = {}
-        lowTrafficPendingCount = 0
-        local networkCount, localCount = 0, 0
-        for _, key in ipairs(keys) do
-            if key:find("^traffic:") then networkCount = networkCount + 1 else localCount = localCount + 1 end
-        end
-        for index, key in ipairs(keys) do
-            C_Timer.After((index - 1) * 0.35, function()
-                local callback = callbacks[key]
-                if not callback then return end
-                if iRC:IsLowTrafficMode() then iRC:DeferLowTraffic(key, callback) else callback() end
-            end)
-        end
-        iRC:DebugMsg("Low Traffic Mode ended: " .. tostring(#keys) .. " queued task(s) resumed ("
-            .. tostring(networkCount) .. " network, " .. tostring(localCount)
-            .. " local). Inapplicable tasks may skip without sending.", 3)
-    end)
+    -- Run the oldest eligible job in this event, so even a very short safe
+    -- gap makes progress. Other jobs remain paced and recheck combat each time.
+    lowTrafficWake = nil
+    drainLowTrafficQueue()
 end
 
 -- Addon-message traffic queues ---------------------------------------------
@@ -237,6 +295,7 @@ local OUTGOING_PACKET_SPACING = 0.08
 local OUTGOING_BYTES_PER_SECOND = 800
 local OUTGOING_BURST_BYTES = 1200
 local CHAT_LOCKDOWN_RETRY_DELAY = 0.5
+local OUTGOING_RETRY_LIFETIME = 30
 
 -- Head/tail queues avoid table.remove(queue, 1), which copies every remaining
 -- entry and can itself create a CPU spike when a large sync arrives.
@@ -334,13 +393,31 @@ local function chatMessagingLocked()
     return locked == true
 end
 
+local lastSendFailure, lastSendFailureAt
 local function sendAddonTrafficNow(prefix, message, distribution, target)
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
-    if chatMessagingLocked() then return false end
-    local sent = C_ChatInfo.SendAddonMessage(prefix, message, distribution, target)
+    if chatMessagingLocked() then return false, true end
+    local ok, result = pcall(C_ChatInfo.SendAddonMessage, prefix, message, distribution, target)
+    local readable = not iRC:IsSecretValue(result)
+    local results = Enum and Enum.SendAddonMessageResult or {}
+    -- WoW returns an enum, not a boolean. Nonzero error codes are truthy in
+    -- Lua, so testing only the return value silently discarded failed sends.
+    local sent = ok and readable and (result == true or result == (results.Success or 0))
+    local retryable = ok and readable and (result == (results.AddonMessageThrottle or 3)
+        or result == (results.ChannelThrottle or 8) or result == (results.AddOnMessageLockdown or 11))
+    local kind = message:match("^([A-Z][A-Z0-9_]*)") or "other"
+    local detail = readable and tostring(result):sub(1, 160) or "<secret>"
     if sent and iRC.TrafficMonitorEnabled then iRC:RecordTrafficBytes("out", #tostring(prefix or "") + #message, prefix, message) end
-    if iRC.Diagnostics then iRC.Diagnostics:Trace(sent and "SEND" or "SEND_FAIL", prefix, message:match("^([A-Z][A-Z0-9_]*)") or "other", #message, distribution, target or "") end
-    return sent or false
+    if iRC.Diagnostics then iRC.Diagnostics:Trace(sent and "SEND" or "SEND_FAIL", prefix, kind, #message, distribution, target or "", detail) end
+    if not sent then
+        local failure = tostring(prefix) .. "/" .. kind .. ": " .. detail
+        local now = GetTime and GetTime() or 0
+        if failure ~= lastSendFailure or not lastSendFailureAt or now - lastSendFailureAt >= 10 then
+            lastSendFailure, lastSendFailureAt = failure, now
+            iRC:DebugMsg("Addon send failed for " .. failure .. (retryable and "; queued for retry." or "."), 2)
+        end
+    end
+    return sent == true, retryable == true
 end
 
 local function updateOutgoingTokens(now)
@@ -375,26 +452,40 @@ end
 local function drainOutgoingPerformanceQueue()
     local packet, queue = peekOutgoingPacket()
     if not packet then outgoingPerformanceScheduled = false; return end
-    if chatMessagingLocked() then
-        C_Timer.After(CHAT_LOCKDOWN_RETRY_DELAY, drainOutgoingPerformanceQueue)
-        return
-    end
     local now = GetTime and GetTime() or 0
-    local cost = outgoingPacketCost(packet)
-    updateOutgoingTokens(now)
-    if outgoingTokens < cost then
-        C_Timer.After(math.max(OUTGOING_PACKET_SPACING, (cost - outgoingTokens) / OUTGOING_BYTES_PER_SECOND), drainOutgoingPerformanceQueue)
-        return
-    end
-    removeOutgoingPacket(packet, queue)
     local expired = packet.expiresAt and now > packet.expiresAt
-    if not expired and packet.guildKey == iRC:GetGuildKey() then
+    local retryExpired = packet.retryStartedAt and now - packet.retryStartedAt >= OUTGOING_RETRY_LIFETIME
+    if expired or retryExpired or packet.guildKey ~= iRC:GetGuildKey() then
+        removeOutgoingPacket(packet, queue)
+        if iRC.Diagnostics then
+            iRC.Diagnostics:Trace("QUEUE_DROP", expired and "expired outgoing"
+                or retryExpired and "send retry timeout" or "stale outgoing", packet.prefix, packet.kind or "other")
+        end
+        if retryExpired then iRC:DebugMsg("Addon send retry timed out for " .. tostring(packet.prefix) .. "/" .. tostring(packet.kind) .. ".", 2) end
+    else
+        if chatMessagingLocked() then
+            C_Timer.After(CHAT_LOCKDOWN_RETRY_DELAY, drainOutgoingPerformanceQueue)
+            return
+        end
+        local cost = outgoingPacketCost(packet)
+        updateOutgoingTokens(now)
+        if outgoingTokens < cost then
+            C_Timer.After(math.max(OUTGOING_PACKET_SPACING, (cost - outgoingTokens) / OUTGOING_BYTES_PER_SECOND), drainOutgoingPerformanceQueue)
+            return
+        end
         outgoingTokens = math.max(0, outgoingTokens - cost)
-        local ok, err = pcall(sendAddonTrafficNow, packet.prefix, packet.message, packet.distribution, packet.target)
-        if not ok and geterrorhandler then geterrorhandler()(err) end
-    elseif iRC.Diagnostics then
-        iRC.Diagnostics:Trace("QUEUE_DROP", expired and "expired outgoing" or "stale outgoing",
-            packet.prefix, packet.kind or "other")
+        local ok, sent, retryable = pcall(sendAddonTrafficNow, packet.prefix, packet.message, packet.distribution, packet.target)
+        if ok and not sent and retryable then
+            packet.retryStartedAt = packet.retryStartedAt or now
+            C_Timer.After(CHAT_LOCKDOWN_RETRY_DELAY, drainOutgoingPerformanceQueue)
+            return
+        end
+        removeOutgoingPacket(packet, queue)
+        if ok and sent and packet.retryStartedAt then
+            if iRC.Diagnostics then iRC.Diagnostics:Trace("SEND_RECOVERED", packet.prefix, packet.kind) end
+            iRC:DebugMsg("Addon send retry accepted for " .. tostring(packet.prefix) .. "/" .. tostring(packet.kind) .. ".", 3)
+        end
+        if not ok and geterrorhandler then geterrorhandler()(sent) end
     end
     if outgoingPerformanceCount > 0 then C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
     else outgoingPerformanceScheduled = false end
@@ -423,10 +514,13 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         local priority = trafficPriority(kind)
         local immediatePacket = { prefix = prefix, message = message, distribution = distribution, target = target }
         local immediateCost = outgoingPacketCost(immediatePacket)
+        local retryStartedAt
         updateOutgoingTokens(now)
         if outgoingPerformanceCount == 0 and not chatMessagingLocked() and outgoingTokens >= immediateCost then
             outgoingTokens = outgoingTokens - immediateCost
-            return sendAddonTrafficNow(prefix, message, distribution, target)
+            local sent, retryable = sendAddonTrafficNow(prefix, message, distribution, target)
+            if sent or not retryable then return sent end
+            retryStartedAt = now
         end
         local replaceKey = replaceableTrafficKey(prefix, kind, distribution, target)
         local existing = replaceKey and outgoingReplaceable[replaceKey]
@@ -445,6 +539,7 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
             prefix = prefix, message = message, distribution = distribution, target = target,
             guildKey = guildKey, kind = kind, replaceKey = replaceKey,
             expiresAt = lifetime and (now + lifetime) or nil,
+            retryStartedAt = retryStartedAt,
         }
         local queue = outgoingPerformanceQueues[priority]
         queue.tail = queue.tail + 1
@@ -454,7 +549,7 @@ function iRC:SendAddonTraffic(prefix, message, distribution, target)
         if self.Diagnostics then self.Diagnostics:Trace("QUEUE_OUT", prefix, kind, #message, outgoingPerformanceCount, priority) end
         if not outgoingPerformanceScheduled then
             outgoingPerformanceScheduled = true
-            C_Timer.After(OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
+            C_Timer.After(retryStartedAt and CHAT_LOCKDOWN_RETRY_DELAY or OUTGOING_PACKET_SPACING, drainOutgoingPerformanceQueue)
         end
         return true
     end
