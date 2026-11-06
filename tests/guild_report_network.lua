@@ -1,4 +1,5 @@
 -- Two isolated addon clients use the real transport queues, filters, and cache protocol.
+function wipe(value) for key in pairs(value) do value[key] = nil end; return value end
 local function scenario(mode, reportCount, duration)
     local now, timers, clients, errors, wire = 1000, {}, {}, {}, {}
     local droppedPacket = false
@@ -59,6 +60,7 @@ local function scenario(mode, reportCount, duration)
         function addon:IsGuildConnectionActive() return true end
         function addon:IsGuildMemberName() return true end
         function addon:GetStartupTrafficDelay() return 2 end
+        function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
         function addon:ContainsProfanity() return false end
         function addon:CheckForNewVersion() end
         function addon:DebugMsg() end
@@ -71,14 +73,20 @@ local function scenario(mode, reportCount, duration)
     local expected = reportCount or (mode == "paced-transfer" and 8 or 1)
     for index = 1, expected do
         assert(sender.grid:StoreGuildReport({
-            name = "Original Reporter", guid = "Player-1-Report" .. index,
-            guildName = "Shared Guild " .. (mode == "wide" and string.rep("g", 60) or "") .. index,
-            guildContacts = mode == "wide" and string.rep("b", 140) or "",
-            race = "HUMAN", faction = "Alliance", members = 6, averageLevel = 60,
-            membersLevel60 = 6, activeLevel60 = 6, activePlayers = 6, activeMembers = 6,
-            timestamp = sender.env.time(), classes = { DRUID = 6 }, addonVersion = "0.6.2",
+            name = mode == "maximum" and string.rep("n", 80) or "Original Reporter",
+            guid = mode == "maximum" and string.rep("x", 80) or "Player-1-Report" .. index,
+            guildName = mode == "maximum" and string.rep("g", 80)
+                or "Shared Guild " .. (mode == "wide" and string.rep("g", 60) or "") .. index,
+            guildContacts = (mode == "wide" or mode == "maximum") and string.rep("b", 140) or "",
+            race = "HUMAN", faction = "Alliance", members = mode == "maximum" and 10000 or 6, averageLevel = 60,
+            membersLevel60 = mode == "maximum" and 10000 or 6, activeLevel60 = mode == "maximum" and 10000 or 6,
+            activePlayers = mode == "maximum" and 10000 or 6, activeMembers = mode == "maximum" and 10000 or 6,
+            guildDeaths = mode == "maximum" and 10000000 or 0, guildPreferredLanguage = mode == "maximum" and string.rep("l", 32) or "",
+            timestamp = sender.env.time(), classes = mode == "maximum" and { DRUID = 1111, ROGUE = 1111,
+                HUNTER = 1111, WARRIOR = 1111, MAGE = 1111, PRIEST = 1111, WARLOCK = 1111, PALADIN = 1111, SHAMAN = 1111 }
+                or { DRUID = 6 }, addonVersion = "0.6.2",
             guildDescription = string.rep("a", 160), guildDescriptionTimestamp = sender.env.time(),
-            guildDescriptionEditedBy = "Editor", rules = {}, classBreakdownMode = "ALL",
+            guildDescriptionEditedBy = mode == "maximum" and string.rep("e", 80) or "Editor", rules = {}, classBreakdownMode = "ALL",
         }, true))
     end
     local bothFighting = mode == "continuous-combat" or mode == "chain-pulls"
@@ -128,7 +136,7 @@ local function scenario(mode, reportCount, duration)
         assert(requester.grid:RequestGuildCache(), "a failed transfer can be requested again")
         advance(30)
     end
-    local store = requester.env.iRCDB.globalRaceGrid.servers.forever
+    local store = requester.env.iRCDB.globalRaceGrid.servers["forever:" .. requester.addon:GetGuildDirectoryScope()]
     local count = 0
     for _ in pairs(store.guildReports) do count = count + 1 end
     local first, last, packets
@@ -155,4 +163,5 @@ scenario("chain-pulls", 8)
 scenario("paced-transfer")
 scenario("missing-packet")
 scenario("wide", 32, 240)
+scenario("maximum", 1, 60)
 print("PASS: independent clients, real traffic pacing, lost-packet recovery, and 32-report cache batches")

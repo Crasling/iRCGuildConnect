@@ -35,6 +35,8 @@ local restrictedInboxBypassKey
 local protectedInboxEvidence
 local lastMailRestrictionReason
 local lastTradeRestrictionReason
+local tradeHooksInstalled = {}
+local refreshingTradeGuard = false
 local lastInboxRestrictionKey
 local CONJURED_ITEMS = { [5350]=true,[2288]=true,[2136]=true,[3772]=true,[8077]=true,[8078]=true,[8079]=true,[5349]=true,[1113]=true,[1114]=true,[1487]=true,[8075]=true,[8076]=true,[22895]=true }
 local HEALTHSTONE_ITEMS = { [5512]=true,[19004]=true,[19005]=true,[5511]=true,[19006]=true,[19007]=true,[5509]=true,[19008]=true,[19009]=true,[5510]=true,[19010]=true,[19011]=true,[9421]=true,[19012]=true,[19013]=true }
@@ -165,7 +167,7 @@ local function externalTradeExceptionAllowed(partnerName)
     local targetServiceId = itemIdFromLink(GetTradeTargetItemLink and GetTradeTargetItemLink(serviceSlot))
     if playerServiceId then itemCount = itemCount + 1 end
     if targetServiceId then itemCount = itemCount + 1 end
-    if itemCount == 0 then return false, nil end
+    if itemCount == 0 then return false, nil, true end
     local _, playerClass = UnitClass("player")
     local usedCategories, usedCategoryLookup = {}, {}
     local function useCategory(label)
@@ -239,6 +241,14 @@ local function getTradeAcceptButton()
     return _G.TradeFrameTradeButton or (_G.TradeFrame and (_G.TradeFrame.TradeButton or _G.TradeFrame.AcceptButton))
 end
 
+local function releaseTradeButton(button)
+    if not button.iRCRestricted then return end
+    button.iRCRestricted = nil
+    if isTradeWindowOpen() and TradeFrame.acceptState == 1 then return end
+    -- Let Blizzard retain control of its confirmation-dialog state.
+    if TradeFrameTradeButton_Enable then TradeFrameTradeButton_Enable() else button:SetEnabled(true) end
+end
+
 local function flagProtectedInteraction(reason, evidence)
     if not iRC.RaceLockedSync or not iRC.RaceLockedSync.FlagMonitoringDiscrepancy then return false end
     local currentMoney = GetMoney and GetMoney() or nil
@@ -277,42 +287,85 @@ function Enforcement:UpdateTradeRestriction()
     local button = getTradeAcceptButton()
     if not button or not button.SetEnabled then return end
     if not isTradeWindowOpen() then
-        if button.iRCRestricted then button:SetEnabled(true) end
+        releaseTradeButton(button)
         button.iRCRestricted, button.iRCApprovedException = nil, nil
         lastTradeRestrictionReason = nil
         protectedTradeEvidence = nil
         return
     end
     if not isGuildFoundEconomyActive() then
-        if button.iRCRestricted then button:SetEnabled(true) end
+        releaseTradeButton(button)
         button.iRCRestricted, button.iRCApprovedException, lastTradeRestrictionReason = nil, nil, nil
         protectedTradeEvidence = nil
         return
     end
 
     local partnerName = getTradePartnerName()
-    local allowed, reason = partnerName and iRC:GetGuildFoundTradeStatus(partnerName)
-    local exceptionNote
+    local allowed, reason
+    if partnerName then allowed, reason = iRC:GetGuildFoundTradeStatus(partnerName) end
+    local exceptionNote, waitingForItems
     if not allowed and partnerName and not iRC:IsGuildMemberName(partnerName) then
-        allowed, exceptionNote = externalTradeExceptionAllowed(partnerName)
+        allowed, exceptionNote, waitingForItems = externalTradeExceptionAllowed(partnerName)
+        if iRC:GetConnectionRules().guildFoundTradeExceptions then
+            reason = iRC:Text("GUILD_FOUND_TRADE_EXCEPTION_REASON")
+        end
     end
     if allowed then
-        if button.iRCRestricted then button:SetEnabled(true) end
+        releaseTradeButton(button)
         button.iRCRestricted, lastTradeRestrictionReason = nil, nil
         button.iRCApprovedException = exceptionNote
     else
         button.iRCRestricted = true
         button.iRCApprovedException = nil
+        -- Blizzard also remembers this state while a trade confirmation is open.
+        button.enabled = false
         button:SetEnabled(false)
-        local restrictionKey = tostring(partnerName or "") .. ":" .. tostring(reason or "")
+        local restrictionKey = tostring(partnerName or "") .. ":" .. tostring(reason or "") .. ":" .. tostring(waitingForItems == true)
         if restrictionKey ~= lastTradeRestrictionReason then
             lastTradeRestrictionReason = restrictionKey
-            iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
-            self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED",
-                partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
+            if waitingForItems then
+                iRC:Print(iRC.Colors.Yellow .. iRC:Text("GUILD_FOUND_TRADE_EXCEPTION_WAITING", partnerName) .. iRC.Colors.Reset)
+            else
+                iRC:RecordGuildFoundAudit("TRADE_BLOCKED", partnerName)
+                self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_TRADE_BLOCKED",
+                    partnerName or iRC:Text("GUILD_FOUND_UNKNOWN_PLAYER"), reason or iRC:Text("GUILD_FOUND_TRADE_REASON")))
+            end
         end
     end
     captureProtectedTradeEvidence()
+end
+
+function Enforcement:InstallTradeGuards()
+    if type(hooksecurefunc) ~= "function" then return end
+    local function recheck()
+        if refreshingTradeGuard then return end
+        refreshingTradeGuard = true
+        local ok, err = pcall(self.UpdateTradeRestriction, self)
+        refreshingTradeGuard = false
+        if not ok then
+            local button = getTradeAcceptButton()
+            if button and isTradeWindowOpen() and isGuildFoundEconomyActive() then
+                button.iRCRestricted, button.iRCApprovedException, button.enabled = true, nil, false
+                button:SetEnabled(false)
+            end
+            iRC:DebugMsg("Guild Found trade check failed: " .. tostring(err), 1)
+        end
+    end
+    -- Native money edits, item updates and confirmation dialogs can re-enable
+    -- Trade after our event handler. Recheck after their work, in either order.
+    local installed = 0
+    for _, name in ipairs({ "TradeFrameTradeButton_Enable", "TradeFrameTradeButton_SetToEnabledState",
+        "TradeFrame_UpdateMoney", "TradeFrame_OnEvent" }) do
+        if not tradeHooksInstalled[name] and type(_G[name]) == "function" then
+            local ok, err = pcall(hooksecurefunc, name, recheck)
+            if ok then installed = installed + 1
+            elseif tradeHooksInstalled[name] == nil then
+                iRC:DebugMsg("Could not protect trade control " .. name .. ": " .. tostring(err), 2)
+            end
+            tradeHooksInstalled[name] = ok
+        end
+    end
+    if installed > 0 then iRC:DebugMsg("Installed " .. installed .. " Guild Found trade control guard(s).", 3) end
 end
 
 function Enforcement:RecordApprovedTradeException(playerAccepted)
@@ -755,6 +808,7 @@ function Enforcement:Refresh()
     iRC:RecordSelfFoundState()
     scheduleLanguageApply()
     self:UpdateSelfFoundWarning()
+    self:InstallTradeGuards()
     self:UpdateTradeRestriction()
     self:UpdateMailRestriction()
     self:UpdateInboxRestriction()
@@ -843,6 +897,7 @@ frame:SetScript("OnEvent", function(_, event, unit, targetAccepted)
         end
         Enforcement:RecordApprovedTradeException(unit)
     elseif event == "TRADE_SHOW" or event == "TRADE_UPDATE" then
+        Enforcement:InstallTradeGuards()
         Enforcement:CheckTradeRestriction()
         Enforcement:UpdateTradeRestriction()
     elseif event == "AUCTION_HOUSE_SHOW" then

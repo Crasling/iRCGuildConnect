@@ -2,10 +2,11 @@
 local accepted, sentMail, inboxItems, inboxMoney, autoLoot = 0, 0, 0, 0, 0
 local tradePartner = "Outside"
 local tradeOpen, exceptionEnabled, playerTradeLink = true, false, nil
+local targetTradeLink, playerOffer, targetOffer, typedOffer = nil, 0, 0, 0
 local audits, discrepancies, frames = {}, {}, {}
 
 local function control()
-    return { enabled = true, SetEnabled = function(self, value) self.enabled = value and true or false end }
+    return { active = true, SetEnabled = function(self, value) self.active = value and true or false end }
 end
 
 UIParent = {}
@@ -37,10 +38,10 @@ function CreateFrame()
     return frame
 end
 function GetUnitName(unit) if unit == "NPC" then return tradePartner end end
-function GetPlayerTradeMoney() return 0 end
-function GetTargetTradeMoney() return 0 end
+function GetPlayerTradeMoney() return playerOffer end
+function GetTargetTradeMoney() return targetOffer end
 function GetTradePlayerItemLink(slot) if slot == 1 then return playerTradeLink end end
-function GetTradeTargetItemLink() end
+function GetTradeTargetItemLink(slot) if slot == 1 then return targetTradeLink end end
 function AcceptTrade() accepted = accepted + 1 end
 function SendMail() sentMail = sentMail + 1 end
 function TakeInboxItem() inboxItems = inboxItems + 1 end
@@ -105,7 +106,7 @@ local eventFrame = frames[#frames]
 enforcement:InstallMailAPIGuards()
 
 enforcement:UpdateTradeRestriction()
-assert(TradeFrameTradeButton.enabled == false, "external trade acceptance control is disabled")
+assert(TradeFrameTradeButton.active == false, "external trade acceptance control is disabled")
 assert(#notices == 1, "blocked trade explains the restriction in local chat")
 eventFrame.OnEvent(nil, "TRADE_ACCEPT_UPDATE", 1, 0)
 assert(discrepancies[#discrepancies] and discrepancies[#discrepancies].reason == "TRADE_BLOCK_BYPASS",
@@ -113,11 +114,11 @@ assert(discrepancies[#discrepancies] and discrepancies[#discrepancies].reason ==
 eventFrame.OnEvent(nil, "TRADE_CLOSED")
 tradePartner = "Guildie"
 enforcement:UpdateTradeRestriction()
-assert(TradeFrameTradeButton.enabled == true, "verified guild trade acceptance remains available")
+assert(TradeFrameTradeButton.active == true, "verified guild trade acceptance remains available")
 
 tradePartner, exceptionEnabled, playerTradeLink = "Outside", true, "|Hitem:5350:0:0:0|h[Conjured Water]|h"
 enforcement:UpdateTradeRestriction()
-assert(TradeFrameTradeButton.enabled == true and TradeFrameTradeButton.iRCApprovedException,
+assert(TradeFrameTradeButton.active == true and TradeFrameTradeButton.iRCApprovedException,
     "an explicitly selected external exception item enables trade acceptance")
 assert(enforcement:RecordApprovedTradeException(1), "accepting an external exception records its approval")
 assert(#audits >= 1 and audits[#audits].action == "TRADE_EXCEPTION_APPROVED"
@@ -125,13 +126,87 @@ assert(#audits >= 1 and audits[#audits].action == "TRADE_EXCEPTION_APPROVED"
 assert(not enforcement:RecordApprovedTradeException(1), "the same trade approval is audited only once")
 tradePartner, exceptionEnabled, playerTradeLink = "Guildie", false, nil
 
+-- Reproduce the native order: iRC checks first, then Blizzard refreshes the
+-- trade button or edits money. A disabled button must stay disabled afterward.
+local nativeCalls, popup = {}, false
+function TradeFrameTradeButton_Enable()
+    nativeCalls.enable = (nativeCalls.enable or 0) + 1
+    if popup then TradeFrameTradeButton.enabled = true
+    else TradeFrameTradeButton:SetEnabled(true) end
+end
+function TradeFrameTradeButton_SetToEnabledState() TradeFrameTradeButton:SetEnabled(TradeFrameTradeButton.enabled) end
+function TradeFrame_UpdateMoney()
+    TradeFrameTradeButton_Enable()
+    playerOffer = typedOffer
+end
+function TradeFrame_OnEvent(_, event)
+    if event == "TRADE_UPDATE" or event == "TRADE_SHOW" then TradeFrameTradeButton_Enable() end
+end
+enforcement:InstallTradeGuards()
+enforcement:InstallTradeGuards()
+local priorNotices, priorAudits = #notices, #audits
+tradePartner, exceptionEnabled = "Outside", true
+eventFrame.OnEvent(nil, "TRADE_SHOW")
+TradeFrame_OnEvent(TradeFrame, "TRADE_SHOW")
+assert(not TradeFrameTradeButton.active, "native refresh cannot enable an empty exception trade")
+assert(#audits == priorAudits and #notices == priorNotices + 1
+    and notices[#notices]:find("GUILD_FOUND_TRADE_EXCEPTION_WAITING", 1, true),
+    "an empty exception trade explains the waiting state once without a blocked audit")
+playerTradeLink = "|Hitem:5350:0:0:0|h[Conjured Water]|h"
+TradeFrame_OnEvent(TradeFrame, "TRADE_PLAYER_ITEM_CHANGED")
+assert(TradeFrameTradeButton.active and TradeFrameTradeButton.iRCApprovedException,
+    "adding an approved item enables an external exception trade")
+TradeFrame_UpdateMoney()
+assert(TradeFrameTradeButton.active, "a zero-money approved offer stays usable after native refresh")
+typedOffer = 1
+TradeFrame_UpdateMoney()
+assert(not TradeFrameTradeButton.active and not TradeFrameTradeButton.iRCApprovedException,
+    "typing one copper disables the approved exception after native money update")
+assert(notices[#notices]:find("GUILD_FOUND_TRADE_EXCEPTION_REASON", 1, true),
+    "the blocked offer explains exception limits rather than assuming all non-guild trades are forbidden")
+local blockedAudits = #audits
+TradeFrameTradeButton_Enable()
+TradeFrameTradeButton.enabled = true
+TradeFrameTradeButton_SetToEnabledState()
+assert(not TradeFrameTradeButton.active and #audits == blockedAudits, "native enable and popup restore remain blocked without duplicate audits")
+typedOffer = 0; TradeFrame_UpdateMoney()
+assert(TradeFrameTradeButton.active, "removing offered money restores the allowed exception")
+targetOffer = 1
+TradeFrame_OnEvent(TradeFrame, "TRADE_UPDATE")
+assert(not TradeFrameTradeButton.active, "incoming money also blocks an exception trade")
+targetOffer = 0
+targetTradeLink = "|Hitem:25:0:0:0|h[Worn Shortsword]|h"
+TradeFrame_OnEvent(TradeFrame, "TRADE_TARGET_ITEM_CHANGED")
+assert(not TradeFrameTradeButton.active, "an extra unapproved incoming item blocks the entire offer")
+targetTradeLink, playerTradeLink = nil, "|Hitem:25:0:0:0|h[Worn Shortsword]|h"
+TradeFrame_OnEvent(TradeFrame, "TRADE_PLAYER_ITEM_CHANGED")
+assert(not TradeFrameTradeButton.active, "an unapproved outgoing item remains blocked")
+popup = true
+playerTradeLink = "|Hitem:5350:0:0:0|h[Conjured Water]|h"
+TradeFrame_OnEvent(TradeFrame, "TRADE_PLAYER_ITEM_CHANGED")
+assert(not TradeFrameTradeButton.active and not TradeFrameTradeButton.iRCRestricted,
+    "an approved exception does not bypass Blizzard's own disabled confirmation button")
+popup = false; TradeFrameTradeButton_Enable()
+assert(TradeFrameTradeButton.active, "Blizzard can restore the approved offer after its confirmation")
+tradePartner, exceptionEnabled, playerTradeLink = "Guildie", false, nil
+TradeFrame_OnEvent(TradeFrame, "TRADE_UPDATE")
+assert(TradeFrameTradeButton.active, "verified guild trades remain usable with the hooks installed")
+local statusCheck = iRC.GetGuildFoundTradeStatus
+iRC.GetGuildFoundTradeStatus = function() error("simulated unavailable trade status") end
+TradeFrameTradeButton_Enable()
+assert(not TradeFrameTradeButton.active, "a failed recheck does not leave native trade acceptance enabled")
+iRC.GetGuildFoundTradeStatus = statusCheck
+TradeFrameTradeButton_Enable()
+assert(TradeFrameTradeButton.active, "a failed recheck resets the recursion guard so later updates can recover")
+priorNotices = #notices
+
 SendMailNameEditBox.text = "Outside"
 enforcement:UpdateMailRestriction()
-assert(SendMailMailButton.enabled == false, "external outgoing mail control is disabled")
-assert(#notices == 2, "blocked outgoing mail explains the restriction in local chat")
+assert(SendMailMailButton.active == false, "external outgoing mail control is disabled")
+assert(#notices == priorNotices + 1, "blocked outgoing mail explains the restriction in local chat")
 SendMailNameEditBox.text = "Guildie"
 enforcement:UpdateMailRestriction()
-assert(SendMailMailButton.enabled == true, "verified guild outgoing mail remains available")
+assert(SendMailMailButton.active == true, "verified guild outgoing mail remains available")
 
 SendMailNameEditBox.text = "Outside"
 enforcement:UpdateMailRestriction()
@@ -141,16 +216,16 @@ assert(discrepancies[#discrepancies] and discrepancies[#discrepancies].reason ==
 
 OpenMailFrame.openMailID = 1
 enforcement:UpdateInboxRestriction()
-assert(OpenMailMoneyButton.enabled == false and OpenMailPackageButton.enabled == false
-    and OpenMailAttachmentButton1.enabled == false, "external player mail controls are disabled")
+assert(OpenMailMoneyButton.active == false and OpenMailPackageButton.active == false
+    and OpenMailAttachmentButton1.active == false, "external player mail controls are disabled")
 TakeInboxItem(1, 1)
 assert(discrepancies[#discrepancies] and discrepancies[#discrepancies].reason == "INBOX_BLOCK_BYPASS",
     "calling a protected inbox API for restricted mail creates discrepancy evidence")
 
 OpenMailFrame.openMailID = 2
 enforcement:UpdateInboxRestriction()
-assert(OpenMailMoneyButton.enabled == true and OpenMailPackageButton.enabled == true
-    and OpenMailAttachmentButton1.enabled == true, "guild mail controls remain available")
+assert(OpenMailMoneyButton.active == true and OpenMailPackageButton.active == true
+    and OpenMailAttachmentButton1.active == true, "guild mail controls remain available")
 
 assert(AcceptTrade ~= nil and SendMail ~= nil and TakeInboxItem ~= nil and TakeInboxMoney ~= nil
     and AutoLootMailItem ~= nil, "Blizzard economy APIs remain untouched")

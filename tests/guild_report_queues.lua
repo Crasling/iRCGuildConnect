@@ -2,6 +2,7 @@
 local now, combat = 1000, false
 local timers, frames, sent, errors, diagnostics = {}, {}, {}, {}, {}
 local addon, private = {}, {}
+function wipe(value) for key in pairs(value) do value[key] = nil end; return value end
 function GetTime() return now end
 function time() return 1800000000 + math.floor(now) end
 function GetBuildInfo() return "1.60.1", "70374", "", 16001 end
@@ -34,6 +35,7 @@ function addon:IsGuildConnectionActive() return true end
 function addon:IsGuildMemberName(name) return name ~= "Outsider" end
 function addon:AcceptIncomingAddonTraffic() return true end
 function addon:GetStartupTrafficDelay() return 2 end
+function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
 function addon:ContainsProfanity() return false end
 function addon:CheckForNewVersion() end
 function addon:Text(key) return key end
@@ -68,6 +70,11 @@ local function split(message)
     return result
 end
 local function receive(fields, sender, distribution)
+    if type(fields) == "table" then
+        fields = { table.unpack(fields) }
+        fields[2] = addon.GridWireVersion
+        fields[#fields + 1] = "@" .. addon:GetGuildDirectoryScope()
+    end
     receiver.scripts.OnEvent(receiver, "CHAT_MSG_ADDON", "iRCGridV1",
         type(fields) == "table" and table.concat(fields, "\t") or fields,
         distribution or "WHISPER", sender or "Sender")
@@ -124,7 +131,7 @@ local function chunks(report, id)
     return result
 end
 local function stored(guild)
-    return iRCDB.globalRaceGrid.servers.forever.guildReports[guild:lower()]
+    return iRCDB.globalRaceGrid.servers["forever:" .. addon:GetGuildDirectoryScope()].guildReports[guild:lower()]
 end
 local function enterCombat()
     combat = true

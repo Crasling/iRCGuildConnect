@@ -21,6 +21,20 @@ local playedSampleGetTime
 local playedSuppressedChatFrames = {}
 local localHistory
 local sentDebugSummary = { count = 0 }
+local EVIDENCE_FIELDS = { "moneyBefore", "moneyAfter", "moneyBeforeAt", "moneyAfterAt",
+    "playedBefore", "playedAfter", "playedBeforeAt", "playedAfterAt", "discrepancyReason" }
+
+local function archiveDiscrepancy(owner, evidence)
+    if not evidence.tamperAt or evidence.tamperAt <= 0 then return end
+    local records = owner.discrepancyHistory or {}
+    owner.discrepancyHistory = records
+    local previous = records[#records]
+    if previous and previous.tamperAt == evidence.tamperAt then return end
+    local record = { tamperAt = evidence.tamperAt }
+    for _, field in ipairs(EVIDENCE_FIELDS) do record[field] = evidence[field] end
+    records[#records + 1] = record
+    while #records > 10 do table.remove(records, 1) end
+end
 
 -- Hidden /played capture ----------------------------------------------------
 
@@ -176,6 +190,8 @@ function Sync:GetStatus(name, snapshot)
         playedBefore = entry.playedBefore, playedAfter = entry.playedAfter,
         playedBeforeAt = entry.playedBeforeAt, playedAfterAt = entry.playedAfterAt,
         discrepancyReason = entry.discrepancyReason,
+        previousDiscrepancies = iRC:NormalizeName(name) == iRC:NormalizeName(iRC:GetPlayerName())
+            and localHistory().discrepancyHistory or entry.discrepancyHistory,
         witnessedBy = entry.witnessedBy, witnessedAt = entry.witnessedAt,
         gmVerified = entry.gmVerified, gmClean = entry.gmClean,
         cleanDecisionSuperseded = entry.gmClean ~= nil and discrepancyAt > 0 and decisionAt <= discrepancyAt,
@@ -250,16 +266,23 @@ local function markDiscrepancy(history, reason, moneyBefore, moneyAfter, moneyBe
     local now = time()
     local previousAt = tonumber(history.moneyDiscrepancyAt) or 0
     local beforeValue, afterValue = tonumber(moneyBefore), tonumber(moneyAfter)
+    archiveDiscrepancy(history, {
+        tamperAt = previousAt, discrepancyReason = history.discrepancyReason,
+        moneyBefore = history.moneyBeforeDiscrepancy, moneyAfter = history.moneyAfterDiscrepancy,
+        moneyBeforeAt = history.moneyBeforeDiscrepancyAt, moneyAfterAt = history.moneyAfterDiscrepancyAt,
+        playedBefore = history.playedBeforeDiscrepancy, playedAfter = history.playedAfterDiscrepancy,
+        playedBeforeAt = history.playedBeforeDiscrepancyAt, playedAfterAt = history.playedAfterDiscrepancyAt,
+    })
     history.moneyDiscrepancyAt = math.max(now, previousAt + 1)
-    -- A continuity or item-only violation can have identical money values.
-    -- Preserve an earlier real money delta so both pieces of evidence remain
-    -- visible instead of replacing it with an uninformative zero difference.
-    if previousAt <= 0 or beforeValue ~= afterValue or history.moneyBeforeDiscrepancy == nil then
-        history.moneyBeforeDiscrepancy = beforeValue
-        history.moneyAfterDiscrepancy = afterValue
-        history.moneyBeforeDiscrepancyAt = tonumber(moneyBeforeAt) or tonumber(history.moneyLastLoggedAt) or 0
-        history.moneyAfterDiscrepancyAt = now
-    end
+    -- Amounts, reason, and sample times belong to the same incident. Keep an
+    -- older delta in history instead of presenting it as evidence for this one.
+    history.moneyBeforeDiscrepancy = beforeValue
+    history.moneyAfterDiscrepancy = afterValue
+    history.moneyBeforeDiscrepancyAt = tonumber(moneyBeforeAt) or tonumber(history.moneyLastLoggedAt) or 0
+    history.moneyAfterDiscrepancyAt = now
+    history.playedBeforeDiscrepancy, history.playedAfterDiscrepancy = nil, nil
+    history.playedBeforeDiscrepancyAt, history.playedAfterDiscrepancyAt = nil, nil
+    history.playedDiscrepancyAt = nil
     history.discrepancyReason = discrepancyReason(reason) or "MONEY_MISMATCH"
     history.moneyDiscrepancyNoticeAt = nil
     return history.moneyDiscrepancyAt
@@ -392,6 +415,7 @@ local function storeSelf(name, verified, clean, tamperAt, source, moneyBefore, m
     -- update progression evidence, but only an authorized officer decision
     -- can resolve a discrepancy already witnessed by another client.
     if incomingAt > 0 and incomingAt >= retainedAt then
+        if incomingAt > retainedAt then archiveDiscrepancy(entry, entry) end
         entry.clean, entry.tamperAt = false, incomingAt
         entry.moneyBefore, entry.moneyAfter = tonumber(moneyBefore), tonumber(moneyAfter)
         entry.moneyBeforeAt, entry.moneyAfterAt = tonumber(moneyBeforeAt), tonumber(moneyAfterAt)
@@ -415,6 +439,10 @@ local function storeWitness(name, tamperAt, witness, moneyBefore, moneyAfter, mo
     local entry = entryFor(name)
     local incomingAt = tonumber(tamperAt) or 0
     if not entry or incomingAt <= 0 or incomingAt < (tonumber(entry.tamperAt) or 0) then return false end
+    if incomingAt > (tonumber(entry.tamperAt) or 0) then
+        archiveDiscrepancy(entry, entry)
+        for _, field in ipairs(EVIDENCE_FIELDS) do entry[field] = nil end
+    end
     -- Witness packets are negative evidence only. They never change progression
     -- eligibility and can never make a member clean or verified.
     entry.clean, entry.tamperAt = false, incomingAt
@@ -663,7 +691,7 @@ function Sync:ReceiveRoster(message, sender)
         -- Confirm receipt only from a rank authorized to review verification.
         -- The reporting player does not see the discrepancy notice until this
         -- acknowledgement proves that an officer actually received the report.
-        if tamperAt > 0 and iRC:HasGuildPermission("verification") then
+        if tamperAt > 0 and iRC:HasGuildPermission("verification") and discrepancyIsUnresolved(entryFor(name)) then
             send(IRC_ROSTER, "A:" .. tostring(tamperAt), sender)
             queueWitnessRelay(name)
         end
@@ -678,14 +706,18 @@ function Sync:ReceiveRoster(message, sender)
         queueRelay(name)
     elseif marker == "A:" then
         local acknowledgedAt = number(fields[1], time() + 300)
-        local senderRank = iRC:GetGuildMemberRankIndex(sender)
         local history = localHistory()
         local discrepancyAt = tonumber(history.moneyDiscrepancyAt) or 0
         if acknowledgedAt and acknowledgedAt > 0 and acknowledgedAt == discrepancyAt
             and iRC:GuildMemberHasPermission(sender, "verification")
             and tonumber(history.moneyDiscrepancyNoticeAt) ~= discrepancyAt then
-            history.moneyDiscrepancyNoticeAt = discrepancyAt
-            iRC:Print(iRC:Text("RL_MONEY_DISCREPANCY"))
+            local status = self:GetStatus(iRC:GetPlayerName())
+            if not status or status.clean ~= true then
+                history.moneyDiscrepancyNoticeAt = discrepancyAt
+                -- The review decision can arrive after this receipt. A receipt
+                -- confirms delivery, not the member's final monitoring status.
+                iRC:Print(iRC:Text("RL_MONEY_DISCREPANCY"))
+            end
         end
     elseif marker == "G:" or marker == "O:" then
         local direct = marker == "G:"

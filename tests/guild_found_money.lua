@@ -176,5 +176,29 @@ wallet = 9
 tickers[1]()
 assert(iRCCharDB.guildFoundHistory.money == 9)
 assert(sync:SaveCurrentMoney("TEST"))
+-- Keep separate incidents together with their own money and played samples.
+wallet = 6
+assert(sync:FlagMonitoringDiscrepancy("MONEY_MISMATCH", 0, 6, time() - 15))
+history = iRCCharDB.guildFoundHistory
+local oldStamp, oldSampleAt = history.moneyDiscrepancyAt, history.moneyAfterDiscrepancyAt
+history.playedBeforeDiscrepancy, history.playedAfterDiscrepancy = 100, 170
+history.playedBeforeDiscrepancyAt, history.playedAfterDiscrepancyAt = time() - 70, time()
+advance(60)
+wallet = 10
+fire("PLAYER_MONEY")
+local tradeStarted = time()
+advance(1)
+assert(sync:FlagMonitoringDiscrepancy("TRADE_BLOCK_BYPASS", 10, 10, tradeStarted))
+assert(history.moneyBeforeDiscrepancy == 10 and history.moneyAfterDiscrepancy == 10
+    and history.moneyBeforeDiscrepancyAt == tradeStarted and history.moneyAfterDiscrepancyAt == time(),
+    "the later trade uses its own ten-copper balance and timestamps")
+assert(history.discrepancyReason == "TRADE_BLOCK_BYPASS" and history.playedBeforeDiscrepancy == nil,
+    "a new reason cannot inherit an older issue's played-time evidence")
+local old = assert(history.discrepancyHistory[1])
+assert(old.tamperAt == oldStamp and old.moneyBefore == 0 and old.moneyAfter == 6
+    and old.moneyAfterAt == oldSampleAt and old.discrepancyReason == "MONEY_MISMATCH" and old.playedAfter == 170,
+    "the original logout evidence is preserved in a separate history record")
+for _ = 1, 12 do sync:FlagMonitoringDiscrepancy("TRADE_BLOCK_BYPASS", 10, 10, time()) end
+assert(#history.discrepancyHistory == 10, "incident history is bounded")
 assert(#logs > 0, "checkpoint diagnostics explain the event and validation result")
 print("Guild Found money tests passed: sales, logout teardown, zoning, real zero, tampering, evidence retention, startup guards, safe reads, and retry.")

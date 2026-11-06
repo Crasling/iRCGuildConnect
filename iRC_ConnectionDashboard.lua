@@ -473,177 +473,22 @@ function Dashboard:Create()
     local menuClose = CreateFrame("Button", nil, frame.memberMenu, "UIPanelCloseButton")
     menuClose:SetPoint("TOPRIGHT", 4, 4)
 
-    frame.memberReport = CreateFrame("Frame", "iRCGuildFoundReportFrame", frame, "BackdropTemplate")
-    frame.memberReport:SetSize(640, 290)
-    frame.memberReport:SetPoint("CENTER", frame, "CENTER", 85, 0)
-    frame.memberReport:SetFrameStrata("FULLSCREEN_DIALOG")
-    frame.memberReport:SetToplevel(true)
-    setBackdrop(frame.memberReport, { 0.035, 0.028, 0.02, 0.99 }, { ORANGE[1], ORANGE[2], ORANGE[3], 1 })
-    local reportShade = frame.memberReport:CreateTexture(nil, "BACKGROUND", nil, -8)
-    reportShade:SetPoint("TOPLEFT", 4, -4)
-    reportShade:SetPoint("BOTTOMRIGHT", -4, 4)
-    reportShade:SetColorTexture(0, 0, 0, 0.96)
-    frame.memberReport:Hide()
-    local reportTitle = frame.memberReport:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    reportTitle:SetPoint("TOPLEFT", 18, -17)
-    reportTitle:SetPoint("TOPRIGHT", -42, -17)
-    reportTitle:SetJustifyH("LEFT")
-    reportTitle:SetTextColor(unpack(ORANGE))
-    reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
-    local reportClose = CreateFrame("Button", nil, frame.memberReport, "UIPanelCloseButton")
-    reportClose:SetPoint("TOPRIGHT", 4, 4)
-    local reportBody = frame.memberReport:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    reportBody:SetPoint("TOPLEFT", 18, -52)
-    reportBody:SetPoint("BOTTOMRIGHT", -18, 18)
-    reportBody:SetJustifyH("LEFT")
-    reportBody:SetJustifyV("TOP")
-    reportBody:SetWordWrap(true)
-    frame.memberReport.body = reportBody
-
-    local function statusWord(value, trueKey, falseKey)
-        if value == nil then return iRC:Text("RL_STATUS_UNKNOWN") end
-        return iRC:Text(value and trueKey or falseKey)
-    end
-
-    local function formatDuration(seconds)
-        seconds = math.max(0, math.floor(tonumber(seconds) or 0))
-        local days, hours = math.floor(seconds / 86400), math.floor(seconds % 86400 / 3600)
-        local minutes, remainingSeconds = math.floor(seconds % 3600 / 60), math.floor(seconds % 60)
-        if days > 0 then return string.format("%dd %dh %dm %ds", days, hours, minutes, remainingSeconds) end
-        if hours > 0 then return string.format("%dh %dm %ds", hours, minutes, remainingSeconds) end
-        return string.format("%dm %ds", minutes, remainingSeconds)
-    end
-
-    local function discrepancyReasonText(reason)
-        local keys = {
-            INBOX_BLOCK_BYPASS = "GF_REASON_INBOX_BLOCK_BYPASS",
-            MONEY_MISMATCH = "GF_REASON_MONEY_MISMATCH",
-            SNAPSHOT_MISMATCH = "GF_REASON_SNAPSHOT_MISMATCH",
-            PLAYED_GAP = "GF_REASON_PLAYED_GAP",
-            PLAYED_ROLLBACK = "GF_REASON_PLAYED_ROLLBACK",
-            TRADE_BLOCK_BYPASS = "GF_REASON_TRADE_BLOCK_BYPASS",
-            TRADE_EXCEPTION_MONEY = "GF_REASON_TRADE_EXCEPTION_MONEY",
-            MAIL_BLOCK_BYPASS = "GF_REASON_MAIL_BLOCK_BYPASS",
-        }
-        if not reason or reason == "" then return iRC:Text("GF_REASON_LEGACY") end
-        return keys[reason] and iRC:Text(keys[reason]) or tostring(reason)
-    end
-
-    local function appendGoldDiscrepancyDetails(lines, status)
-        local formatMoney = GetCoinTextureString or function(value) return tostring(value) .. " copper" end
-        lines[#lines + 1] = iRC:Text("GF_REPORT_EVIDENCE_REASON", discrepancyReasonText(status.discrepancyReason))
-        lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_CLIENT_INACTIVE") .. iRC.Colors.Reset
-        if status.moneyBefore == nil or status.moneyAfter == nil then
-            lines[#lines + 1] = iRC.Colors.Gray .. iRC:Text("GF_REPORT_GOLD_CHANGE_UNAVAILABLE") .. iRC.Colors.Reset
-            return
-        end
-        local beforeAt, afterAt = tonumber(status.moneyBeforeAt) or 0, tonumber(status.moneyAfterAt) or 0
-        local moneyDifference = status.moneyAfter - status.moneyBefore
-        local moneySign = moneyDifference > 0 and "+" or moneyDifference < 0 and "-" or ""
-        local seconds = math.max(0, afterAt - beforeAt)
-        lines[#lines + 1] = iRC:Text("GF_REPORT_RECORDED_MONEY", formatMoney(status.moneyBefore))
-        lines[#lines + 1] = iRC:Text("GF_REPORT_RECORDED_TIMESTAMP",
-            beforeAt > 0 and date("%Y-%m-%d %H:%M:%S", beforeAt) or iRC:Text("RL_STATUS_UNKNOWN"))
-        lines[#lines + 1] = iRC:Text("GF_REPORT_CURRENT_MONEY", formatMoney(status.moneyAfter))
-        lines[#lines + 1] = iRC:Text("GF_REPORT_CURRENT_TIMESTAMP",
-            afterAt > 0 and date("%Y-%m-%d %H:%M:%S", afterAt) or iRC:Text("RL_STATUS_UNKNOWN"))
-        lines[#lines + 1] = iRC:Text("GF_REPORT_MONEY_DIFF", moneySign .. formatMoney(math.abs(moneyDifference)))
-        lines[#lines + 1] = iRC:Text("GF_REPORT_TIME_DIFF",
-            beforeAt > 0 and afterAt > 0 and formatDuration(seconds) or iRC:Text("RL_STATUS_UNKNOWN"))
-        local playedBefore, playedAfter = tonumber(status.playedBefore), tonumber(status.playedAfter)
-        if playedBefore and playedAfter and playedAfter >= playedBefore then
-            local playedIncrease = playedAfter - playedBefore
-            lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_INCREASE", formatDuration(playedIncrease))
-            -- This includes monitored play between samples. It cannot tell us
-            -- how long the addon was disabled, or prove that it was disabled.
-        end
-    end
-
+    frame.memberReport = iRC.VerificationReport:Create(frame)
     local function showGuildFoundReport(targetName)
-        -- Progression audit reports have no meaning when neither Self-Found
-        -- nor Guild-Found is part of the active guild rules.
-        if iRC:GetProgressionMode() == "NONE" then
+        local progression = iRC:GetProgressionMode()
+        if progression == "NONE" then
             frame.memberReport:Hide()
             return
         end
         local status = iRC.RaceLockedSync and iRC.RaceLockedSync:GetStatus(targetName)
         local member
-        for _, rosterMember in ipairs(iRC:GetGuildRosterRows()) do
-            if iRC:NormalizeName(rosterMember.name) == iRC:NormalizeName(targetName) then member = rosterMember break end
+        for _, row in ipairs(iRC:GetGuildRosterRows()) do
+            if iRC:NormalizeName(row.name) == iRC:NormalizeName(targetName) then
+                member = row
+                break
+            end
         end
-        local level = member and tonumber(member.level) or 0
-        local reportProgression = iRC:GetProgressionMode()
-        if member and level < 60 and reportProgression ~= "SELF_FOUND_OR_GUILD_FOUND" and reportProgression ~= "GUILD_FOUND" then
-            frame.memberReport:SetSize(640, status and status.tamperAt and status.tamperAt > 0 and 430
-                or status and 290 or 190)
-            reportTitle:SetText(iRC:Text("SF_REPORT_TITLE"))
-            local liveState = member.verification and member.verification.state
-            local hasSelfFoundStatus = iRC:IsLiveAddonState(liveState)
-            local selfFoundStatus = not hasSelfFoundStatus and iRC:Text("GF_SELF_FOUND_UNKNOWN")
-                or iRC:Text(member.selfFound and "GF_SELF_FOUND_ACTIVE" or "GF_SELF_FOUND_INACTIVE")
-            local lines = {
-                iRC:Text("GF_REPORT_MEMBER", displayMemberName(targetName)),
-                iRC:Text("GF_REPORT_LEVEL", level),
-                iRC:Text("GF_REPORT_SOURCE", member.source or iRC:Text("RL_STATUS_UNKNOWN")),
-                "",
-                iRC:Text("GF_REPORT_SELF_FOUND", selfFoundStatus),
-            }
-            if status then
-                lines[#lines + 1] = ""
-                lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_REPORTED", statusWord(status.rawClean, "GF_GOLD_CLEAN", "GF_GOLD_FLAGGED"))
-                lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_EFFECTIVE", statusWord(status.clean, "RL_CLEAN", "RL_FLAGGED"))
-                if status.tamperAt and status.tamperAt > 0 then
-                    lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
-                    appendGoldDiscrepancyDetails(lines, status)
-                end
-                if status.gmClean ~= nil and status.gmTimestamp then
-                    lines[#lines + 1] = iRC:Text("SF_REPORT_GOLD_DECISION",
-                        statusWord(status.gmClean, "RL_CLEAN", "RL_FLAGGED"),
-                        status.overrideSource or iRC:Text("RL_STATUS_UNKNOWN"),
-                        date("%Y-%m-%d %H:%M", status.gmTimestamp))
-                    if status.cleanDecisionSuperseded then
-                        lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
-                    end
-                end
-            end
-            reportBody:SetText(table.concat(lines, "\n"))
-        elseif not status then
-            frame.memberReport:SetSize(640, 190)
-            reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
-            reportBody:SetText(iRC:Text("GF_REPORT_NO_DATA", displayMemberName(targetName)))
-        else
-            frame.memberReport:SetSize(640, status.tamperAt and status.tamperAt > 0 and 430 or 290)
-            reportTitle:SetText(iRC:Text("GF_REPORT_TITLE"))
-            local lines = {
-                iRC:Text("GF_REPORT_MEMBER", displayMemberName(targetName)),
-                iRC:Text("GF_REPORT_SOURCE", status.source or iRC:Text("RL_STATUS_UNKNOWN")),
-                iRC:Text("GF_REPORT_RECEIVED", status.lastSeen and date("%Y-%m-%d %H:%M", status.lastSeen) or iRC:Text("RL_STATUS_UNKNOWN")),
-                "",
-                iRC:Text("GF_REPORT_RAW_VERIFIED", statusWord(status.rawVerified, "GF_HISTORY_VERIFIED", "GF_HISTORY_UNVERIFIED")),
-                iRC:Text("GF_REPORT_RAW_CLEAN", statusWord(status.rawClean, "GF_GOLD_CLEAN", "GF_GOLD_FLAGGED")),
-                iRC:Text("GF_REPORT_EFFECTIVE_VERIFIED", statusWord(status.verified, "RL_VERIFIED", "RL_UNVERIFIED")),
-                iRC:Text("GF_REPORT_EFFECTIVE_CLEAN", statusWord(status.clean, "RL_CLEAN", "RL_FLAGGED")),
-            }
-            if status.tamperAt and status.tamperAt > 0 then
-                lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DISCREPANCY", date("%Y-%m-%d %H:%M", status.tamperAt)) .. iRC.Colors.Reset
-                appendGoldDiscrepancyDetails(lines, status)
-            end
-            if status.gmTimestamp then
-                lines[#lines + 1] = ""
-                local gmVerified = status.gmVerified == nil and iRC:Text("RL_OVERRIDE_RESET")
-                    or statusWord(status.gmVerified, "RL_VERIFIED", "RL_UNVERIFIED")
-                local gmClean = status.gmClean == nil and iRC:Text("RL_OVERRIDE_RESET")
-                    or statusWord(status.gmClean, "RL_CLEAN", "RL_FLAGGED")
-                lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_VALUES", gmVerified, gmClean)
-                lines[#lines + 1] = iRC:Text("GF_REPORT_DECISION_SOURCE", status.overrideSource or iRC:Text("RL_STATUS_UNKNOWN"), date("%Y-%m-%d %H:%M", status.gmTimestamp))
-                if status.cleanDecisionSuperseded then
-                    lines[#lines + 1] = iRC.Colors.LightRed .. iRC:Text("GF_REPORT_DECISION_SUPERSEDED") .. iRC.Colors.Reset
-                end
-            end
-            reportBody:SetText(table.concat(lines, "\n"))
-        end
-        frame.memberReport:Show()
-        frame.memberReport:Raise()
+        iRC.VerificationReport:Show(frame.memberReport, targetName, member, status, progression)
     end
     frame.showMemberReport = showGuildFoundReport
 

@@ -1,5 +1,6 @@
 -- Directory sorting uses saved and local reports without assigning scores.
 local addon, private = {}, {}
+function wipe(value) for key in pairs(value) do value[key] = nil end; return value end
 function GetTime() return 100 end
 function time() return 1800000000 end
 function GetBuildInfo() return "1.60.1", "70374", "", 16001 end
@@ -9,6 +10,7 @@ function LibStub(name)
 end
 assert(loadfile("iRC_Core.lua"))("iRC", private)
 function addon:GetSettings() return {} end
+function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
 function addon:ContainsProfanity() return false end
 function addon:DebugMsg() end
 function addon:Text(key) return key end
@@ -17,6 +19,7 @@ local grid, own = addon.RaceGrid, {}
 function grid:BuildOwnGuildReports() return own end
 local function report(name, active, peak, members, maxLevel)
     return {
+        serverRuleset = addon:GetGuildDirectoryScope(),
         name = "Reporter", guid = "Player-1-Report", guildName = name, race = "HUMAN",
         faction = "Alliance", members = members, activeMembers = active, activePlayers = peak,
         activeLevel60 = maxLevel, membersLevel60 = maxLevel, timestamp = time(),

@@ -1,6 +1,6 @@
 -- Guild Found verification trust-boundary and packet-splitting regressions.
 local now, player = 1800000000, "Self-Realm"
-local sent = {}
+local sent, printed = {}, {}
 local localCanVerify = false
 local db = { active = true, key = "guild", guildFoundRoster = {}, raceDeaths = {}, deathReports = {} }
 
@@ -49,6 +49,7 @@ local iRC = {
     end,
     GetSettings = function() return { debugMode = false } end,
     DebugMsg = function() end,
+    Print = function(_, message) printed[#printed + 1] = message end,
     Text = function(_, key) return key end,
     InvalidateGuildMemberRow = function() end,
     IsLowTrafficMode = function() return false end,
@@ -75,12 +76,48 @@ assert(member.clean == false and member.tamperAt == 1799999999 and member.discre
 sync:ReceiveRoster("S:Member,1,1,0,-,-,0", "Member-Realm")
 assert(member.clean == false and member.tamperAt == 1799999999,
     "a later clean self-report cannot erase discrepancy evidence already witnessed by another client")
+sync:ReceiveRoster("W:Member,1800000000,,,,,,,,,TRADE_BLOCK_BYPASS", "Officer-Realm")
+assert(member.discrepancyReason == "TRADE_BLOCK_BYPASS" and member.moneyBefore == nil and member.playedBefore == nil,
+    "a newer witness event without samples cannot inherit the previous incident's values")
+assert(member.discrepancyHistory[1].moneyBefore == 100 and member.discrepancyHistory[1].discrepancyReason == "PLAYED_GAP",
+    "the previous witnessed incident is retained separately")
 
 sync:ReceiveRoster("R:Member,1,1,1800000001,Officer-Realm", "Member-Realm")
 assert(member.gmTimestamp == nil, "non-broadcaster cannot forge an authorized officer relay")
 sync:ReceiveRoster("R:Member,1,1,1800000001,Officer-Realm", "Relay-Realm")
 assert(member.gmVerified == true and member.gmClean == true and member.gmTimestamp == 1800000001,
     "elected broadcaster can relay an authorized officer decision")
+
+localCanVerify, sent = true, {}
+sync:ReceiveRoster("S:Member,1,0,1800000000,-,-,0", "Member-Realm")
+for _, packet in ipairs(sent) do
+    assert(packet.payload:sub(1, 2) ~= "A:", "reviewed evidence must not trigger another discrepancy acknowledgement")
+end
+iRCCharDB = { guildFoundHistory = { moneyDiscrepancyAt = now - 10 } }
+db.guildFoundRoster.self = { name = "Self", gmVerified = true, gmClean = true, gmTimestamp = now - 5 }
+sync:ReceiveRoster("A:" .. (now - 10), "Officer-Realm")
+assert(#printed == 0 and sync:GetStatus(player).clean == true,
+    "a delayed acknowledgement cannot announce Unclean when a newer Clean decision applies")
+now = now + 20
+local newerAt = now - 1
+iRCCharDB.guildFoundHistory.moneyDiscrepancyAt = newerAt
+sync:ReceiveRoster("A:" .. newerAt, "Member-Realm")
+sync:ReceiveRoster("A:" .. (newerAt - 1), "Officer-Realm")
+assert(#printed == 0, "unauthorized and stale acknowledgements cannot trigger notices")
+sync:ReceiveRoster("A:" .. newerAt, "Officer-Realm")
+assert(#printed == 1 and sync:GetStatus(player).clean == false,
+    "a genuinely newer discrepancy still requires review and produces its receipt notice")
+sync:ReceiveRoster("A:" .. newerAt, "Officer-Realm")
+assert(#printed == 1, "duplicate acknowledgements do not repeat the notice")
+sync:ReceiveRoster("G:Self,1,1," .. now, "Officer-Realm")
+sync:ReceiveRoster("A:" .. newerAt, "Officer-Realm")
+assert(#printed == 1 and sync:GetStatus(player).clean == true,
+    "a Clean decision arriving after the receipt is honored without repeating a status claim")
+sent = {}
+sync:ReceiveRoster("S:Member,1,0," .. newerAt .. ",-,-,0", "Member-Realm")
+local acknowledged = false
+for _, packet in ipairs(sent) do if packet.payload == "A:" .. newerAt then acknowledged = true end end
+assert(acknowledged, "a new discrepancy after a Clean decision is still acknowledged by an authorized reviewer")
 
 sync:ReceiveRoster("W:Other,1799999998,100,100,1799999900,1799999998,300,400,1799999900,1799999998,PLAYED_GAP", "Officer-Realm")
 local witnessed = assert(db.guildFoundRoster.other)

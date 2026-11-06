@@ -38,6 +38,7 @@ local function client(results)
     assert(loadfile("iRC_Core.lua", "t", env))("iRC", private)
     function addon:GetGuildKey() return guild end
     function addon:GetPlayerName() return "Local Person" end
+    function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
     function addon:DebugMsg() end
     addon.Diagnostics = { Trace = function(_, ...) traces[#traces + 1] = { ... } end }
     local state = { addon = addon, env = env, secret = secret, attempts = attempts, delivered = delivered, traces = traces }
@@ -222,7 +223,7 @@ assert(not state.addon:IsRecentAddonPeer("Expiring Person"), "accepted peer evid
 state = client({ 0 })
 assert(state:peer("Long Report Recipient"))
 state:advance(120)
-assert(state:whisper("CACHE_DATA\t7\trequest\tpart", "Long Report Recipient", "iRCGridV1"),
+assert(state:whisper("CACHE_DATA\t8\trequest\tpart\t@s-18-3-10-0-pve", "Long Report Recipient", "iRCGridV1"),
     "long requested guild report transfers are independent of background peer freshness")
 print("PASS: paced retries, secret guards, offline recovery, no blind probes, no routine layer whispers, and requested report transfers")
 

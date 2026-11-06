@@ -61,6 +61,9 @@ assert(iRC:IsTestAdminName("Crasling Veyrath"), "the second configured full char
 assert(iRC:IsTestAdminName("Crasling-Veyrath"), "the second Forever transport name is accepted")
 assert(iRC:IsTestAdminName("Crasling Vaelanar"), "the third configured full character name is a test admin")
 assert(iRC:IsTestAdminName("Crasling-Vaelanar"), "the third Forever transport name is accepted")
+assert(iRC:IsTestAdminName("Crasling Moohorn"), "the fourth configured full character name is a test admin")
+assert(iRC:IsTestAdminName("Crasling-Moohorn"), "the fourth Forever transport name is accepted")
+assert(not iRC:IsTestAdminName("Someone Moohorn"), "the new last name does not grant another first name access")
 assert(not iRC:IsTestAdminName("Crasling Mawthorne"), "the previous full character name is not a test admin")
 assert(not iRC:IsTestAdminName("Crasling Soulseeker"), "another Crasling last name is not a test admin")
 assert(not iRC:IsTestAdminName("Someone Mordaine"), "another Mordaine first name is not a test admin")
@@ -251,6 +254,8 @@ assert(not iRC:IsPresenceNotificationLeader(), "inactive guild never elects a no
 
 -- Exercise actual guild roster -> Race Overview with offline characters whose
 -- races are unavailable, duplicate rows and a departed member.
+function iRC:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
+function wipe(value) for key in pairs(value) do value[key] = nil end; return value end
 assert(loadfile("iRC_RaceGrid.lua"))("iRC", private)
 db.active, player = true, "Crasjin"
 roster[2].online, roster[3].online, roster[6].online = false, false, false

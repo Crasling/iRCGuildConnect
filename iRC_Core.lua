@@ -29,7 +29,7 @@ iRC.IconPath = "Interface\\AddOns\\iRC\\Images\\Logo_iRC"
 iRC.Prefix = "iRCConnV1"
 -- Independent versions for the public cross-guild transports. Third-party
 -- LayerSwap packets and the separate guild-map position schema are independent.
-iRC.GridWireVersion = "7"
+iRC.GridWireVersion = "8"
 iRC.LayerWireVersion = "8"
 iRC.AdminWireVersion = "6"
 -- Testing-only controls are locked to exact full character names. Forever may
@@ -39,6 +39,7 @@ iRC.TestAdminNames = {
     "Crasling Mordaine",
     "Crasling Veyrath",
     "Crasling Vaelanar",
+    "Crasling Moohorn",
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -48,6 +49,37 @@ function iRC:IsOfficialHardcoreRealm()
     local hardcoreRule = Enum and Enum.GameRule and Enum.GameRule.HardcoreRuleset
     return hardcoreRule ~= nil and C_GameRules and C_GameRules.IsGameRuleActive
         and C_GameRules.IsGameRuleActive(hardcoreRule) == true or false
+end
+
+function iRC:GetGuildDirectoryScope()
+    local function read(callback, ...)
+        if type(callback) ~= "function" then return nil end
+        local ok, value = pcall(callback, ...)
+        if not ok or self:IsSecretValue(value) then return nil end
+        return value
+    end
+    local function integer(value)
+        return not self:IsSecretValue(value) and type(value) == "number"
+            and value >= 0 and value < 2147483647 and value % 1 == 0
+    end
+    if not C_GameRules or not Enum or not Enum.GameRule then return nil end
+    local mode, record = read(C_GameRules.GetActiveGameMode), read(C_GameRules.GetCurrentGameModeRecordID)
+    local region = read(GetCurrentRegion)
+    local function rule(name)
+        local id = Enum.GameRule[name]
+        if not integer(id) then return nil end
+        return read(C_GameRules.IsGameRuleActive, id)
+    end
+    local hardcore, pvp, rp = rule("HardcoreRuleset"), rule("PvPRuleset"), rule("RPRuleset")
+    if not integer(mode) or not integer(record) or not integer(region) or not integer(WOW_PROJECT_ID)
+        or type(hardcore) ~= "boolean" or type(pvp) ~= "boolean" or type(rp) ~= "boolean" then return nil end
+    local category = hardcore and "hc" or rp and (pvp and "rppvp" or "rppve") or pvp and "pvp" or "pve"
+    return table.concat({ "s", WOW_PROJECT_ID, region, record, mode, category }, "-")
+end
+
+function iRC:IsGuildDirectoryPacketCurrent(message)
+    local scope = self:GetGuildDirectoryScope()
+    return scope ~= nil and type(message) == "string" and message:match("\t@([%w%-]+)$") == scope
 end
 local gameTocNumber = tonumber(iRC.GameTocVersion) or 0
 if gameTocNumber >= 120000 then
@@ -523,6 +555,7 @@ end
 local lastSendFailure, lastSendFailureAt
 local function sendAddonTrafficNow(prefix, message, distribution, target)
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
+    if prefix == "iRCGridV1" and not iRC:IsGuildDirectoryPacketCurrent(message) then return false end
     if chatMessagingLocked() then return false, true end
     local kind = message:match("^([A-Z][A-Z0-9_]*)") or "other"
     if skipLayerExchange(prefix, kind, message, distribution, target) then return false end
@@ -553,7 +586,11 @@ local function sendAddonTrafficNow(prefix, message, distribution, target)
         local now = GetTime and GetTime() or 0
         if failure ~= lastSendFailure or not lastSendFailureAt or now - lastSendFailureAt >= 10 then
             lastSendFailure, lastSendFailureAt = failure, now
-            iRC:DebugMsg("Addon send failed for " .. failure .. (retryable and "; queued for retry." or "."), 2)
+            if retryable then
+                iRC:DebugMsg("Addon send delayed for " .. failure .. "; queued for retry.", 3)
+            else
+                iRC:DebugMsg("Addon send failed for " .. failure .. ".", 2)
+            end
         end
     end
     return sent == true, retryable == true
