@@ -13,7 +13,8 @@ iRC.RaceLockedSync = Sync
 local IRC_ROSTER = "iRCGFRoster"
 local lastBroadcast, pendingRelays, pendingWitnessRelays, lastWitnessUpload = {}, {}, {}, {}
 local moneyReady = false
-local moneyValidationAllowedAt = 0
+local moneyLeavingWorld = false
+local moneyValidationAllowedAt
 local moneyWatchdog
 local playedTicker, playedRequestToken
 local playedSampleGetTime
@@ -221,6 +222,24 @@ local function writeMoneySnapshot(history, value)
     history.rk = sealSnapshot(value)
 end
 
+local function readCurrentMoney(reason)
+    if moneyLeavingWorld then
+        iRC:DebugMsg(iRC:Text("GF_AUDIT_EXIT_READ_SKIPPED", reason), 3)
+        return nil
+    end
+    local value = GetMoney and GetMoney()
+    -- Do not inspect restricted values or replace a checkpoint with a failed read.
+    if iRC:HasSecretValues(value) or type(value) ~= "number" then
+        iRC:DebugMsg(iRC:Text("GF_AUDIT_READ_SKIPPED", reason), 3)
+        return nil
+    end
+    if value ~= value or value < 0 or value == math.huge or value % 1 ~= 0 then
+        iRC:DebugMsg(iRC:Text("GF_AUDIT_READ_SKIPPED", reason), 3)
+        return nil
+    end
+    return value
+end
+
 local function discrepancyReason(value)
     if type(value) ~= "string" then return nil end
     value = value:upper():gsub("[^A-Z0-9_]", ""):sub(1, 32)
@@ -249,7 +268,7 @@ end
 function Sync:FlagMonitoringDiscrepancy(reason, moneyBefore, moneyAfter, moneyBeforeAt)
     if not self:IsMoneyMonitoringActive() then return false end
     local history = localHistory()
-    local current = GetMoney and GetMoney() or nil
+    local current = readCurrentMoney("MONITORING_DISCREPANCY")
     markDiscrepancy(history, reason, moneyBefore ~= nil and moneyBefore or current,
         moneyAfter ~= nil and moneyAfter or current, moneyBeforeAt)
     self:SaveCurrentMoney("MONITORING_DISCREPANCY_" .. (discrepancyReason(reason) or "UNKNOWN"))
@@ -277,39 +296,50 @@ function Sync:RefreshMoneyMonitoring()
     if not moneyReady or not GetMoney then return end
     local history, active = localHistory(), self:IsMoneyMonitoringActive()
     if history.moneyMonitoringActive ~= active then
-        writeMoneySnapshot(history, GetMoney())
-        history.moneyMonitoringActive = active
+        self:SaveCurrentMoney("MONITORING_STATE_CHANGED")
     end
 end
 
 function Sync:SaveCurrentMoney(reason)
-    if not moneyReady or not GetMoney then return false end
+    reason = tostring(reason or "UPDATE")
+    if not moneyReady then
+        iRC:DebugMsg(iRC:Text("GF_AUDIT_WAITING", reason), 3)
+        return false
+    end
+    local current = readCurrentMoney(reason)
+    if current == nil then return false end
     local history = localHistory()
-    writeMoneySnapshot(history, GetMoney())
+    local previous = history.money
+    writeMoneySnapshot(history, current)
     history.moneyMonitoringActive = self:IsMoneyMonitoringActive()
     history.moneyLastLoggedAt = time()
-    history.moneyLastLogReason = tostring(reason or "UPDATE")
+    history.moneyLastLogReason = reason
+    iRC:DebugMsg(iRC:Text("GF_AUDIT_CHECKPOINT", reason, tostring(previous), tostring(current)), 3)
     return true
 end
 
 function Sync:CheckLocalMoneySnapshot()
-    if iRC:IsLowTrafficMode() or not moneyReady or not GetMoney then return false end
+    if moneyLeavingWorld or iRC:IsLowTrafficMode() then return false end
+    if not moneyReady then return self:ValidateMoney() end
+    if not GetMoney then return false end
     local history = localHistory()
     local openSnapshot = tonumber(history.money)
     local sealedSnapshot = unsealSnapshot(history.rk)
     -- Never repair a mismatched saved snapshot here; login validation owns
     -- tamper detection. This only catches a missed in-game money event.
     if sealedSnapshot == nil or openSnapshot ~= sealedSnapshot then return false end
-    local current = GetMoney()
+    local current = readCurrentMoney("LOCAL_MONEY_WATCHDOG")
+    if current == nil then return false end
     if current == sealedSnapshot then return false end
     return self:SaveCurrentMoney("LOCAL_MONEY_WATCHDOG")
 end
 
 function Sync:ValidateMoney()
     if moneyReady then return end
-    if GetTime and GetTime() < moneyValidationAllowedAt then return end
-    local current = GetMoney and GetMoney()
-    if not current then return end
+    -- Early PLAYER_MONEY events must not bypass the login settling period.
+    if not moneyValidationAllowedAt or GetTime and GetTime() < moneyValidationAllowedAt then return end
+    local current = readCurrentMoney("LOGIN_VALIDATION")
+    if current == nil then return end
     local history = localHistory()
     local monitoringActive = self:IsMoneyMonitoringActive()
     local openSnapshot = tonumber(history.money)
@@ -318,6 +348,9 @@ function Sync:ValidateMoney()
     local snapshotMismatch = sealedExists
         and (sealedSnapshot == nil or openSnapshot == nil or sealedSnapshot ~= openSnapshot)
     local baseline = sealedSnapshot or openSnapshot
+    iRC:DebugMsg(iRC:Text("GF_AUDIT_VALIDATION", tostring(baseline), tostring(current),
+        tostring(history.moneyLastLogReason or "NONE"), tostring(history.moneyLastLoggedAt or 0),
+        tostring(monitoringActive and history.moneyMonitoringActive == true), tostring(snapshotMismatch)), 3)
     if monitoringActive and history.moneyMonitoringActive == true and baseline ~= nil
         and (snapshotMismatch or baseline ~= current) then
         markDiscrepancy(history, snapshotMismatch and "SNAPSHOT_MISMATCH" or "MONEY_MISMATCH",
@@ -331,6 +364,7 @@ function Sync:ValidateMoney()
     history.moneyLastLogReason = "LOGIN_VALIDATION"
     moneyReady = true
     self:ObserveSelfFound()
+    return true
 end
 
 function Sync:GetLocalRawStatus()
@@ -761,6 +795,8 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+frame:RegisterEvent("PLAYER_LEAVING_WORLD")
 frame:RegisterEvent("PLAYER_MONEY")
 frame:RegisterEvent("PLAYER_LOGOUT")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
@@ -800,16 +836,31 @@ frame:SetScript("OnEvent", function(_, event, ...)
             playedTicker = C_Timer.NewTicker(1800, function() Sync:RequestHiddenTimePlayed() end)
         end
         C_Timer.After(iRC:GetStartupTrafficDelay(), function() Sync:Broadcast() end)
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        moneyLeavingWorld = false
+    elseif event == "PLAYER_LEAVING_WORLD" then
+        -- The wallet can already be cleared during world teardown. Keep the
+        -- last in-world checkpoint, including its original timestamp and seal.
+        moneyLeavingWorld = true
     elseif event == "PLAYER_MONEY" then
-        if moneyReady then Sync:SaveCurrentMoney(event) else Sync:ValidateMoney() end
+        if moneyReady then
+            Sync:SaveCurrentMoney(event)
+        else
+            iRC:DebugMsg(iRC:Text("GF_AUDIT_WAITING", event), 3)
+            Sync:ValidateMoney()
+        end
     elseif event == "PLAYER_LOGOUT" then
+        moneyLeavingWorld = true
         local history = localHistory()
         if playedSampleGetTime and GetTime and tonumber(history.playedTotal) then
             history.playedExpectedAtExit = math.max(0, math.floor(history.playedTotal
                 + math.max(0, GetTime() - playedSampleGetTime)))
             history.playedExpectedAtExitAt = time()
         end
-        Sync:SaveCurrentMoney(event)
+        -- PLAYER_MONEY and the settled action handlers have already saved the
+        -- balance. Reading GetMoney here can replace it with a teardown zero.
+        iRC:DebugMsg(iRC:Text("GF_AUDIT_LOGOUT_KEPT", tostring(history.money),
+            tostring(history.moneyLastLogReason or "NONE"), tostring(history.moneyLastLoggedAt or 0)), 3)
     elseif event == "MAIL_SHOW" or event == "MAIL_CLOSED"
         or event == "MERCHANT_SHOW" or event == "MERCHANT_CLOSED"
         or event == "TRADE_SHOW" or event == "TRADE_CLOSED"

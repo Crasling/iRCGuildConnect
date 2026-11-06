@@ -31,8 +31,8 @@ local LAYER_ASSIGNMENT_WAIT = 1.5
 local LAYERSWAP_DEDUP_WINDOW = 2
 local LAYERSWAP_BURST_WINDOW = 10
 local LAYERSWAP_BURST_LIMIT = 20
-local LAYER_PANEL_WIDTH = 126
-local LAYER_PANEL_HEIGHT = 42
+local LAYER_PANEL_WIDTH = 112
+local LAYER_PANEL_HEIGHT = 36
 local initialized, mapInitialized, mapInitializationArmed, mapInitializationPending, positionSendPending
 local mapTicker
 local layerPanelTicker
@@ -505,38 +505,33 @@ local function initializeLayerPanel()
     layerPanel:RegisterForDrag("LeftButton")
     layerPanel:SetBackdrop({
         bgFile = "Interface\\BUTTONS\\WHITE8X8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+        edgeFile = "Interface\\BUTTONS\\WHITE8X8",
+        edgeSize = 1,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    layerPanel:SetBackdropColor(0.018, 0.016, 0.012, 0.94)
-    layerPanel:SetBackdropBorderColor(0.78, 0.48, 0.12, 1)
-    layerPanel.title = layerPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    layerPanel.title:SetPoint("LEFT", layerPanel, "LEFT", 12, 0)
-    layerPanel.title:SetText("LAYER (EST.)")
-    layerPanel.title:SetTextColor(1, 0.67, 0.15)
-    local titleFont = GameFontNormal and GameFontNormal:GetFont()
-    if titleFont then layerPanel.title:SetFont(titleFont, 14, "OUTLINE") end
+    layerPanel:SetBackdropColor(0.018, 0.016, 0.012, 0.88)
+    layerPanel:SetBackdropBorderColor(0.55, 0.38, 0.16, 0.8)
     layerPanel.value = layerPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    layerPanel.value:SetPoint("RIGHT", layerPanel, "RIGHT", -17, 0)
-    layerPanel.value:SetText("--")
+    layerPanel.value:SetJustifyH("CENTER")
+    layerPanel.value:SetJustifyV("MIDDLE")
+    layerPanel.value:SetWordWrap(false)
+    layerPanel.value:SetText("Layer --")
     layerPanel.value:SetTextColor(0.72, 0.72, 0.72)
+    layerPanel.value:SetShadowColor(0, 0, 0, 0.9)
     local valueFont = GameFontNormalLarge and GameFontNormalLarge:GetFont()
-    if valueFont then layerPanel.value:SetFont(valueFont, 25, "OUTLINE") end
 
     local resize
     local function applyPanelScale(scale)
         scale = math.max(0.75, math.min(2.5, tonumber(scale) or 1))
         layerPanel.displayScale = scale
         layerPanel:SetSize(LAYER_PANEL_WIDTH * scale, LAYER_PANEL_HEIGHT * scale)
-        layerPanel.title:ClearAllPoints()
-        layerPanel.title:SetPoint("LEFT", layerPanel, "LEFT", 12 * scale, 0)
-        if titleFont then layerPanel.title:SetFont(titleFont, 14 * scale, "OUTLINE") end
         layerPanel.value:ClearAllPoints()
-        layerPanel.value:SetPoint("RIGHT", layerPanel, "RIGHT", -17 * scale, 0)
-        if valueFont then layerPanel.value:SetFont(valueFont, 25 * scale, "OUTLINE") end
+        layerPanel.value:SetPoint("CENTER", layerPanel, "CENTER", 0, 0)
+        layerPanel.value:SetSize((LAYER_PANEL_WIDTH - 20) * scale, 26 * scale)
+        layerPanel.value:SetShadowOffset(scale, -scale)
+        if valueFont then layerPanel.value:SetFont(valueFont, 18 * scale, "") end
         if resize then
-            resize:SetSize(18 * scale, 18 * scale)
+            resize:SetSize(12 * scale, 12 * scale)
             resize:ClearAllPoints()
             resize:SetPoint("BOTTOMRIGHT", layerPanel, "BOTTOMRIGHT", -2 * scale, 2 * scale)
         end
@@ -593,6 +588,7 @@ local function initializeLayerPanel()
         saveLayerPanelPosition()
     end)
     layerPanel:SetScript("OnEnter", function(self)
+        self:SetBackdropBorderColor(0.9, 0.65, 0.25, 1)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:SetText("Estimated Zone Layer")
@@ -630,7 +626,10 @@ local function initializeLayerPanel()
         GameTooltip:AddLine("Visibility is controlled in Personal Settings.", 0.72, 0.72, 0.72, true)
         GameTooltip:Show()
     end)
-    layerPanel:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    layerPanel:SetScript("OnLeave", function(self)
+        self:SetBackdropBorderColor(0.55, 0.38, 0.16, 0.8)
+        if GameTooltip then GameTooltip:Hide() end
+    end)
     layerPanel:SetScript("OnMouseUp", function(_, button)
         if button == "RightButton" then
             settings.layerPanelLocked = settings.layerPanelLocked ~= true
@@ -691,10 +690,12 @@ function GuildMap:UpdateLocalLayerDisplay()
     end
     if layerPanel then
         local waiting = pendingLocalLayer or layerTransitioning
-        layerPanel.value:SetText(layer and tostring(layer.number) or (waiting and "..." or "--"))
-        local provisional = layer ~= nil
-        layerPanel.value:SetTextColor(layer and (provisional and 1 or 0.30) or (waiting and 1 or 0.72),
-            layer and (provisional and 0.82 or 1) or (waiting and 0.82 or 0.72), layer and 0.35 or (waiting and 0.35 or 0.72))
+        layerPanel.value:SetText("Layer " .. (layer and tostring(layer.number) or (waiting and "..." or "--")))
+        if layer or waiting then
+            layerPanel.value:SetTextColor(1, 0.82, 0.35)
+        else
+            layerPanel.value:SetTextColor(0.72, 0.72, 0.72)
+        end
         layerPanel:SetShown(shouldShowLayerPanel())
     end
 end

@@ -2,6 +2,12 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.4 - Guild Found & Layer Panel
+--------------------------------------------------------------------------------
+[IMPROVED] Smaller layer panel with clearer text
+[FIXED] Logging out could cause a false Guild Found gold warning
+[IMPROVED] Clearer Guild Found reports and gold monitoring debug messages
+
 v0.7.3 - Layer Display
 --------------------------------------------------------------------------------
 [CHANGED] Layer panel is now off by default. Enable it in Personal Settings for testing

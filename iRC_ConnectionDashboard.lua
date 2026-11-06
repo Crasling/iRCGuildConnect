@@ -554,14 +554,8 @@ function Dashboard:Create()
         if playedBefore and playedAfter and playedAfter >= playedBefore then
             local playedIncrease = playedAfter - playedBefore
             lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_INCREASE", formatDuration(playedIncrease))
-            local playedBeforeAt, playedAfterAt = tonumber(status.playedBeforeAt), tonumber(status.playedAfterAt)
-            if playedBeforeAt and playedAfterAt and playedAfterAt >= playedBeforeAt
-                and playedAfterAt - playedBeforeAt <= 1800 then
-                lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_EXACT", formatDuration(playedIncrease))
-            else
-                lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_ESTIMATE",
-                    formatDuration(math.max(0, playedIncrease - 1800)), formatDuration(playedIncrease))
-            end
+            -- This includes monitored play between samples. It cannot tell us
+            -- how long the addon was disabled, or prove that it was disabled.
         end
     end
 
