@@ -161,8 +161,13 @@ readsBefore = guidReads
 assert(not observe(555, 1) and guidReads == readsBefore, "secret unit identity is skipped before UnitGUID")
 identitySecret = false
 settings.showLayerPanel = false
-assert(not observe(555, 1), "the layer setting still disables local observation")
-settings.showLayerPanel = true
+map:ClearLocalLayer()
+requestsBefore = #requests
+local broadcastsBefore = #broadcasts
+evidence(555)
+advance(2)
+assert(#requests == requestsBefore + 1 and map:GetLocalLayer().instanceId == 555
+    and #broadcasts > broadcastsBefore, "hidden panels still detect, assign, and share world references")
 
 events.scripts.OnEvent(events, "SHARD_TRANSFER")
 assert(transitions == 1 and not map:GetLocalLayer(), "a shard transfer clears the old layer and is shared")
@@ -185,3 +190,36 @@ assert(firstPeer.number == secondPeer.number and firstPeer.zoneUID ~= secondPeer
     "shared world references agree despite client-local ZoneUID and reported numbers")
 
 print("PASS: local detection, bounded-lookup fallback, raw guild normalization, sharing, combat/secret guards, channel readiness, unique NPC votes, and transfers")
+
+-- Bind the actual panel and visibility setter to lightweight UI widgets.
+local panel, insideInstance
+local function widget()
+    local item = { scripts = {} }
+    function item:SetScript(event, callback) self.scripts[event] = callback end
+    function item:SetShown(value) self.shown = value end
+    function item:CreateFontString() return widget() end
+    function item:EnableMouse() end
+    function item:RegisterForDrag() end
+    function item:ClearAllPoints() end
+    return setmetatable(item, { __index = function(_, method)
+        if method:match("^Set") then return function() end end
+    end })
+end
+function CreateFrame(_, name)
+    local item = widget()
+    if name == "iRCLocalLayerPanel" then panel = item end
+    return item
+end
+function IsInInstance() return insideInstance == true end
+readsBefore, requestsBefore, broadcastsBefore = guidReads, #requests, #broadcasts
+map:SetLayerPanelShown(true)
+assert(panel and panel.shown, "enabling the panel shows the actual layer frame")
+map:SetLayerPanelShown(false)
+assert(not panel.shown, "disabling the panel hides the actual layer frame")
+assert(guidReads == readsBefore and #requests == requestsBefore and #broadcasts == broadcastsBefore,
+    "the visibility toggle does not start or stop scans, lookups, or broadcasts")
+map:SetLayerPanelShown(true)
+insideInstance = true
+map:UpdateLocalLayerDisplay()
+assert(not panel.shown, "the visible panel remains automatically hidden inside instances")
+print("PASS: panel visibility is independent of background world-data collection")

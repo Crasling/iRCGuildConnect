@@ -60,7 +60,8 @@ function methods:IsShown() return self.shown end
 function methods:IsVisible() return self.shown and (not self.parent or self.parent:IsVisible()) end
 function methods:EnableMouse(value) self.mouseEnabled = value == true end
 function methods:GetFrameLevel() return 1 end
-function methods:GetVerticalScroll() return 0 end
+function methods:GetVerticalScroll() return self.verticalScroll or 0 end
+function methods:SetVerticalScroll(value) self.verticalScroll = value end
 function CreateFrame(kind, _, parent, template) return widget(kind, parent, template) end
 function GetTime() return now end
 function time() return now end
@@ -380,3 +381,64 @@ assert(preview:GetHeight() < expandedPreviewHeight and heightNotifications == 1 
 preview:Refresh(draft)
 assert(heightNotifications == 1, "an unchanged empty preview does not repeat layout notifications")
 print("PASS: slim guild rows, nonoverlapping columns, header expansion, restored timestamps, isolated draft previews, unique class counts, and frame reuse")
+
+-- Render the real compact roster with 1,000 cached profiles. Scrolling must
+-- reuse its visible rows, including their labels, highlights and callbacks.
+function addon:IsOfficialHardcoreRealm() return false end
+function addon:IsGuildFoundProgressionApplicable() return false end
+function addon:IsLiveAddonState(value) return value == "verified" end
+addon.Identity = {
+    GetIdentityLabel = function(_, name)
+        if name == "First Main" then return "Main" end
+        if name == "Second Alt" then return "Alt of First Main" end
+    end,
+    GetMainCharacterName = function() return "First Main" end,
+    IsPersonalBank = function() return false end,
+}
+addon.Professions = {
+    GetOptions = function() return { { 171, "Alchemy" }, { 182, "Herbalism" }, { 185, "Cooking" }, { 129, "First Aid" } } end,
+    DescribeRecipes = function() return { "Alchemy", "Recipe details" } end,
+}
+local memberView = { category = "Guild Members", memberRows = {}, memberData = {},
+    scroll = widget("ScrollFrame", parent), scrollContent = widget("Frame", parent) }
+memberView.scroll:SetHeight(234)
+memberView.scrollContent:SetWidth(675)
+for index = 1, 1000 do
+    memberView.memberData[index] = { name = index == 1 and "First Main" or index == 2 and "Second Alt" or "Member " .. index,
+        race = "Human", class = "MAGE", level = 60, online = index % 2 == 1,
+        verification = { state = "verified" }, lastOnlineDays = 1,
+        professionData = { skills = { [171] = 300, [182] = 300, [185] = 150, [129] = 225 } } }
+end
+local openedMember
+memberView.showMemberProfile = function(value) openedMember = value end
+render.ui.frame = memberView
+local beforeRosterReads = rosterReads
+render.ui:RenderMemberRows()
+assert(#memberView.memberRows == 7, "a compact roster creates only visible rows plus one extra")
+local mainRow, altRow = memberView.memberRows[1], memberView.memberRows[2]
+assert(mainRow:GetHeight() == 36 and not mainRow.detail.wordWrap and mainRow.memberDivider:IsShown(),
+    "roster rows are compact, separated, and keep details on one line")
+assert(mainRow.tag:GetText() == "[Main]" and not mainRow.identityDetail:IsShown(),
+    "the Main tag no longer repeats a second main-character label")
+assert(altRow.tag:GetText() == "[Alt]" and altRow.identityDetail:GetText() == "Main: First Main",
+    "alts keep their confirmed main visible")
+assert(mainRow.onlineTag:GetText() == "ONLINE  |  iRC", "live iRC presence remains prominent")
+assert(mainRow.detail:GetText():find("Alchemy 300", 1, true), "professions remain in the compact summary")
+assert(mainRow.detail.points[2][1] == "TOPRIGHT" and mainRow.detail.points[2][5] == -20
+    and altRow.detail.points[2][1] == "TOPRIGHT" and altRow.detail.points[2][5] == 0,
+    "both ends of the detail line align at the same height without compressing or clipping text")
+local tooltipLines = {}
+GameTooltip = widget("Tooltip", UIParent)
+function GameTooltip:AddLine(value) tooltipLines[#tooltipLines + 1] = value end
+mainRow:Fire("OnEnter")
+assert(table.concat(tooltipLines, "\n"):find("First Aid 225", 1, true), "hover keeps full profession details available")
+memberView.scroll:SetVerticalScroll(500 * 39)
+render.ui:RenderMemberRows()
+assert(#memberView.memberRows == 7 and mainRow.profileName == "Member 501", "scrolling reuses compact row frames")
+mainRow:Fire("OnClick", "LeftButton")
+assert(openedMember == memberView.memberData[501], "reused rows open the correct current member")
+memberView.scroll:SetVerticalScroll(999 * 39)
+render.ui:RenderMemberRows()
+assert(mainRow.profileName == "Member 1000" and not altRow:IsShown(), "the last page hides unused rows")
+assert(rosterReads == beforeRosterReads, "scrolling the compact roster does not rebuild guild data")
+print("PASS: compact member rows, full profession hover, confirmed identities, live presence, and bounded scrolling for 1,000 members")

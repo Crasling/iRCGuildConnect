@@ -452,8 +452,7 @@ end
 
 function GuildMap:BroadcastLocalLayer(force)
     local layer = self:GetLocalLayer()
-    if not layer or iRC:GetSettings().showLayerPanel == false
-        or not iRC.RaceGrid or not iRC.RaceGrid.BroadcastLayerState then return false end
+    if not layer or not iRC.RaceGrid or not iRC.RaceGrid.BroadcastLayerState then return false end
     if layerScanBlockedByCombat()
         or (iRC.IsChatMessagingLocked and iRC:IsChatMessagingLocked()) then return false end
     local registry = self:GetLayerRegistryWire(layer.serverId, layer.instanceId, layer.mapId)
@@ -808,7 +807,6 @@ end
 
 function GuildMap:ObserveLocalLayer(unit, source)
     if type(unit) ~= "string" or not UnitGUID then return false end
-    if iRC:GetSettings().showLayerPanel == false then return false end
     if iRC.IsForeverClient and not iRC:IsForeverClient() then return false end
     if layerScanBlockedByCombat() then return false end
     -- A summoned pet can keep the GUID layer identity from where it was
@@ -889,7 +887,6 @@ function GuildMap:ObserveLocalLayer(unit, source)
 end
 
 function GuildMap:RefreshLocalLayerEvidence()
-    if iRC:GetSettings().showLayerPanel == false then return false end
     if layerScanBlockedByCombat() then return false end
     local observed = self:ObserveLocalLayer("target", "target")
     if self:ObserveLocalLayer("mouseover", "mouseover") then observed = true end
@@ -927,14 +924,10 @@ end
 function GuildMap:SetLayerPanelShown(enabledValue)
     iRC:GetSettings().showLayerPanel = enabledValue and true or false
     initializeLayerPanel()
-    if enabledValue then
-        self:RefreshLocalLayerEvidence()
-    end
     self:UpdateLocalLayerDisplay()
 end
 
 function GuildMap:ReceiveLayerState(parts, sender)
-    if iRC:GetSettings().showLayerPanel == false then return false end
     if type(parts) ~= "table" or tostring(parts[2] or "") ~= LAYER_WIRE_VERSION then return false end
     local zoneUID = tonumber(parts[3])
     local serverId = tonumber(parts[4])
@@ -1010,7 +1003,7 @@ local function throttleLayerSwapMessage(senderKey, messageKey)
 end
 
 function GuildMap:ReceiveLayerSwapMessage(message, sender, distribution)
-    if iRC:GetSettings().showLayerPanel == false or iRC:HasSecretValues(message, sender, distribution) then return false end
+    if iRC:HasSecretValues(message, sender, distribution) then return false end
     if distribution ~= "GUILD" and distribution ~= "WHISPER" and distribution ~= "CHANNEL" then return false end
     message, sender = tostring(message or ""), tostring(sender or "")
     local senderKey = iRC:NormalizeName(sender)
@@ -1094,7 +1087,7 @@ function GuildMap:GetUserLayer(name)
 end
 
 function GuildMap:ReceiveLayerTransition(parts, sender)
-    if iRC:GetSettings().showLayerPanel == false or type(parts) ~= "table"
+    if type(parts) ~= "table"
         or tostring(parts[2] or "") ~= LAYER_WIRE_VERSION then return false end
     local mapId = tonumber(parts[3])
     local senderKey = iRC:NormalizeName(sender)

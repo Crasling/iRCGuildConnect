@@ -49,7 +49,7 @@ local function client(name)
     function addon:NormalizeName(value) return (value or ""):lower() end
     function addon:IsForeverClient() return true end
     function addon:IsCombatTrafficBlocked() return combat end
-    function addon:GetSettings() return { showLayerPanel = true } end
+    function addon:GetSettings() return { showLayerPanel = false } end
     function addon:GetPlayerName() return name end
     function addon:GetGuildKey() return "guild" end
     function addon:IsGuildMemberName() return true end

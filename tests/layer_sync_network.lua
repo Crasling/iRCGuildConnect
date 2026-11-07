@@ -62,7 +62,7 @@ local function scenario(mode)
         assert(loadfile("iRC_Core.lua", "t", env))("iRC", private)
         function addon:GetPlayerName() return name end
         function addon:GetGuildKey() return guild end
-        function addon:GetSettings() return {} end
+        function addon:GetSettings() return { showLayerPanel = false } end
         function addon:GetGuildRosterSnapshot()
             local roster = {}
             for _, peer in ipairs(clients) do

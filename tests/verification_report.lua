@@ -50,7 +50,11 @@ status.moneyBeforeAt = status.moneyAfterAt - (1148 * 60 + 43)
 status.playedBefore, status.playedAfter = 1000, 1000 + 196 * 60 + 36
 model = report:BuildModel("Drim Lumenrot", member, status, "GUILD_FOUND")
 assert(model.details:find("Before: 0g 55s 85c    |    After: 1g 11s 88c    |    Change: +0g 56s 3c", 1, true))
-assert(model.details:find("19h 8m 43s", 1, true) and model.details:find("3h 16m 36s", 1, true))
+assert(model.details:find("3h 16m 36s", 1, true), "reports retain the actual played-time increase")
+assert(not model.details:find("Difference in time:", 1, true) and not model.details:find("19h 8m 43s", 1, true),
+    "elapsed clock time, which includes time logged out, is not presented as audit activity")
+assert(model.details:find(os.date("%Y-%m-%d %H:%M:%S", status.moneyBeforeAt), 1, true),
+    "the original checkpoint timestamps remain available")
 model = report:BuildModel("Crasling Vaelanar", member, nil, "GUILD_FOUND")
 assert(model.tone == "neutral" and model.issue:find("No verification report", 1, true))
 model = report:BuildModel("Crasling Vaelanar", member, status, "SELF_FOUND")

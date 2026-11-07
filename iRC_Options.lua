@@ -3419,8 +3419,9 @@ local function Refresh()
     local connection = iRC:GetConnection()
     local guildActive = connection and iRC:IsGuildConnectionActive()
     local guildFoundRules = iRC:GetConnectionRules()
-    local protectionActive = guildActive and iRC:IsGuildFoundRequired(connection)
-    local exceptionsEnabled = protectionActive and guildFoundRules.guildFoundTradeExceptions == true
+    local protectionActive = iRC:IsGuildFoundEconomyActive()
+    local guildFoundPolicy = guildActive and (guildFoundRules.guildFoundOnly == true or guildFoundRules.level60GuildFound == true)
+    local exceptionsEnabled = guildFoundPolicy and guildFoundRules.guildFoundTradeExceptions == true
     local managementAvailableForGuildFound = guildActive and iRC:HasGuildPermission("tradeExceptions")
     local function guildFoundStatusText(labelKey, enabled, enabledKey, disabledKey)
         local color = enabled and iRC.Colors.Green or iRC.Colors.Gray
@@ -3494,7 +3495,7 @@ local function Refresh()
     local maxLevelModeEnabled = isGuildMaster and guildActive and iRC:GetProgressionMode() == "SELF_FOUND"
     if maxLevelModeEnabled then UIDropDownMenu_EnableDropDown(maxLevelProgressionDropdown)
     else UIDropDownMenu_DisableDropDown(maxLevelProgressionDropdown) end
-    local tradeExceptionsRuleEnabled = isGuildMaster and guildActive and iRC:IsGuildFoundRequired()
+    local tradeExceptionsRuleEnabled = isGuildMaster and guildFoundPolicy
     guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
     guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     raceRuleUI.level60Message:SetEnabled(isGuildMaster and guildActive and true or false)

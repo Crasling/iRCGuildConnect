@@ -3,6 +3,7 @@ local accepted, sentMail, inboxItems, inboxMoney, autoLoot = 0, 0, 0, 0, 0
 local tradePartner = "Outside"
 local tradeOpen, exceptionEnabled, playerTradeLink = true, false, nil
 local targetTradeLink, playerOffer, targetOffer, typedOffer = nil, 0, 0, 0
+local mailSubject, mailLookups, economyActive = "", 0, true
 local audits, discrepancies, frames = {}, {}, {}
 
 local function control()
@@ -13,7 +14,12 @@ UIParent = {}
 TradeFrame = { IsShown = function() return tradeOpen end }
 TradeFrameTradeButton = control()
 SendMailMailButton = control()
-SendMailNameEditBox = { text = "", GetText = function(self) return self.text end, HookScript = function(self, _, callback) self.onTextChanged = callback end }
+SendMailNameEditBox = { text = "", hooks = {}, GetText = function(self) return self.text end,
+    HookScript = function(self, script, callback) self.hooks[script] = callback end }
+function SendMailNameEditBox:SetText(text)
+    self.text = text
+    if self.hooks.OnTextChanged then self.hooks.OnTextChanged(self, true) end
+end
 OpenMailFrame = {}
 OpenMailMoneyButton = control()
 OpenMailPackageButton = control()
@@ -47,9 +53,10 @@ function SendMail() sentMail = sentMail + 1 end
 function TakeInboxItem() inboxItems = inboxItems + 1 end
 function TakeInboxMoney() inboxMoney = inboxMoney + 1 end
 function AutoLootMailItem() autoLoot = autoLoot + 1 end
-function hooksecurefunc(name, callback)
-    local original = _G[name]
-    _G[name] = function(...)
+function hooksecurefunc(owner, method, callback)
+    if type(owner) ~= "table" then owner, method, callback = _G, owner, method end
+    local original = owner[method]
+    owner[method] = function(...)
         local values = { original(...) }
         callback(...)
         return (table.unpack or unpack)(values)
@@ -68,7 +75,7 @@ local iRC = {
     Colors = { Red = "", Reset = "", Yellow = "" },
     IsGuildConnectionActive = function() return true end,
     IsGuildFoundRequired = function() return true end,
-    IsGuildFoundEconomyActive = function() return true end,
+    IsGuildFoundEconomyActive = function() return economyActive end,
     GetProgressionMode = function() return "GUILD_FOUND" end,
     IsGuildMemberName = function(_, name) return name == "Guildie" end,
     GetConnectionRules = function() return { guildFoundOnly = true, guildFoundTradeExceptions = exceptionEnabled } end,
@@ -76,7 +83,10 @@ local iRC = {
         return { conjured = exceptionEnabled, items = { conjured = { [5350] = exceptionEnabled } } }
     end,
     GetSelfFoundState = function() return false end,
-    GetGuildFoundTradeStatus = function(_, name) return name == "Guildie", name == "Guildie" and nil or "outside guild" end,
+    GetGuildFoundTradeStatus = function(_, name, allowOffline)
+        if allowOffline then mailLookups = mailLookups + 1 end
+        return name == "Guildie", name == "Guildie" and nil or "outside guild"
+    end,
     FindConnectionProfile = function() end,
     NormalizeName = function(_, name) return string.lower(name or "") end,
     FormatPlayerName = function(_, name) return tostring(name or "") end,
@@ -198,21 +208,69 @@ assert(not TradeFrameTradeButton.active, "a failed recheck does not leave native
 iRC.GetGuildFoundTradeStatus = statusCheck
 TradeFrameTradeButton_Enable()
 assert(TradeFrameTradeButton.active, "a failed recheck resets the recursion guard so later updates can recover")
-priorNotices = #notices
+-- Native mail refresh can enable Send after every edit. Typing must stay
+-- quiet and never count incomplete roster names as blocked send attempts.
+function SendMailFrame_CanSend()
+    SendMailMailButton:SetEnabled(SendMailNameEditBox.text ~= "" and mailSubject ~= "")
+end
+function SendMailFrame_EnableSendMailButton() SendMailMailButton:SetEnabled(true) end
+MailFrame = { OnEvent = function(_, event)
+    if event == "MAIL_SUCCESS" or event == "MAIL_FAILED" then SendMailMailButton:SetEnabled(true) end
+end }
+enforcement:InstallMailAPIGuards()
+priorNotices, priorAudits = #notices, #audits
+local priorLookups = mailLookups
+mailSubject = "Test"
+for index = 1, #"Guildie" do
+    SendMailNameEditBox:SetText(("Guildie"):sub(1, index))
+    SendMailFrame_CanSend()
+    assert(not SendMailMailButton.active, "Send stays disabled while the recipient is being typed")
+end
+assert(mailLookups == priorLookups and #notices == priorNotices and #audits == priorAudits,
+    "typing does not query partial roster names, warn, or create mail audit events")
+SendMailNameEditBox.hooks.OnTabPressed()
+assert(SendMailMailButton.active and mailLookups > priorLookups, "Tab finalizes and verifies the full guild recipient")
+SendMailNameEditBox.hooks.OnEditFocusGained()
+assert(not SendMailMailButton.active, "editing a finalized name locks Send again")
+SendMailNameEditBox.hooks.OnEnterPressed()
+assert(SendMailMailButton.active, "Enter finalizes a valid full recipient")
+mailSubject = ""; SendMailFrame_CanSend()
+assert(not SendMailMailButton.active, "recipient verification cannot bypass Blizzard's missing-subject restriction")
+mailSubject = "Test"; SendMailFrame_CanSend()
+SendMailNameEditBox:SetText("Outside")
+SendMailNameEditBox.hooks.OnEditFocusLost()
+SendMailFrame_CanSend(); SendMailFrame_EnableSendMailButton()
+MailFrame:OnEvent("MAIL_SUCCESS"); MailFrame:OnEvent("MAIL_FAILED")
+assert(not SendMailMailButton.active and #notices == priorNotices and #audits == priorAudits,
+    "a finalized non-guild name remains disabled without inventing a send attempt")
 
-SendMailNameEditBox.text = "Outside"
-enforcement:UpdateMailRestriction()
-assert(SendMailMailButton.active == false, "external outgoing mail control is disabled")
-assert(#notices == priorNotices + 1, "blocked outgoing mail explains the restriction in local chat")
-SendMailNameEditBox.text = "Guildie"
-enforcement:UpdateMailRestriction()
-assert(SendMailMailButton.active == true, "verified guild outgoing mail remains available")
-
-SendMailNameEditBox.text = "Outside"
-enforcement:UpdateMailRestriction()
+-- Success belongs to the submitted recipient, not a field subsequently reset
+-- by Blizzard or changed by the player before the reply arrives.
+SendMail("Outside")
+assert(#audits == priorAudits + 1 and audits[#audits].action == "MAIL_BLOCKED",
+    "an actual forbidden API send attempt, unlike typing, records the blocked-mail audit")
+SendMailNameEditBox:SetText("")
 eventFrame.OnEvent(nil, "MAIL_SEND_SUCCESS")
 assert(discrepancies[#discrepancies] and discrepancies[#discrepancies].reason == "MAIL_BLOCK_BYPASS",
-    "a successful send to a blocked recipient creates monitoring discrepancy evidence")
+    "successful restricted sends retain their evidence when Blizzard resets the name first")
+local priorDiscrepancies = #discrepancies
+SendMailNameEditBox:SetText("Guildie"); SendMailNameEditBox.hooks.OnEditFocusLost()
+SendMail("Guildie")
+SendMailNameEditBox:SetText("Outside")
+eventFrame.OnEvent(nil, "MAIL_SEND_SUCCESS")
+assert(#discrepancies == priorDiscrepancies, "typing a new name cannot turn a successful allowed send into a bypass")
+SendMail("Outside"); eventFrame.OnEvent(nil, "MAIL_FAILED")
+eventFrame.OnEvent(nil, "MAIL_SEND_SUCCESS")
+assert(#discrepancies == priorDiscrepancies, "a failed send cannot leave stale evidence for a later success")
+SendMailNameEditBox:SetText("Guildie"); SendMailNameEditBox.hooks.OnEditFocusLost()
+SendMail("Guildie")
+MailFrame:OnEvent("MAIL_FAILED")
+eventFrame.OnEvent(nil, "MAIL_FAILED")
+assert(SendMailMailButton.active, "an eligible recipient can retry after a native send failure in either event order")
+economyActive = false
+SendMailNameEditBox:SetText("Outside"); SendMailFrame_CanSend()
+assert(SendMailMailButton.active, "characters outside Guild Found keep Blizzard's normal send behavior")
+economyActive = true
 
 OpenMailFrame.openMailID = 1
 enforcement:UpdateInboxRestriction()

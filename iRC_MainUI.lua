@@ -14,8 +14,8 @@ local expandedGuildCards = {}
 local guildStatsFilter = "ALL"
 local collapsedFactionSections = {}
 local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
-local GUILD_MEMBER_ROW_HEIGHT = 52
-local GUILD_MEMBER_ROW_SPACING = 56
+local GUILD_MEMBER_ROW_HEIGHT = 36
+local GUILD_MEMBER_ROW_SPACING = 39
 local MEMBER_MANAGEMENT_ROW_HEIGHT = 44
 local MEMBER_MANAGEMENT_ROW_SPACING = 48
 local GUILD_DIRECTORY_ROW_HEIGHT = 40
@@ -266,6 +266,11 @@ local function setMemberRowDensity(row, compact)
     if row.rankIdentity then row.rankIdentity:Hide() end
     if row.rankActions then row.rankActions:Hide() end
     if row.identityDetail then row.identityDetail:Hide() end
+    if row.memberDivider then row.memberDivider:Hide() end
+    row.onlineTag:ClearAllPoints()
+    row.onlineTag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -7)
+    row.onlineTag:SetWidth(150)
+    row.identityDetail:SetWidth(250)
     row:SetBackdropColor(0.10, 0.085, 0.07, 0.96)
     row:SetBackdropBorderColor(0.28, 0.25, 0.20, 1)
     row:SetHeight(compact and 40 or 44)
@@ -275,6 +280,7 @@ local function setMemberRowDensity(row, compact)
     row.detail:ClearAllPoints()
     row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
+    row.detail:SetWordWrap(true)
 end
 
 local function rankIdentityPresentation(name)
@@ -5240,6 +5246,16 @@ function UI:RenderMemberRows()
         end
         setMemberRowDensity(row, false)
         row:SetHeight(GUILD_MEMBER_ROW_HEIGHT)
+        row:SetBackdropColor(0.075, 0.062, 0.043, index % 2 == 0 and 0.60 or 0.28)
+        row:SetBackdropBorderColor(0, 0, 0, 0)
+        if not row.memberDivider then
+            row.memberDivider = row:CreateTexture(nil, "BACKGROUND")
+            row.memberDivider:SetPoint("BOTTOMLEFT", 10, 0)
+            row.memberDivider:SetPoint("BOTTOMRIGHT", -10, 0)
+            row.memberDivider:SetHeight(1)
+            row.memberDivider:SetColorTexture(1, 0.72, 0.22, 0.12)
+        end
+        row.memberDivider:Show()
         row:ClearAllPoints()
         row:SetAlpha(1)
         row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0,
@@ -5264,7 +5280,13 @@ function UI:RenderMemberRows()
             memberTag, tagColor = "Guild-Found", { 0.30, 1, 0.35 }
         end
         row.name:SetText(iRC:FormatPlayerName(profile.name))
-        row.name:SetWidth(math.min(300, row.name:GetStringWidth() + 3))
+        row.name:SetWordWrap(false)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("TOPLEFT", 12, -4)
+        row.onlineTag:ClearAllPoints()
+        row.onlineTag:SetPoint("TOPRIGHT", row, "TOPRIGHT", -12, -5)
+        row.onlineTag:SetWidth(130)
+        row.onlineTag:SetWordWrap(false)
         if profile.online == true then
             local hasLiveIRC = profile.verification
                 and iRC:IsLiveAddonState(profile.verification.state)
@@ -5279,22 +5301,32 @@ function UI:RenderMemberRows()
         row.tag:ClearAllPoints()
         row.tag:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
         row.tag:SetText(memberTag and ("[" .. memberTag .. "]") or "")
+        row.tag:SetWordWrap(false)
         if tagColor then row.tag:SetTextColor(tagColor[1], tagColor[2], tagColor[3]) end
         row.tag:SetShown(memberTag ~= nil)
+        -- Reserve the status column before sizing a long full name and tag.
+        local nameWidth = row.name.GetUnboundedStringWidth and row.name:GetUnboundedStringWidth() or row.name:GetStringWidth()
+        row.name:SetWidth(math.max(40, math.min(300, nameWidth + 3,
+            (row:GetWidth() or 600) - 166 - (memberTag and row.tag:GetStringWidth() + 8 or 0))))
         row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
         row.detail:ClearAllPoints()
-        row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -3)
-        row.detail:SetWordWrap(true)
-        row.detail:SetText((profile.race or "Unknown") .. " · " .. (profile.class or "Unknown") .. " · Level " .. (profile.level or 1))
+        row.detail:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -20)
+        row.detail:SetWordWrap(false)
+        local characterDetail = "Level " .. (profile.level or 1) .. " · " .. (profile.race or "Unknown")
+            .. " " .. iRC:GetClassDisplayName(profile.classFile or profile.class or "Unknown")
+        row.detail:SetText(characterDetail)
         row.identityDetail:ClearAllPoints()
-        row.identityDetail:SetPoint("TOPRIGHT", row, "TOPRIGHT", -14, -25)
-        if identityLabel then
-            row.detail:SetPoint("RIGHT", row.identityDetail, "LEFT", -14, 0)
-            row.identityDetail:SetText(identityLabel == "Main" and "Main character" or identityLabel)
+        row.identityDetail:SetPoint("TOPRIGHT", row, "TOPRIGHT", -12, -20)
+        row.identityDetail:SetWidth(180)
+        row.identityDetail:SetWordWrap(false)
+        if identityLabel and identityLabel ~= "Main" then
+            row.detail:SetPoint("TOPRIGHT", row.identityDetail, "TOPLEFT", -12, 0)
+            local mainName = iRC.Identity:GetMainCharacterName(profile.name)
+            row.identityDetail:SetText(mainName and "Main: " .. iRC:FormatPlayerName(mainName) or identityLabel)
             row.identityDetail:SetTextColor(0.58, 0.58, 0.58)
             row.identityDetail:Show()
         else
-            row.detail:SetPoint("RIGHT", row, "RIGHT", -14, 0)
+            row.detail:SetPoint("TOPRIGHT", row, "TOPRIGHT", -12, -20)
             row.identityDetail:Hide()
         end
         row.profileName = profile.name
@@ -5312,6 +5344,9 @@ function UI:RenderMemberRows()
             if not GameTooltip then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetText(iRC:FormatPlayerName(profile.name))
+            GameTooltip:AddLine(characterDetail, 0.75, 0.75, 0.75)
+            if identityLabel then GameTooltip:AddLine(identityLabel == "Main" and "Main character" or identityLabel, 0.8, 0.7, 1, true) end
+            if #professionNames > 0 then GameTooltip:AddLine(table.concat(professionNames, ", "), 0.85, 0.85, 0.85, true) end
             if professionData and professionData.skills then
                 local lines = iRC.Professions:DescribeRecipes(professionData)
                 for index = 1, math.min(#lines, 18) do GameTooltip:AddLine(lines[index], 1, 1, 1) end
@@ -5550,7 +5585,7 @@ local function updateMemberRows(frame)
     applyMemberSearch(frame)
     updateMemberSuggestions(frame)
     frame.contentTitle:SetText("Guild Members")
-    frame.contentSubtitle:SetText("Search the full roster by character or linked-alt name, profession, and known recipe.")
+    frame.contentSubtitle:SetText(tostring(#profiles) .. " members · Search names, linked alts, professions and recipes.")
 end
 
 local GUILD_LOG_COLORS = {
@@ -7652,7 +7687,7 @@ function UI:Refresh()
     local usesSearchHeader = frame.category == "Race Overview" or frame.category == "Guild Log"
         or frame.category == "Guild Members"
         or frame.category == "Member Management"
-    local scrollTop = memberManagement and -150 or (usesSearchHeader and -112 or -78)
+    local scrollTop = memberManagement and -150 or (frame.category == "Guild Members" and -82 or (usesSearchHeader and -112 or -78))
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, scrollTop)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)

@@ -113,6 +113,12 @@ sync:ReceiveRoster("G:Self,1,1," .. now, "Officer-Realm")
 sync:ReceiveRoster("A:" .. newerAt, "Officer-Realm")
 assert(#printed == 1 and sync:GetStatus(player).clean == true,
     "a Clean decision arriving after the receipt is honored without repeating a status claim")
+local silentAt = newerAt + 10
+iRCCharDB.guildFoundHistory.moneyDiscrepancyAt = silentAt
+iRCCharDB.guildFoundHistory.moneyDiscrepancySilentAt = silentAt
+sync:ReceiveRoster("A:" .. silentAt, "Officer-Realm")
+assert(#printed == 1 and sync:GetStatus(player).clean == false,
+    "a paused-session discrepancy remains visible for review without a player-facing receipt notice")
 sent = {}
 sync:ReceiveRoster("S:Member,1,0," .. newerAt .. ",-,-,0", "Member-Realm")
 local acknowledged = false

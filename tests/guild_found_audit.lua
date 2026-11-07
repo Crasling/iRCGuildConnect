@@ -55,6 +55,17 @@ assert(iRC:RecordGuildFoundAudit("MAIL_BLOCKED", "Outside"),
 assert(sent[#sent] and sent[#sent][2]:match("^GF_AUDIT\t10\t"),
     "hybrid audit evidence is shared: " .. tostring(sent[#sent] and sent[#sent][2]))
 
+iRC.Identity = { IsPersonalBank = function() return true end }
+assert(iRC:IsGuildFoundEconomyActive(10, true), "a confirmed personal bank is protected under a current Guild Found rule")
+db.guildFoundEverActive = true
+db.rules.level60GuildFound = false
+assert(not iRC:IsGuildFoundEconomyActive(),
+    "saved guild history cannot keep personal-bank restrictions active after Guild Found is turned off")
+iRC.Identity = nil
+db.rules.level60GuildFound = true
+assert(not iRC:IsGuildFoundEconomyActive(10, true) and iRC:IsGuildFoundEconomyActive(10, false),
+    "hybrid rules protect only characters currently in Guild Found, not Self-Found characters")
+
 db.guildFoundAudit = {}
 for index = 1, 50 do
     iRC:StoreGuildFoundAudit({
@@ -78,5 +89,10 @@ end
 sent = {}
 assert(not iRC:UploadGuildFoundAudit("Ordinary Member") and #sent == 0,
     "members without incident permission never receive audit history")
+
+GetGuildInfo = function() return nil end
+iRC:InvalidateConnectionCache()
+assert(not iRC:IsGuildConnectionActive() and not iRC:IsGuildFoundEconomyActive(),
+    "an unguilded character does not inherit active Guild Found rules from the account's saved guild")
 
 print("Guild Found audit tests passed: shared applicability, delegated review, filtering, and replay cap.")

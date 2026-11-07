@@ -84,9 +84,6 @@ function Report:BuildModel(name, member, status, progression)
         if not hasMixedEvidence(status) and status.moneyBefore ~= nil and status.moneyAfter ~= nil then
             lines[#lines + 1] = WHITE .. moneyLine(status) .. RESET
             lines[#lines + 1] = GRAY .. iRC:Text("GF_REPORT_SAMPLES", stamp(status.moneyBeforeAt), stamp(status.moneyAfterAt)) .. RESET
-            if status.moneyBeforeAt and status.moneyAfterAt then
-                lines[#lines + 1] = iRC:Text("GF_REPORT_TIME_DIFF", duration(status.moneyAfterAt - status.moneyBeforeAt))
-            end
             if status.playedBefore and status.playedAfter and status.playedAfter >= status.playedBefore then
                 lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_INCREASE", duration(status.playedAfter - status.playedBefore))
             end

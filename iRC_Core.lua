@@ -2842,7 +2842,9 @@ end
 -- hybrid rule protects characters that are not currently Self-Found, while a
 -- confirmed Personal Bank is protected immediately at any level.
 function iRC:IsGuildFoundEconomyActive(level, selfFound, rules)
-    if not self:IsGuildConnectionActive() or not self:IsGuildFoundRequired() then return false end
+    if not self:IsGuildConnectionActive() then return false end
+    rules = rules or self:GetConnectionRules() or self.DefaultConnectionRules
+    if rules.guildFoundOnly ~= true and rules.level60GuildFound ~= true then return false end
     if self.Identity and self.Identity:IsPersonalBank(self:GetPlayerName()) then return true end
     if level == nil then level = UnitLevel and UnitLevel("player") or 0 end
     if selfFound == nil then selfFound = self:GetSelfFoundState() end

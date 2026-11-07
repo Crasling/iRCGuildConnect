@@ -18,6 +18,9 @@ local moneyValidationAllowedAt
 local moneyWatchdog
 local playedTicker, playedRequestToken
 local playedSampleGetTime
+local playedContinuityEligible = false
+local resumedMonitoring = false
+local monitoringNoticeShown = false
 local playedSuppressedChatFrames = {}
 local localHistory
 local sentDebugSummary = { count = 0 }
@@ -61,7 +64,8 @@ local function suppressPlayedChatFrames()
 end
 
 function Sync:RequestHiddenTimePlayed()
-    if playedRequestToken or not RequestTimePlayed then return false end
+    if not self:IsMoneyMonitoringActive() or not moneyReady or moneyLeavingWorld
+        or playedRequestToken or not RequestTimePlayed then return false end
     local token = {}
     playedRequestToken = token
     suppressPlayedChatFrames()
@@ -113,6 +117,10 @@ end
 local function refresh()
     if iRC.ConnectionDashboard then iRC.ConnectionDashboard:RefreshIfShown() end
     if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
+    if iRC.Enforcement and MailFrame and MailFrame.IsShown and MailFrame:IsShown() then
+        iRC.Enforcement:UpdateMailRestriction()
+        iRC.Enforcement:UpdateInboxRestriction()
+    end
 end
 
 local function send(prefix, payload, target)
@@ -285,6 +293,7 @@ local function markDiscrepancy(history, reason, moneyBefore, moneyAfter, moneyBe
     history.playedDiscrepancyAt = nil
     history.discrepancyReason = discrepancyReason(reason) or "MONEY_MISMATCH"
     history.moneyDiscrepancyNoticeAt = nil
+    history.moneyDiscrepancySilentAt = nil
     return history.moneyDiscrepancyAt
 end
 
@@ -315,15 +324,48 @@ function Sync:IsMoneyMonitoringActive()
     return self:IsGuildFoundSubject()
 end
 
+function Sync:StopMoneyMonitoring()
+    if moneyWatchdog and moneyWatchdog.Cancel then moneyWatchdog:Cancel() end
+    if playedTicker and playedTicker.Cancel then playedTicker:Cancel() end
+    moneyWatchdog, playedTicker, playedRequestToken = nil, nil, nil
+    restorePlayedChatFrames()
+    -- Pause collection without discarding the last protected snapshot. It is
+    -- evidence if this same character enters the Guild Found economy again.
+    local history = iRCCharDB and iRCCharDB.guildFoundHistory
+    -- UI refreshes can run before login has resolved the player's guild. They
+    -- must not erase the previous monitored-session marker or its continuity.
+    local loginSettled = moneyValidationAllowedAt and (not GetTime or GetTime() >= moneyValidationAllowedAt)
+    if history and loginSettled then
+        if history.moneyMonitoringActive == true then history.moneyMonitoringEverActive = true end
+        if history.moneyMonitoringEverActive then
+            history.moneyMonitoringPausedAt = history.moneyMonitoringPausedAt or time()
+            if playedSampleGetTime and GetTime and tonumber(history.playedTotal) then
+                history.playedExpectedAtExit = math.max(0, math.floor(history.playedTotal
+                    + math.max(0, GetTime() - playedSampleGetTime)))
+                history.playedExpectedAtExitAt = time()
+            end
+        end
+        history.moneyMonitoringActive = false
+    end
+    moneyReady, playedContinuityEligible, playedSampleGetTime, resumedMonitoring = false, false, nil, false
+    monitoringNoticeShown = false
+    return false
+end
+
 function Sync:RefreshMoneyMonitoring()
-    if not moneyReady or not GetMoney then return end
-    local history, active = localHistory(), self:IsMoneyMonitoringActive()
-    if history.moneyMonitoringActive ~= active then
+    if not self:IsMoneyMonitoringActive() then return self:StopMoneyMonitoring() end
+    if not moneyValidationAllowedAt or moneyLeavingWorld or not GetMoney then return end
+    if not moneyWatchdog and C_Timer.NewTicker then
+        moneyWatchdog = C_Timer.NewTicker(15, function() Sync:CheckLocalMoneySnapshot() end)
+    end
+    if not moneyReady then return self:ValidateMoney() end
+    if localHistory().moneyMonitoringActive ~= true then
         self:SaveCurrentMoney("MONITORING_STATE_CHANGED")
     end
 end
 
 function Sync:SaveCurrentMoney(reason)
+    if not self:IsMoneyMonitoringActive() then return self:StopMoneyMonitoring() end
     reason = tostring(reason or "UPDATE")
     if not moneyReady then
         iRC:DebugMsg(iRC:Text("GF_AUDIT_WAITING", reason), 3)
@@ -335,6 +377,7 @@ function Sync:SaveCurrentMoney(reason)
     local previous = history.money
     writeMoneySnapshot(history, current)
     history.moneyMonitoringActive = self:IsMoneyMonitoringActive()
+    history.moneyMonitoringEverActive = true
     history.moneyLastLoggedAt = time()
     history.moneyLastLogReason = reason
     iRC:DebugMsg(iRC:Text("GF_AUDIT_CHECKPOINT", reason, tostring(previous), tostring(current)), 3)
@@ -342,6 +385,7 @@ function Sync:SaveCurrentMoney(reason)
 end
 
 function Sync:CheckLocalMoneySnapshot()
+    if not self:IsMoneyMonitoringActive() then return self:StopMoneyMonitoring() end
     if moneyLeavingWorld or iRC:IsLowTrafficMode() then return false end
     if not moneyReady then return self:ValidateMoney() end
     if not GetMoney then return false end
@@ -358,35 +402,50 @@ function Sync:CheckLocalMoneySnapshot()
 end
 
 function Sync:ValidateMoney()
+    if not self:IsMoneyMonitoringActive() then return self:StopMoneyMonitoring() end
     if moneyReady then return end
     -- Early PLAYER_MONEY events must not bypass the login settling period.
     if not moneyValidationAllowedAt or GetTime and GetTime() < moneyValidationAllowedAt then return end
+    if not monitoringNoticeShown then
+        monitoringNoticeShown = true
+        iRC:Print(iRC:Text("GUILD_FOUND_MONITORING_NOTICE"))
+    end
     local current = readCurrentMoney("LOGIN_VALIDATION")
     if current == nil then return end
     local history = localHistory()
-    local monitoringActive = self:IsMoneyMonitoringActive()
+    local previouslyMonitored = history.moneyMonitoringActive == true or history.moneyMonitoringEverActive == true
+    playedContinuityEligible = previouslyMonitored
+    resumedMonitoring = previouslyMonitored and (history.moneyMonitoringActive ~= true or history.moneyMonitoringPausedAt ~= nil)
     local openSnapshot = tonumber(history.money)
     local sealedExists = history.rk ~= nil
     local sealedSnapshot = unsealSnapshot(history.rk)
     local snapshotMismatch = sealedExists
         and (sealedSnapshot == nil or openSnapshot == nil or sealedSnapshot ~= openSnapshot)
     local baseline = sealedSnapshot or openSnapshot
-    iRC:DebugMsg(iRC:Text("GF_AUDIT_VALIDATION", tostring(baseline), tostring(current),
-        tostring(history.moneyLastLogReason or "NONE"), tostring(history.moneyLastLoggedAt or 0),
-        tostring(monitoringActive and history.moneyMonitoringActive == true), tostring(snapshotMismatch)), 3)
-    if monitoringActive and history.moneyMonitoringActive == true and baseline ~= nil
+    if history.moneyMonitoringActive == true and not resumedMonitoring then
+        iRC:DebugMsg(iRC:Text("GF_AUDIT_VALIDATION", tostring(baseline), tostring(current),
+            tostring(history.moneyLastLogReason or "NONE"), tostring(history.moneyLastLoggedAt or 0),
+            "true", tostring(snapshotMismatch)), 3)
+    end
+    if previouslyMonitored and baseline ~= nil
         and (snapshotMismatch or baseline ~= current) then
         markDiscrepancy(history, snapshotMismatch and "SNAPSHOT_MISMATCH" or "MONEY_MISMATCH",
             baseline, current, history.moneyLastLoggedAt)
+        if resumedMonitoring then history.moneyDiscrepancySilentAt = history.moneyDiscrepancyAt end
     end
     -- Existing installations have no sealed value yet. The first login after
     -- upgrading establishes it without treating the migration as tampering.
     writeMoneySnapshot(history, current)
-    history.moneyMonitoringActive = monitoringActive
+    history.moneyMonitoringActive = true
+    history.moneyMonitoringEverActive = true
     history.moneyLastLoggedAt = time()
     history.moneyLastLogReason = "LOGIN_VALIDATION"
     moneyReady = true
     self:ObserveSelfFound()
+    if not playedTicker and C_Timer.NewTicker then
+        playedTicker = C_Timer.NewTicker(1800, function() Sync:RequestHiddenTimePlayed() end)
+    end
+    C_Timer.After(1, function() Sync:RequestHiddenTimePlayed() end)
     return true
 end
 
@@ -710,6 +769,7 @@ function Sync:ReceiveRoster(message, sender)
         local discrepancyAt = tonumber(history.moneyDiscrepancyAt) or 0
         if acknowledgedAt and acknowledgedAt > 0 and acknowledgedAt == discrepancyAt
             and iRC:GuildMemberHasPermission(sender, "verification")
+            and tonumber(history.moneyDiscrepancySilentAt) ~= discrepancyAt
             and tonumber(history.moneyDiscrepancyNoticeAt) ~= discrepancyAt then
             local status = self:GetStatus(iRC:GetPlayerName())
             if not status or status.clean ~= true then
@@ -829,6 +889,7 @@ frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("PLAYER_LEAVING_WORLD")
+frame:RegisterEvent("PLAYER_GUILD_UPDATE")
 frame:RegisterEvent("PLAYER_MONEY")
 frame:RegisterEvent("PLAYER_LOGOUT")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
@@ -859,14 +920,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- enters the world. Comparing at PLAYER_LOGIN produced a false gold
         -- discrepancy on every login for some clients.
         moneyValidationAllowedAt = (GetTime and GetTime() or 0) + 5
-        C_Timer.After(5, function() Sync:ValidateMoney() end)
-        if not moneyWatchdog and C_Timer.NewTicker then
-            moneyWatchdog = C_Timer.NewTicker(15, function() Sync:CheckLocalMoneySnapshot() end)
-        end
-        C_Timer.After(6, function() Sync:RequestHiddenTimePlayed() end)
-        if not playedTicker and C_Timer.NewTicker then
-            playedTicker = C_Timer.NewTicker(1800, function() Sync:RequestHiddenTimePlayed() end)
-        end
+        Sync:RefreshMoneyMonitoring()
+        C_Timer.After(5, function() Sync:RefreshMoneyMonitoring() end)
         C_Timer.After(iRC:GetStartupTrafficDelay(), function() Sync:Broadcast() end)
     elseif event == "PLAYER_ENTERING_WORLD" then
         moneyLeavingWorld = false
@@ -874,7 +929,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- The wallet can already be cleared during world teardown. Keep the
         -- last in-world checkpoint, including its original timestamp and seal.
         moneyLeavingWorld = true
+    elseif event == "PLAYER_GUILD_UPDATE" then
+        if ... ~= "player" then return end
+        -- The connection module invalidates the old guild cache on this event.
+        C_Timer.After(0, function() Sync:RefreshMoneyMonitoring() end)
     elseif event == "PLAYER_MONEY" then
+        if not Sync:IsMoneyMonitoringActive() then Sync:StopMoneyMonitoring(); return end
         if moneyReady then
             Sync:SaveCurrentMoney(event)
         else
@@ -883,6 +943,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "PLAYER_LOGOUT" then
         moneyLeavingWorld = true
+        if not Sync:IsMoneyMonitoringActive() then Sync:StopMoneyMonitoring(); return end
         local history = localHistory()
         if playedSampleGetTime and GetTime and tonumber(history.playedTotal) then
             history.playedExpectedAtExit = math.max(0, math.floor(history.playedTotal
@@ -907,6 +968,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         C_Timer.After(1, function() Sync:SaveCurrentMoney("QUEST_TURNED_IN_SETTLED") end)
     elseif event == "TIME_PLAYED_MSG" then
         if not playedRequestToken then return end
+        if not Sync:IsMoneyMonitoringActive() or not moneyReady then Sync:StopMoneyMonitoring(); return end
         local totalPlayed, levelPlayed = ...
         if iRC:HasSecretValues(totalPlayed, levelPlayed) then
             playedRequestToken = nil
@@ -918,20 +980,21 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local expectedAtExit = tonumber(history.playedExpectedAtExit)
         local previousPlayed = tonumber(history.playedTotal)
         local continuityFlagged = false
-        if expectedAtExit and currentPlayed > expectedAtExit + 120 then
+        if playedContinuityEligible and expectedAtExit and currentPlayed > expectedAtExit + 120 then
             local currentMoney = GetMoney and GetMoney() or nil
             markDiscrepancy(history, "PLAYED_GAP", currentMoney, currentMoney, history.playedExpectedAtExitAt)
             continuityFlagged = true
-        elseif previousPlayed and currentPlayed + 5 < previousPlayed then
+        elseif playedContinuityEligible and previousPlayed and currentPlayed + 5 < previousPlayed then
             local currentMoney = GetMoney and GetMoney() or nil
             markDiscrepancy(history, "PLAYED_ROLLBACK", currentMoney, currentMoney, history.playedRecordedAt)
             continuityFlagged = true
         end
+        if continuityFlagged and resumedMonitoring then history.moneyDiscrepancySilentAt = history.moneyDiscrepancyAt end
         history.playedExpectedAtExit, history.playedExpectedAtExitAt = nil, nil
         history.playedTotal = currentPlayed
         history.playedLevel = math.max(0, math.floor(tonumber(levelPlayed) or 0))
         history.playedRecordedAt = now
-        if tonumber(history.moneyDiscrepancyAt) and history.moneyDiscrepancyAt > 0
+        if playedContinuityEligible and tonumber(history.moneyDiscrepancyAt) and history.moneyDiscrepancyAt > 0
             and tonumber(history.playedDiscrepancyAt) ~= history.moneyDiscrepancyAt then
             history.playedBeforeDiscrepancy = tonumber(history.playedPreviousTotal)
             history.playedAfterDiscrepancy = history.playedTotal
@@ -941,7 +1004,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
         history.playedPreviousTotal = history.playedTotal
         history.playedPreviousRecordedAt = now
+        history.moneyMonitoringPausedAt = nil
         playedSampleGetTime = GetTime and GetTime() or nil
+        playedContinuityEligible = true
+        resumedMonitoring = false
         playedRequestToken = nil
         C_Timer.After(0, restorePlayedChatFrames)
         if continuityFlagged then

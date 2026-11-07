@@ -695,7 +695,7 @@ local function sendSharedLayer(payload)
 end
 
 function RaceGrid:BroadcastLayerState(layer)
-    if type(layer) ~= "table" or iRC:GetSettings().showLayerPanel == false then return false end
+    if type(layer) ~= "table" then return false end
     local zoneUID = math.floor(tonumber(layer.zoneUID) or 0)
     local serverId = math.floor(tonumber(layer.serverId) or -1)
     local instanceId = math.floor(tonumber(layer.instanceId) or -1)
@@ -724,7 +724,7 @@ end
 
 function RaceGrid:BroadcastLayerTransition(mapId)
     mapId = math.floor(tonumber(mapId) or 0)
-    if mapId <= 0 or iRC:GetSettings().showLayerPanel == false then return false end
+    if mapId <= 0 then return false end
     local payload = table.concat({ "LAYER_TRANSITION", LAYER_WIRE_VERSION, tostring(mapId) }, SEP)
     local sent, guildSent, groupSent = sendSharedLayer(payload)
     iRC:DebugMsg("Layer transition shared: guild=" .. tostring(guildSent) .. ", group=" .. tostring(groupSent) .. ".", 3)

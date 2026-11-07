@@ -30,10 +30,14 @@ local restrictedTradeCancelled = false
 local approvedTradeExceptionRecorded = false
 local protectedTradeEvidence
 local restrictedMailEvidence
+local finalizedMailRecipient
+local mailSendPending = false
+local mailHooksInstalled = {}
+local refreshingMailGuard = false
 local inboxHooksInstalled = {}
+local refreshingInboxGuard = false
 local restrictedInboxBypassKey
 local protectedInboxEvidence
-local lastMailRestrictionReason
 local lastTradeRestrictionReason
 local tradeHooksInstalled = {}
 local refreshingTradeGuard = false
@@ -389,45 +393,42 @@ end
 function Enforcement:UpdateMailRestriction()
     local button = getSendMailButton()
     if not button or not button.SetEnabled then return end
+    if mailSendPending then
+        button.iRCMailRestricted = true
+        button:SetEnabled(false)
+        return false
+    end
     if not isGuildFoundEconomyActive() then
-        if button.iRCMailRestricted then button:SetEnabled(true) end
+        local wasRestricted = button.iRCMailRestricted
         button.iRCMailRestricted = nil
-        restrictedMailEvidence = nil
-        lastMailRestrictionReason = nil
-        return
+        if wasRestricted then
+            if SendMailFrame_CanSend then SendMailFrame_CanSend() else button:SetEnabled(true) end
+        end
+        return true
     end
 
     local recipient = getMailRecipient()
-    if not recipient then
-        if button.iRCMailRestricted then button:SetEnabled(true) end
-        button.iRCMailRestricted = nil
-        restrictedMailEvidence = nil
-        lastMailRestrictionReason = nil
-        return
+    local allowed, reason = false, nil
+    if recipient and finalizedMailRecipient == iRC:NormalizeName(recipient) then
+        allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
     end
-    local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
     if allowed then
-        if button.iRCMailRestricted then button:SetEnabled(true) end
+        local wasRestricted = button.iRCMailRestricted
         button.iRCMailRestricted = nil
-        restrictedMailEvidence = nil
+        if wasRestricted then
+            if SendMailFrame_CanSend then SendMailFrame_CanSend() else button:SetEnabled(true) end
+        end
     else
         button.iRCMailRestricted = true
         button:SetEnabled(false)
-        if not restrictedMailEvidence or restrictedMailEvidence.recipient ~= recipient then
-            restrictedMailEvidence = {
-                recipient = recipient,
-                money = GetMoney and GetMoney() or nil,
-                startedAt = time(),
-            }
-        end
     end
-    if not allowed and reason ~= lastMailRestrictionReason then
-        lastMailRestrictionReason = reason
-        iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
-        self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient, reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
-    elseif allowed then
-        lastMailRestrictionReason = nil
-    end
+    return allowed, reason
+end
+
+function Enforcement:FinalizeMailRecipient()
+    local recipient = getMailRecipient()
+    finalizedMailRecipient = recipient and iRC:NormalizeName(recipient) or nil
+    return self:UpdateMailRestriction()
 end
 
 function Enforcement:InstallMailRecipientGuard()
@@ -435,15 +436,67 @@ function Enforcement:InstallMailRecipientGuard()
         or (_G.MailFrame and _G.MailFrame.SendMailFrame and _G.MailFrame.SendMailFrame.RecipientEditBox)
     if not field or field.iRCMailGuardHooked or not field.HookScript then return end
     field.iRCMailGuardHooked = true
-    field:HookScript("OnTextChanged", function()
+    local function editing()
+        finalizedMailRecipient = nil
         Enforcement:UpdateMailRestriction()
-    end)
+    end
+    field:HookScript("OnTextChanged", editing)
+    field:HookScript("OnEditFocusGained", editing)
+    for _, script in ipairs({ "OnEditFocusLost", "OnEnterPressed", "OnTabPressed" }) do
+        field:HookScript(script, function() Enforcement:FinalizeMailRecipient() end)
+    end
 end
 
-local function getInboxRestriction(index)
+function Enforcement:InstallMailSendGuards()
+    if type(hooksecurefunc) ~= "function" then return end
+    local function recheck()
+        if refreshingMailGuard then return end
+        refreshingMailGuard = true
+        local ok, err = pcall(self.UpdateMailRestriction, self)
+        refreshingMailGuard = false
+        if not ok then
+            local button = getSendMailButton()
+            if button and isGuildFoundEconomyActive() then
+                button.iRCMailRestricted = true
+                button:SetEnabled(false)
+            end
+            iRC:DebugMsg("Guild Found mail check failed: " .. tostring(err), 1)
+        end
+    end
+    -- Blizzard refreshes Send after name, subject, attachment and money edits.
+    -- A native refresh must not enable an unfinished or restricted recipient.
+    for _, name in ipairs({ "SendMailFrame_CanSend", "SendMailFrame_EnableSendMailButton" }) do
+        if not mailHooksInstalled[name] and type(_G[name]) == "function" then
+            mailHooksInstalled[name] = pcall(hooksecurefunc, name, recheck)
+        end
+    end
+    local mailFrame = _G.MailFrame
+    if mailFrame and not mailFrame.iRCMailSendGuardHooked and type(mailFrame.OnEvent) == "function" then
+        mailFrame.iRCMailSendGuardHooked = pcall(hooksecurefunc, mailFrame, "OnEvent", recheck)
+    end
+    if not mailHooksInstalled.SendMail and type(SendMail) == "function" then
+        mailHooksInstalled.SendMail = pcall(hooksecurefunc, "SendMail", function(recipient)
+            if not isGuildFoundEconomyActive() then return end
+            mailSendPending, restrictedMailEvidence = true, nil
+            local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
+            if not allowed then
+                -- Bind evidence to the submitted name, never to text that may
+                -- change or be reset before MAIL_SEND_SUCCESS arrives.
+                restrictedMailEvidence = { recipient = recipient, money = GetMoney and GetMoney() or nil, startedAt = time() }
+                iRC:RecordGuildFoundAudit("MAIL_BLOCKED", recipient)
+                self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_MAIL_BLOCKED", recipient,
+                    reason or iRC:Text("GUILD_FOUND_MAIL_REASON")))
+            end
+            recheck()
+        end)
+    end
+end
+
+local function getInboxRestriction(index, statusCache)
     if not isGuildFoundEconomyActive() or not GetInboxHeaderInfo then return false end
     local packageIcon, _, sender, _, money, codAmount, _, hasItem, _, _, _, canReply, isGameMaster = GetInboxHeaderInfo(index)
-    if not sender or sender == "" then return false end
+    if iRC.HasSecretValues and iRC:HasSecretValues(packageIcon, sender, money, codAmount, hasItem, canReply, isGameMaster) then return true end
+    if not sender or sender == "" then return true end
 
     -- Auction House proceeds and purchases are external economy even though
     -- their sender is a system entity rather than a player character.
@@ -453,7 +506,11 @@ local function getInboxRestriction(index)
         if invoiceType then return true, sender end
     end
 
-    local allowed = iRC:GetGuildFoundTradeStatus(sender, true)
+    local allowed = statusCache and statusCache[sender]
+    if allowed == nil then
+        allowed = iRC:GetGuildFoundTradeStatus(sender, true) == true
+        if statusCache then statusCache[sender] = allowed end
+    end
     if allowed then return false end
     local containsValue = (tonumber(money) or 0) > 0 or (tonumber(codAmount) or 0) > 0 or hasItem
     if not containsValue then return false end
@@ -503,6 +560,25 @@ function Enforcement:InstallInboxAPIGuards()
             end
         end
     end
+    local function recheck()
+        if refreshingInboxGuard then return end
+        refreshingInboxGuard = true
+        local ok, err = pcall(self.UpdateInboxRestriction, self)
+        refreshingInboxGuard = false
+        if not ok then iRC:DebugMsg("Guild Found inbox check failed: " .. tostring(err), 1) end
+    end
+    for _, owner in pairs({ _G.OpenMailFrame, _G.InboxFrame, _G.MailFrame and _G.MailFrame.InboxFrame }) do
+        owner.iRCInboxControlHooks = owner.iRCInboxControlHooks or {}
+        for _, method in ipairs({ "Update", "FocusGamepad", "RefreshFooter" }) do
+            if not owner.iRCInboxControlHooks[method] and type(owner[method]) == "function" then
+                owner.iRCInboxControlHooks[method] = pcall(hooksecurefunc, owner, method, recheck)
+            end
+        end
+        local bulk = owner.OpenAllMail
+        if bulk and not bulk.iRCStopHooked and type(bulk.StopOpening) == "function" then
+            bulk.iRCStopHooked = pcall(hooksecurefunc, bulk, "StopOpening", recheck)
+        end
+    end
 end
 
 function Enforcement:IsInboxMailRestricted(index)
@@ -525,6 +601,21 @@ local function setControlRestricted(control, restricted)
     end
 end
 
+local function restrictInboxFooter(owner, restricted)
+    local footer = owner and owner.gamepadFooter
+    if not footer then return end
+    if restricted and footer.HideAndDeactivateBindings then
+        footer:HideAndDeactivateBindings()
+        owner.iRCInboxFooterRestricted = true
+    elseif owner.iRCInboxFooterRestricted then
+        owner.iRCInboxFooterRestricted = nil
+        if InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled()
+            and owner.IsShown and owner:IsShown() and footer.ShowAndActivateBindings then
+            footer:ShowAndActivateBindings()
+        end
+    end
+end
+
 function Enforcement:UpdateInboxRestriction()
     local index = (_G.OpenMailFrame and (_G.OpenMailFrame.openMailID or _G.OpenMailFrame.mailIndex))
         or (_G.InboxFrame and _G.InboxFrame.openMailID)
@@ -532,6 +623,7 @@ function Enforcement:UpdateInboxRestriction()
     if index then blocked, sender = getInboxRestriction(index) end
     setControlRestricted(_G.OpenMailMoneyButton, blocked)
     setControlRestricted(_G.OpenMailPackageButton, blocked)
+    setControlRestricted(_G.OpenMailLetterButton, blocked)
     for slot = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do
         setControlRestricted(_G["OpenMailAttachmentButton" .. slot], blocked)
     end
@@ -551,12 +643,33 @@ function Enforcement:UpdateInboxRestriction()
         self:ShowInboxRestriction(index, sender)
     end
     lastInboxRestrictionKey = restrictionKey
+    restrictInboxFooter(_G.OpenMailFrame, blocked)
+    local inbox = _G.InboxFrame or (_G.MailFrame and _G.MailFrame.InboxFrame)
+    local bulk = inbox and inbox.OpenAllMail
+    if bulk then
+        local bulkBlocked = false
+        if isGuildFoundEconomyActive() then
+            local count = GetInboxNumItems and GetInboxNumItems()
+            if type(count) ~= "number" or iRC.HasSecretValues and iRC:HasSecretValues(count) then
+                bulkBlocked = true
+            else
+                local statuses = {}
+                for mailIndex = 1, count do
+                    if getInboxRestriction(mailIndex, statuses) then bulkBlocked = true; break end
+                end
+            end
+        end
+        if bulkBlocked and bulk.timeUntilNextRetrieval ~= nil and type(bulk.StopOpening) == "function" then bulk:StopOpening() end
+        setControlRestricted(bulk, bulkBlocked)
+        restrictInboxFooter(inbox, bulkBlocked)
+    end
 end
 
 function Enforcement:InstallMailAPIGuards()
     -- Restrict Blizzard's controls instead of replacing protected global APIs.
     self:InstallInboxAPIGuards()
     self:InstallMailRecipientGuard()
+    self:InstallMailSendGuards()
     self:UpdateMailRestriction()
     self:UpdateInboxRestriction()
 end
@@ -838,6 +951,8 @@ frame:RegisterEvent("MAIL_INBOX_UPDATE")
 frame:RegisterEvent("MAIL_SEND_INFO_UPDATE")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
+frame:RegisterEvent("MAIL_FAILED")
+frame:RegisterEvent("MAIL_SUCCESS")
 frame:SetScript("OnEvent", function(_, event, unit, targetAccepted)
     if event == "PLAYER_LOGIN" then
         initialGroupProtectionPending = true
@@ -914,13 +1029,17 @@ frame:SetScript("OnEvent", function(_, event, unit, targetAccepted)
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_SEND_SUCCESS" then
         if restrictedMailEvidence then flagProtectedInteraction("MAIL_BLOCK_BYPASS", restrictedMailEvidence) end
-        restrictedMailEvidence = nil
+        restrictedMailEvidence, mailSendPending = nil, false
+        Enforcement:UpdateMailRestriction()
+    elseif event == "MAIL_FAILED" then
+        restrictedMailEvidence, mailSendPending = nil, false
+        Enforcement:UpdateMailRestriction()
+    elseif event == "MAIL_SUCCESS" then
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_CLOSED" then
-        restrictedMailEvidence = nil
+        finalizedMailRecipient = nil
         restrictedInboxBypassKey = nil
         protectedInboxEvidence = nil
-        lastMailRestrictionReason = nil
         lastInboxRestrictionKey = nil
     elseif event == "UNIT_AURA" and unit ~= "player" then
         return
