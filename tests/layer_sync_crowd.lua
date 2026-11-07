@@ -1,7 +1,8 @@
 local function key(instance, server, map) return tostring(server) .. "-" .. tostring(instance) .. "-" .. tostring(map) end
 -- Exercise shared replies with a large audience. A queue deliberately delays
 -- bulk chunks so responders must yield before a full snapshot has arrived.
-local function run(count, queryCount, concurrent, interrupted)
+local function run(count, queryCount, concurrent, interrupted, useChannel)
+    local audience, channelTarget = useChannel and "CHANNEL" or "GUILD", useChannel and "6" or nil
     local clock, timers, clients, packets, snapshots = 1000, {}, {}, 0, 0
     local interruptedSender
     local function later(delay, callback)
@@ -34,38 +35,42 @@ local function run(count, queryCount, concurrent, interrupted)
         function addon:IsForeverClient() return true end
         function addon:NormalizeName(name) return (name or ""):lower() end
         function addon:GetPlayerName() return "Player " .. index end
-        function addon:GetGuildKey() return "guild" end
+        function addon:GetGuildKey() return not useChannel and "guild" or nil end
+        function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
+        function addon:IsGuildDirectoryPacketCurrent(message) return message:match("\t@([%w%-]+)$") == self:GetGuildDirectoryScope() end
+        env.GetChannelName = function(name) assert(name == "iRCCommsV1"); return useChannel and 6 or 0 end
         function addon:DebugMsg() end
         local normal, bulk, scheduled = {}, {}, false
         local function drain()
             local queue = #normal > 0 and normal or bulk
             local packet = table.remove(queue, 1)
-            if packet and addon.LayerSync:AllowsPacket("LAYER_BOOK", packet, "GUILD") then
+            if packet and addon.LayerSync:AllowsPacket("LAYER_BOOK", packet, audience, channelTarget) then
                 packets = packets + 1
                 if packet:match("^LAYER_BOOK\t[^\t]+\t[^\t]+\t[^\t]+\t[^\t]+\t1\t") then snapshots = snapshots + 1 end
-                addon.LayerSync:OnPacketSent("LAYER_BOOK", packet, "GUILD")
+                addon.LayerSync:OnPacketSent("LAYER_BOOK", packet, audience, channelTarget)
                 local part, total = packet:match("^LAYER_BOOK\t[^\t]+\t[^\t]+\t[^\t]+\t[^\t]+\t(%d+)\t(%d+)")
                 if interrupted and not interruptedSender then interruptedSender = addon:GetPlayerName() end
                 local lost = interrupted and interruptedSender == addon:GetPlayerName() and part == total
                 later(0.02, function()
                     if lost then return end
                     for _, peer in ipairs(clients) do
-                        if peer ~= addon then assert(peer.LayerSync:Receive(packet, "GUILD", addon:GetPlayerName())) end
+                        if peer ~= addon then assert(peer.LayerSync:Receive(packet, audience, addon:GetPlayerName(), channelTarget)) end
                     end
                 end)
             end
             scheduled = #normal + #bulk > 0
             if scheduled then later(0.04, drain) end
         end
-        function addon:SendAddonTraffic(_, message, distribution)
-            assert(distribution == "GUILD", "crowded guild sharing never fans out into whispers")
+        function addon:SendAddonTraffic(_, message, distribution, target)
+            assert(distribution == audience, "crowded sharing stays on its original broadcast audience")
+            assert(#message <= 255, "scoped channel packets fit the addon-message limit")
             local kind = message:match("^([A-Z_]+)")
-            assert(self.LayerSync:AllowsPacket(kind, message, distribution))
+            assert(self.LayerSync:AllowsPacket(kind, message, distribution, target))
             if kind == "LAYER_QUERY" then
                 packets = packets + 1
                 later(0.02, function()
                     for _, peer in ipairs(clients) do
-                        if peer ~= addon then assert(peer.LayerSync:Receive(message, distribution, addon:GetPlayerName())) end
+                        if peer ~= addon then assert(peer.LayerSync:Receive(message, distribution, addon:GetPlayerName(), channelTarget)) end
                     end
                 end)
             else
@@ -118,3 +123,5 @@ run(1000, 1)
 run(2, 60)
 run(20, 1, true)
 run(3, 1, false, true)
+run(1000, 1, false, false, true)
+run(2, 60, false, false, true)

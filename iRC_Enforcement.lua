@@ -30,6 +30,7 @@ local restrictedTradeCancelled = false
 local approvedTradeExceptionRecorded = false
 local protectedTradeEvidence
 local restrictedMailEvidence
+local approvedMailExceptionRecipient
 local finalizedMailRecipient
 local mailSendPending = false
 local mailHooksInstalled = {}
@@ -390,6 +391,35 @@ function Enforcement:RecordApprovedTradeException(playerAccepted)
     return true
 end
 
+local function canSendGuildFoundMail(recipient)
+    if not recipient or iRC:NormalizeName(recipient) == "" then return false end
+    local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
+    if allowed then return true end
+    local rules = iRC:GetConnectionRules()
+    local settings = iRC:GetGuildFoundTradeExceptionSettings()
+    if rules.guildFoundTradeExceptions == true and settings.outgoingMail == true then
+        -- C.O.D. would bring payment back from an external player. This
+        -- exception only permits items and money to leave the guild.
+        -- The typed amount is not copied into GetSendMailCOD until Send is
+        -- clicked, so check the selected C.O.D. mode while editing too.
+        local codButton = _G.SendMailCODButton
+        if codButton and type(codButton.GetChecked) == "function" then
+            local checked, selected = pcall(codButton.GetChecked, codButton)
+            if not checked or iRC:IsSecretValue(selected) or selected then
+                return false, iRC:Text("GUILD_FOUND_MAIL_COD_RESTRICTED")
+            end
+        end
+        local ok, cod = false, nil
+        if type(GetSendMailCOD) == "function" then ok, cod = pcall(GetSendMailCOD) end
+        if ok and not (iRC.HasSecretValues and iRC:HasSecretValues(cod))
+            and type(cod) == "number" and cod == 0 then
+            return true, nil, true
+        end
+        return false, iRC:Text("GUILD_FOUND_MAIL_COD_RESTRICTED")
+    end
+    return false, reason
+end
+
 function Enforcement:UpdateMailRestriction()
     local button = getSendMailButton()
     if not button or not button.SetEnabled then return end
@@ -410,7 +440,7 @@ function Enforcement:UpdateMailRestriction()
     local recipient = getMailRecipient()
     local allowed, reason = false, nil
     if recipient and finalizedMailRecipient == iRC:NormalizeName(recipient) then
-        allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
+        allowed, reason = canSendGuildFoundMail(recipient)
     end
     if allowed then
         local wasRestricted = button.iRCMailRestricted
@@ -453,14 +483,28 @@ function Enforcement:InstallMailSendGuards()
         if refreshingMailGuard then return end
         refreshingMailGuard = true
         local ok, err = pcall(self.UpdateMailRestriction, self)
-        refreshingMailGuard = false
         if not ok then
             local button = getSendMailButton()
             if button and isGuildFoundEconomyActive() then
                 button.iRCMailRestricted = true
-                button:SetEnabled(false)
+                pcall(button.SetEnabled, button, false)
             end
             iRC:DebugMsg("Guild Found mail check failed: " .. tostring(err), 1)
+        end
+        refreshingMailGuard = false
+    end
+    -- Some mail edits enable the button directly, bypassing Blizzard's named
+    -- refresh helpers. Apply the same recipient check after either method.
+    local button = getSendMailButton()
+    if button then
+        button.iRCMailEnableGuards = button.iRCMailEnableGuards or {}
+        for _, method in ipairs({ "Enable", "SetEnabled" }) do
+            if not button.iRCMailEnableGuards[method] and type(button[method]) == "function" then
+                local ok, err = pcall(hooksecurefunc, button, method, recheck)
+                button.iRCMailEnableGuards[method] = ok
+                if ok then iRC:DebugMsg("Installed Guild Found mail button guard: " .. method .. ".", 3)
+                else iRC:DebugMsg("Could not protect the mail button's " .. method .. ": " .. tostring(err), 2) end
+            end
         end
     end
     -- Blizzard refreshes Send after name, subject, attachment and money edits.
@@ -477,8 +521,9 @@ function Enforcement:InstallMailSendGuards()
     if not mailHooksInstalled.SendMail and type(SendMail) == "function" then
         mailHooksInstalled.SendMail = pcall(hooksecurefunc, "SendMail", function(recipient)
             if not isGuildFoundEconomyActive() then return end
-            mailSendPending, restrictedMailEvidence = true, nil
-            local allowed, reason = iRC:GetGuildFoundTradeStatus(recipient, true)
+            mailSendPending, restrictedMailEvidence, approvedMailExceptionRecipient = true, nil, nil
+            local allowed, reason, mailException = canSendGuildFoundMail(recipient)
+            if mailException then approvedMailExceptionRecipient = recipient end
             if not allowed then
                 -- Bind evidence to the submitted name, never to text that may
                 -- change or be reset before MAIL_SEND_SUCCESS arrives.
@@ -495,8 +540,13 @@ end
 local function getInboxRestriction(index, statusCache)
     if not isGuildFoundEconomyActive() or not GetInboxHeaderInfo then return false end
     local packageIcon, _, sender, _, money, codAmount, _, hasItem, _, _, _, canReply, isGameMaster = GetInboxHeaderInfo(index)
-    if iRC.HasSecretValues and iRC:HasSecretValues(packageIcon, sender, money, codAmount, hasItem, canReply, isGameMaster) then return true end
-    if not sender or sender == "" then return true end
+    if iRC.HasSecretValues and iRC:HasSecretValues(packageIcon, sender, money, codAmount, hasItem, canReply, isGameMaster) then return true, nil, true end
+    local containsValue = (tonumber(money) or 0) > 0 or (tonumber(codAmount) or 0) > 0
+        or hasItem == true or type(hasItem) == "number" and hasItem > 0
+    -- Blizzard briefly clears the header after the final attachment is
+    -- collected. Keep unavailable mail disabled, without treating that
+    -- empty transition as a new forbidden delivery.
+    if not sender or sender == "" then return true, nil, not containsValue end
 
     -- Auction House proceeds and purchases are external economy even though
     -- their sender is a system entity rather than a player character.
@@ -512,7 +562,6 @@ local function getInboxRestriction(index, statusCache)
         if statusCache then statusCache[sender] = allowed end
     end
     if allowed then return false end
-    local containsValue = (tonumber(money) or 0) > 0 or (tonumber(codAmount) or 0) > 0 or hasItem
     if not containsValue then return false end
 
     -- Quest rewards and other game-generated deliveries remain usable. They
@@ -528,8 +577,11 @@ local function currentInboxIndex(index)
 end
 
 local function recordRestrictedInboxBypass(action, index)
+    if not isGuildFoundEconomyActive() then return end
     index = currentInboxIndex(index)
-    local blocked, sender = index and getInboxRestriction(index)
+    local blocked, sender, pending
+    if index then blocked, sender, pending = getInboxRestriction(index) end
+    if pending then blocked = false end
     if not blocked and protectedInboxEvidence and protectedInboxEvidence.index == index then
         blocked, sender = true, protectedInboxEvidence.sender
     end
@@ -619,16 +671,20 @@ end
 function Enforcement:UpdateInboxRestriction()
     local index = (_G.OpenMailFrame and (_G.OpenMailFrame.openMailID or _G.OpenMailFrame.mailIndex))
         or (_G.InboxFrame and _G.InboxFrame.openMailID)
-    local blocked, sender = false, nil
-    if index then blocked, sender = getInboxRestriction(index) end
+    local blocked, sender, pending = false, nil, false
+    if index then blocked, sender, pending = getInboxRestriction(index) end
     setControlRestricted(_G.OpenMailMoneyButton, blocked)
     setControlRestricted(_G.OpenMailPackageButton, blocked)
     setControlRestricted(_G.OpenMailLetterButton, blocked)
     for slot = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do
         setControlRestricted(_G["OpenMailAttachmentButton" .. slot], blocked)
     end
-    local restrictionKey = blocked and tostring(index) .. ":" .. tostring(sender or "") or nil
-    if blocked and (not protectedInboxEvidence or protectedInboxEvidence.key ~= restrictionKey) then
+    local restrictionKey = blocked and not pending and tostring(index) .. ":" .. tostring(sender or "") or nil
+    if pending then
+        -- Preserve a previously blocked action for the API post-hook, even
+        -- when its header disappears before that hook runs.
+        if protectedInboxEvidence and protectedInboxEvidence.index ~= tonumber(index) then protectedInboxEvidence = nil end
+    elseif blocked and (not protectedInboxEvidence or protectedInboxEvidence.key ~= restrictionKey) then
         protectedInboxEvidence = {
             key = restrictionKey,
             index = tonumber(index),
@@ -639,10 +695,12 @@ function Enforcement:UpdateInboxRestriction()
     elseif not blocked then
         protectedInboxEvidence = nil
     end
-    if restrictionKey and restrictionKey ~= lastInboxRestrictionKey then
-        self:ShowInboxRestriction(index, sender)
+    if not pending then
+        if restrictionKey and restrictionKey ~= lastInboxRestrictionKey then
+            self:ShowInboxRestriction(index, sender)
+        end
+        lastInboxRestrictionKey = restrictionKey
     end
-    lastInboxRestrictionKey = restrictionKey
     restrictInboxFooter(_G.OpenMailFrame, blocked)
     local inbox = _G.InboxFrame or (_G.MailFrame and _G.MailFrame.InboxFrame)
     local bulk = inbox and inbox.OpenAllMail
@@ -949,6 +1007,8 @@ frame:RegisterEvent("AUCTION_HOUSE_SHOW")
 frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_INBOX_UPDATE")
 frame:RegisterEvent("MAIL_SEND_INFO_UPDATE")
+frame:RegisterEvent("SEND_MAIL_COD_CHANGED")
+frame:RegisterEvent("SEND_MAIL_MONEY_CHANGED")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_SEND_SUCCESS")
 frame:RegisterEvent("MAIL_FAILED")
@@ -1024,15 +1084,18 @@ frame:SetScript("OnEvent", function(_, event, unit, targetAccepted)
     elseif event == "MAIL_INBOX_UPDATE" then
         Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateInboxRestriction()
-    elseif event == "MAIL_SEND_INFO_UPDATE" then
+    elseif event == "MAIL_SEND_INFO_UPDATE" or event == "SEND_MAIL_COD_CHANGED" or event == "SEND_MAIL_MONEY_CHANGED" then
         Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_SEND_SUCCESS" then
         if restrictedMailEvidence then flagProtectedInteraction("MAIL_BLOCK_BYPASS", restrictedMailEvidence) end
-        restrictedMailEvidence, mailSendPending = nil, false
+        if approvedMailExceptionRecipient then
+            iRC:RecordGuildFoundAudit("MAIL_EXCEPTION_APPROVED", approvedMailExceptionRecipient)
+        end
+        restrictedMailEvidence, mailSendPending, approvedMailExceptionRecipient = nil, false, nil
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_FAILED" then
-        restrictedMailEvidence, mailSendPending = nil, false
+        restrictedMailEvidence, mailSendPending, approvedMailExceptionRecipient = nil, false, nil
         Enforcement:UpdateMailRestriction()
     elseif event == "MAIL_SUCCESS" then
         Enforcement:UpdateMailRestriction()

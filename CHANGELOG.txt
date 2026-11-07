@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.8 - Guild and Mail Updates
+--------------------------------------------------------------------------------
+[ADDED] Guild Found mail option and exception list
+[CHANGED] Guild List shows all server types with tags and filters
+[FIXED] Duplicate guilds, missing tags and repeated downloads
+[FIXED] Mail restrictions and false warnings
+[FIXED] Chat errors during updates
+
 v0.7.7 - Guild Updates
 --------------------------------------------------------------------------------
 [ADDED] Race statistics in Guild Overview and previews

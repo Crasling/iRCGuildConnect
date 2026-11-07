@@ -92,6 +92,11 @@ local addon = { ColorValues = { Orange = { 1, .59, .09 }, Green = { .3, 1, .35 }
     Colors = setmetatable({}, { __index = function() return "" end }),
     GuildHomepageIcons = { "SavedIcon", "DraftIcon" } }
 local private = { iRC = addon }
+function addon:IsForeverClient() return false end
+function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
+function addon:GetGuildDirectoryRulesetLabel(scope)
+    return scope and scope:match("%-pvp$") and "PvP" or "PvE"
+end
 function addon:Text(key, ...)
     local value = self.L and self.L[key] or key
     return select("#", ...) > 0 and string.format(value, ...) or value
@@ -121,9 +126,10 @@ assert(loadfile("Localization/enUS.lua"))("iRC", private)
 local sourceFile = assert(io.open("iRC_MainUI.lua", "r"))
 local source = sourceFile:read("*a")
 sourceFile:close()
-local boundary = assert(source:find("local function updateRaceOverview(frame)", 1, true))
+local boundary = assert(source:find("-- Page refresh and window lifecycle", 1, true))
 local render = assert(load(source:sub(1, boundary - 1)
-    .. "\nreturn { create = makeRaceCard, set = setRaceCard, height = guildCardHeight, ui = UI, overview = updateGuildOverview }",
+    .. "\nreturn { create = makeRaceCard, set = setRaceCard, height = guildCardHeight, ui = UI, overview = updateGuildOverview,"
+    .. " directory = function(frame, view, filter) guildStatsView, guildStatsFilter = view, filter; return updateRaceOverview(frame) end }",
     "@iRC_MainUI.lua"))("iRC", private)
 
 local function deepCopy(value)
@@ -540,3 +546,37 @@ assert(search:GetText() == "" and not search:HasFocus() and not search.iRCSearch
 assert(not searchFrame.verificationSuggestions:IsShown() and searchFrame.scroll:GetVerticalScroll() == 0
     and searchRefreshes == beforeClear + 1, "one clear click restores the unsearched list without extra refreshes")
 print("PASS: real verification search styling, autocomplete, clear button, focus and scroll reset")
+
+local home, abroad, locked = deepCopy(live), deepCopy(live), deepCopy(live)
+home.serverRuleset, home.serverName = "s-18-3-10-0-pve", "Home Realm"
+abroad.serverRuleset, abroad.serverName = "s-18-3-11-0-pvp", "Other Realm"
+abroad.rules = { guildFoundOnly = true, progression = "GUILD_FOUND" }
+locked.guildName, locked.serverRuleset, locked.serverName = "Locked Guild", home.serverRuleset, "Third Realm"
+locked.rules = { classLock = true, guildClass = "MAGE" }
+function addon:GetGuildDirectoryOverview() return { home, abroad, locked } end
+local oldGuildInfo, oldRealm = GetGuildInfo, GetRealmName
+GetGuildInfo = function() return home.guildName end
+GetRealmName = function() return home.serverName end
+local directory = { factionSections = {}, raceCards = {}, memberRows = {},
+    scrollContent = widget("Frame", parent), scroll = widget("ScrollFrame", parent),
+    guildStatsSearch = widget("EditBox", parent), contentTitle = widget("FontString", parent),
+    contentSubtitle = widget("FontString", parent) }
+assert(render.directory(directory, "ALL", "ALL") == 3)
+assert(directory.factionSections.MyGuild and directory.factionSections.MyGuild.title:GetText():find("(1)", 1, true),
+    "a foreign guild with the same name is not marked as the player's own guild")
+local tags = {}
+for _, row in ipairs(directory.raceCards) do if row:IsShown() then tags[row.origin:GetText()] = row.tag:GetText() end end
+assert(tags["[Other Realm · PvP]"]:find("Guild-Found", 1, true), "origin and guild challenge use independent visible tags")
+assert(render.directory(directory, "ALL", "pvp") == 1, "All filters by server ruleset")
+assert(render.directory(directory, "CHALLENGES", "ALL") == 2, "Challenges excludes ordinary guilds")
+assert(render.directory(directory, "CHALLENGES", "CLASS_LOCKED") == 1, "challenge filters do not depend on server ruleset")
+directory.guildStatsSearch:SetText("other realm")
+assert(render.directory(directory, "ALL", "ALL") == 1, "guild search also finds the report's realm")
+GetGuildInfo, GetRealmName = oldGuildInfo, oldRealm
+function addon:IsForeverClient() return true end
+local internalRealm = deepCopy(abroad)
+internalRealm.serverName = "CAMWOW EU4 Realm 6 PvP"
+render.set(card, internalRealm, false)
+assert(card.origin:GetText() == "[PvP]" and internalRealm.serverName == "CAMWOW EU4 Realm 6 PvP",
+    "Forever tags hide internal realm names while preserving the report origin")
+print("PASS: independent server/challenge browsing, origin tags, realm search, and same-name own-guild detection")

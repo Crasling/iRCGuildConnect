@@ -228,12 +228,12 @@ assert(state:whisper("CACHE_DATA\t8\trequest\tpart\t@s-18-3-10-0-pve", "Long Rep
 print("PASS: paced retries, secret guards, offline recovery, no blind probes, no routine layer whispers, and requested report transfers")
 
 state = client({})
-assert(state.addon:GetSettings().showLayerPanel == false, "the experimental panel starts hidden before saved settings are ready")
+assert(state.addon:GetSettings().showLayerPanel == true, "the layer panel defaults to visible before saved settings are ready")
 state.env.iRCDB.settings = { showLayerPanel = true }
 state:event("ADDON_LOADED", "iRC")
-assert(state.addon:GetSettings().showLayerPanel == false, "old default-on settings are disabled once when upgrading")
-state.addon:GetSettings().showLayerPanel = true
-assert(state.addon:GetSettings().showLayerPanel == true, "manual experimental opt-in survives subsequent settings reads")
+assert(state.addon:GetSettings().showLayerPanel == true, "saved enabled settings are not reset on upgrade")
+state.addon:GetSettings().showLayerPanel = false
+assert(state.addon:GetSettings().showLayerPanel == false, "an explicit opt-out survives subsequent settings reads")
 state:event("ADDON_LOADED", "iRC")
-assert(state.addon:GetSettings().showLayerPanel == true, "an existing experimental opt-in is not reset again")
-print("PASS: experimental panel default, upgrade reset, and persistent manual opt-in")
+assert(state.addon:GetSettings().showLayerPanel == false, "an explicit opt-out survives reloading")
+print("PASS: visible layer-panel default and persistent saved choices")

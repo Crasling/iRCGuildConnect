@@ -52,6 +52,7 @@ assert(loadfile(root .. "iRC_Core.lua"))("iRC", private)
 addon.LayerWireVersion = "8"
 
 function addon:GetSettings() return settings end
+function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
 function addon:IsForeverClient() return true end
 function addon:IsSecretValue(value) return issecretvalue(value) end
 function addon:NormalizeName(name) return (name or ""):lower() end

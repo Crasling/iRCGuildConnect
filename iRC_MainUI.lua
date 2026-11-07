@@ -12,6 +12,7 @@ local UI = {}
 iRC.MainUI = UI
 local expandedGuildCards = {}
 local guildStatsFilter = "ALL"
+local guildStatsView = "ALL"
 local collapsedFactionSections = {}
 local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
 local GUILD_MEMBER_ROW_HEIGHT = 36
@@ -73,17 +74,6 @@ local function getGuildCardTags(group, includePrimary)
         if formatted then tags[#tags + 1] = formatted end
     end
     return table.concat(tags, " ")
-end
-
-local function getCurrentGuildStatsFilter()
-    if not iRC:IsGuildConnectionActive() then return "ALL" end
-    local rules = iRC:GetConnectionRules()
-    if rules.classLock == true then return "CLASS_LOCKED" end
-    if rules.raceLock == true then return "RACE_LOCKED" end
-    local progression = iRC:GetProgressionMode(rules)
-    if isGuildFoundRules(rules) then return "GUILD_FOUND" end
-    if progression == "SELF_FOUND" and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND" then return "SELF_FOUND" end
-    return "ALL"
 end
 
 local COLORS = {
@@ -483,6 +473,9 @@ local function makeRaceCard(parent)
     card.race:SetJustifyH("LEFT")
     card.race:SetWordWrap(false)
     card.race:SetTextColor(unpack(COLORS.gold))
+    card.origin = card.header:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.origin:SetJustifyH("LEFT")
+    card.origin:SetWordWrap(false)
     card.tag = card.header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     card.tag:SetJustifyH("LEFT")
     card.tag:SetWordWrap(false)
@@ -505,6 +498,15 @@ local function makeRaceCard(parent)
     end)
     card.expandButton:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     card.header:SetScript("OnClick", function() card:ToggleExpanded() end)
+    card.header:SetScript("OnEnter", function(self)
+        if not GameTooltip or not card.report then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(card.report.guildName or "")
+        GameTooltip:AddLine(card.origin:GetText(), 0.78, 0.78, 0.78, true)
+        GameTooltip:AddLine(card.tag:GetText(), 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    card.header:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     card.stats = {}
     for index, key in ipairs({ "GUILD_DIRECTORY_ACTIVE", "GUILD_DIRECTORY_PEAK", "GUILD_DIRECTORY_MEMBERS" }) do
         local stat = CreateFrame("Button", nil, card.header)
@@ -2660,7 +2662,7 @@ function UI:Create()
                         frame.scroll:SetVerticalScroll(0)
                     end
                     if self.category == "Race Overview" then
-                        guildStatsFilter = getCurrentGuildStatsFilter()
+                        guildStatsFilter = "ALL"
                         UI.preservedRaceScroll = 0
                         if previousCategory ~= self.category and iRC.RaceGrid then
                             iRC.RaceGrid:RequestGuildCacheFromOpen()
@@ -3083,6 +3085,9 @@ function UI:Create()
         UI:Refresh()
     end)
     frame.rulesViewToggle:Hide()
+    frame.rulesExceptions = makeIRCActionButton(main, 160, 27, iRC:Text("RULES_TRADE_EXCEPTIONS_OPEN"), false)
+    frame.rulesExceptions:SetScript("OnClick", function() iRC:ShowGuildFoundExceptions() end)
+    frame.rulesExceptions:Hide()
     frame.cacheUpdating = CreateFrame("Frame", nil, main)
     frame.cacheUpdating:SetSize(130, 20)
     frame.cacheUpdating:SetPoint("RIGHT", frame.raceRefresh, "LEFT", -10, 0)
@@ -3128,17 +3133,36 @@ function UI:Create()
     frame.memberExport:Hide()
 
     frame.guildStatsFilters = {}
-    for index, filter in ipairs({
-        { key = "ALL", label = "All" },
-        { key = "RACE_LOCKED", label = "Race-Locked" },
-        { key = "CLASS_LOCKED", label = "Class-Locked" },
-        { key = "GUILD_FOUND", label = "Guild-Found" },
-        { key = "SELF_FOUND", label = "Self-Found" },
+    for index, view in ipairs({ { "ALL", "All" }, { "CHALLENGES", "Challenges" } }) do
+        local key = view[1]
+        local button = makeIRCActionButton(main, 128, 27, view[2], false)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 133, -50)
+        button.viewKey = key
+        button:SetScript("OnClick", function()
+            guildStatsView, guildStatsFilter = key, "ALL"
+            UI.preservedRaceScroll = 0
+            UI:Refresh()
+        end)
+        frame.guildStatsFilters[#frame.guildStatsFilters + 1] = button
+    end
+    for _, filter in ipairs({
+        { key = "ALL", label = "All rulesets", view = "ALL", slot = 1 },
+        { key = "pve", label = "PvE", view = "ALL", slot = 2 },
+        { key = "pvp", label = "PvP", view = "ALL", slot = 3 },
+        { key = "hc", label = "Hardcore", view = "ALL", slot = 4 },
+        { key = "rppve", label = "RP-PvE", view = "ALL", slot = 5 },
+        { key = "rppvp", label = "RP-PvP", view = "ALL", slot = 6 },
+        { key = "ALL", label = "All challenges", view = "CHALLENGES", slot = 1 },
+        { key = "RACE_LOCKED", label = "Race-Locked", view = "CHALLENGES", slot = 2 },
+        { key = "CLASS_LOCKED", label = "Class-Locked", view = "CHALLENGES", slot = 3 },
+        { key = "GUILD_FOUND", label = "Guild-Found", view = "CHALLENGES", slot = 4 },
+        { key = "SELF_FOUND", label = "Self-Found", view = "CHALLENGES", slot = 5 },
     }) do
         local filterKey, filterLabel = filter.key, filter.label
         local button = CreateFrame("Button", nil, main, "BackdropTemplate")
-        button:SetSize(128, 27)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 133, -50)
+        button:SetSize(106, 27)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (filter.slot - 1) * 111, -83)
+        button.filterView = filter.view
         createBackdrop(button, { 0.055, 0.045, 0.035, 0.96 }, { 0.28, 0.23, 0.16, 0.9 })
         button.activeGlow = button:CreateTexture(nil, "BACKGROUND")
         button.activeGlow:SetPoint("TOPLEFT", button, "TOPLEFT", 3, -3)
@@ -3156,12 +3180,12 @@ function UI:Create()
             UI:Refresh()
         end)
         button.filterKey = filterKey
-        frame.guildStatsFilters[index] = button
+        frame.guildStatsFilters[#frame.guildStatsFilters + 1] = button
     end
 
     frame.guildStatsSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
     frame.guildStatsSearch:SetSize(300, 22)
-    frame.guildStatsSearch:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -84)
+    frame.guildStatsSearch:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -118)
     frame.guildStatsSearch:SetAutoFocus(false)
     frame.guildStatsSearch:SetMaxLetters(80)
     frame.guildStatsSearch:SetTextInsets(5, 5, 0, 0)
@@ -3182,7 +3206,7 @@ function UI:Create()
         { "MEMBERS", "GUILD_DIRECTORY_SORT_MEMBERS" }, { "NAME", "GUILD_DIRECTORY_SORT_NAME" } }) do
         local key, label = sort[1], iRC:Text(sort[2])
         local button = makeIRCActionButton(main, 100, 24, label, false)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", 366 + (index - 1) * 105, -83)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 366 + (index - 1) * 105, -117)
         button.sortKey = key
         button:SetScript("OnClick", function()
             frame.guildDirectorySort = key
@@ -6779,8 +6803,8 @@ local function updateGuildRules(frame)
         },
         {
             section = "Guild-Found",
-            title = "Approved Guild-Found Trade Exceptions",
-            description = "At any level where Guild-Found rules apply, items in the guild's approved exception list may be traded as configured.",
+            title = "Approved Guild-Found Exceptions",
+            description = "Allow the guild's selected trade and outgoing-mail exceptions. Incoming mail still requires a verified guild sender.",
             active = guildFoundRuleActive and rules.guildFoundTradeExceptions == true,
             available = guildFoundRuleActive,
             activeLabel = "ALLOWED",
@@ -7116,7 +7140,9 @@ local function updateClassBreakdown(card, classes, totalMembers)
 end
 
 local function guildCardKey(group)
-    return string.lower(tostring(group.guildName or "")) .. "@" .. tostring(group.race or "")
+    local realm = not iRC:IsForeverClient() and tostring(group.serverName or ""):lower() or ""
+    return tostring(group.serverRuleset or "") .. ":" .. realm
+        .. ":" .. string.lower(tostring(group.guildName or "")) .. "@" .. tostring(group.race or "")
 end
 
 local function getActiveRuleLines(group)
@@ -7263,8 +7289,16 @@ local function setRaceCard(card, group, forceExpanded)
     local columns = guildDirectoryRowColumns(card:GetWidth())
     local width = columns.width
     card.race:ClearAllPoints()
-    card.race:SetPoint("TOPLEFT", card, "TOPLEFT", columns.nameLeft, -13)
+    card.race:SetPoint("TOPLEFT", card, "TOPLEFT", columns.nameLeft, -5)
     card.race:SetWidth(columns.nameWidth)
+    card.origin:ClearAllPoints()
+    card.origin:SetPoint("TOPLEFT", card, "TOPLEFT", columns.nameLeft, -22)
+    card.origin:SetWidth(columns.nameWidth)
+    local origin = iRC:GetGuildDirectoryRulesetLabel(group.serverRuleset)
+    if not iRC:IsForeverClient() and group.serverName and group.serverName ~= "" then
+        origin = group.serverName .. " · " .. origin
+    end
+    card.origin:SetText("[" .. origin .. "]")
     card.tag:ClearAllPoints()
     card.tag:SetPoint("TOPLEFT", card, "TOPLEFT", columns.tagLeft, -14)
     card.tag:SetWidth(columns.tagWidth)
@@ -7501,6 +7535,19 @@ end
 
 local function updateRaceOverview(frame)
     local allGroups = iRC:GetGuildDirectoryOverview(frame.guildDirectorySort or "ACTIVITY")
+    local visible = {}
+    for _, group in ipairs(allGroups) do
+        local rules = group.rules or {}
+        local challenge = group.rulesKnown and (rules.raceLock == true or rules.classLock == true
+            or isGuildFoundRules(rules) or iRC:GetProgressionMode(rules) == "SELF_FOUND"
+                and iRC:GetMaxLevelProgressionMode(rules) == "SELF_FOUND")
+        local category = tostring(group.serverRuleset or ""):match("%-(%a+)$")
+        if guildStatsView == "CHALLENGES" and challenge
+            or guildStatsView == "ALL" and (guildStatsFilter == "ALL" or guildStatsFilter == category) then
+            visible[#visible + 1] = group
+        end
+    end
+    allGroups = visible
     if guildStatsFilter == "RACE_LOCKED" then
         local filtered = {}
         for _, group in ipairs(allGroups) do
@@ -7538,7 +7585,9 @@ local function updateRaceOverview(frame)
     if searchText ~= "" then
         local filtered = {}
         for _, group in ipairs(allGroups) do
-            if tostring(group.guildName or ""):lower():find(searchText, 1, true) then
+            local searchable = tostring(group.guildName or "") .. " " .. tostring(group.serverName or "")
+                .. " " .. iRC:GetGuildDirectoryRulesetLabel(group.serverRuleset)
+            if searchable:lower():find(searchText, 1, true) then
                 filtered[#filtered + 1] = group
             end
         end
@@ -7554,7 +7603,9 @@ local function updateRaceOverview(frame)
     local ownGuilds = {}
     if ownGuildKey ~= "" then
         for _, group in ipairs(allGroups) do
-            if tostring(group.guildName or ""):match("^%s*(.-)%s*$"):lower() == ownGuildKey then
+            if tostring(group.guildName or ""):match("^%s*(.-)%s*$"):lower() == ownGuildKey
+                and group.serverRuleset == iRC:GetGuildDirectoryScope()
+                and (not group.serverName or group.serverName == "" or GetRealmName and group.serverName == GetRealmName()) then
                 ownGuilds[1] = group
                 break
             end
@@ -7629,8 +7680,7 @@ local function updateRaceOverview(frame)
     for _, faction in ipairs(factionOrder) do
         local guilds = {}
         for _, group in ipairs(allGroups) do
-            local groupKey = tostring(group.guildName or ""):match("^%s*(.-)%s*$"):lower()
-            if group.faction == faction and groupKey ~= ownGuildKey then guilds[#guilds + 1] = group end
+            if group.faction == faction and group ~= ownGuilds[1] then guilds[#guilds + 1] = group end
         end
         renderGuildSection(faction, faction, guilds)
     end
@@ -7697,6 +7747,16 @@ function UI:Refresh()
     frame.guildOverviewExport:SetShown(not embeddedManagement and frame.category == "Guild Overview")
     local showRulesViewToggle = frame.category == "Guild Rules" and iRC:IsGuildMaster()
     frame.rulesViewToggle:SetShown(showRulesViewToggle)
+    local exceptionRules = iRC:GetConnectionRules()
+    frame.rulesExceptions:SetShown(frame.category == "Guild Rules" and iRC:IsGuildConnectionActive()
+        and (exceptionRules.guildFoundOnly == true or exceptionRules.level60GuildFound == true)
+        and exceptionRules.guildFoundTradeExceptions == true)
+    frame.rulesExceptions:ClearAllPoints()
+    if showRulesViewToggle then
+        frame.rulesExceptions:SetPoint("RIGHT", frame.rulesViewToggle, "LEFT", -8, 0)
+    else
+        frame.rulesExceptions:SetPoint("TOPRIGHT", frame.main, "TOPRIGHT", -14, -9)
+    end
     if showRulesViewToggle then
         frame.rulesViewToggle.text:SetText(frame.rulesViewAsMember and "Back to edit" or "View as member")
         frame.rulesViewToggle:SetBackdropColor(frame.rulesViewAsMember and 0.18 or 0.055,
@@ -7762,11 +7822,11 @@ function UI:Refresh()
     if frame.category ~= "Guild Overview" and frame.guildOverview then frame.guildOverview:Hide() end
     if frame.category ~= "Personal Settings" and frame.personalSettings then frame.personalSettings:Hide() end
     for _, button in ipairs(frame.guildStatsFilters or {}) do
-        local shown = frame.category == "Race Overview"
+        local shown = frame.category == "Race Overview" and (button.viewKey ~= nil or button.filterView == guildStatsView)
         button:SetShown(shown)
         if shown then
-            local active = button.filterKey == guildStatsFilter
-            button.activeGlow:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], active and 0.18 or 0)
+            local active = button.viewKey and button.viewKey == guildStatsView or button.filterKey == guildStatsFilter
+            if button.activeGlow then button.activeGlow:SetColorTexture(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], active and 0.18 or 0) end
             button:SetBackdropColor(active and 0.18 or 0.055, active and 0.09 or 0.045, active and 0.025 or 0.035, 0.98)
             button:SetBackdropBorderColor(active and COLORS.gold[1] or 0.28, active and COLORS.gold[2] or 0.23,
                 active and COLORS.gold[3] or 0.16, active and 1 or 0.9)
@@ -7787,6 +7847,7 @@ function UI:Refresh()
         or frame.category == "Guild Members"
         or frame.category == "Member Management"
     local scrollTop = memberManagement and -150 or (frame.category == "Guild Members" and -82 or (usesSearchHeader and -112 or -78))
+    if frame.category == "Race Overview" then scrollTop = -146 end
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, scrollTop)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
@@ -7947,7 +8008,7 @@ function UI:Open(subjectName, requestCacheFromOpen, requestedCategory)
     end
     if not frame.category or not frame.tabs[frame.category] then frame.category = "Race Overview" end
     if frame.category == "Race Overview" then
-        guildStatsFilter = getCurrentGuildStatsFilter()
+        guildStatsFilter = "ALL"
         self.preservedRaceScroll = 0
     end
     if opening and (frame.category == "Guild Overview" or frame.category == "Guild Members"

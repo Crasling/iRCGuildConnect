@@ -1,5 +1,7 @@
 -- Directory sorting uses saved and local reports without assigning scores.
 local addon, private = {}, {}
+WOW_PROJECT_ID = 18
+function GetCurrentRegion() return 3 end
 function wipe(value) for key in pairs(value) do value[key] = nil end; return value end
 function GetTime() return 100 end
 function time() return 1800000000 end
@@ -23,7 +25,7 @@ local function report(name, active, peak, members, maxLevel)
         name = "Reporter", guid = "Player-1-Report", guildName = name, race = "HUMAN",
         faction = "Alliance", members = members, activeMembers = active, activePlayers = peak,
         activeLevel60 = maxLevel, membersLevel60 = maxLevel, timestamp = time(),
-        classes = {}, rules = {}, guildDescription = "", guildHomepageTag = "NORMAL",
+        classes = {}, rules = {}, rulesKnown = true, guildDescription = "", guildHomepageTag = "NORMAL",
     }
 end
 local saved = {

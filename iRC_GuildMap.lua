@@ -725,7 +725,12 @@ local function finalizeLocalLayerAssignment(token)
         if not readable or type(owner) ~= "string" or owner == "" then return false end
         number = claimLayerNumber(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, nil, iRC:NormalizeName(owner))
     end
-    if not number then return false end
+    if not number then
+        if iRC.GetGuildDirectoryScope and not iRC:GetGuildDirectoryScope() and C_Timer and C_Timer.After then
+            C_Timer.After(1, function() finalizeLocalLayerAssignment(token) end)
+        end
+        return false
+    end
     pendingLocalLayer = nil
     normalizeLayerUsers(candidate.zoneUID, candidate.serverId, candidate.instanceId, candidate.mapId, number)
     localLayer = {

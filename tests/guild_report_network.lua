@@ -54,6 +54,8 @@ local function scenario(mode, reportCount, duration)
             end
             return 0
         end }
+        env.WOW_PROJECT_ID = 18
+        env.GetCurrentRegion = function() return 3 end
         assert(loadfile("iRC_Core.lua", "t", env))("iRC", private)
         function addon:GetSettings() return {} end
         function addon:GetPlayerName() return name end
@@ -90,7 +92,7 @@ local function scenario(mode, reportCount, duration)
                 HUNTER = 1111, WARRIOR = 1111, MAGE = 1111, PRIEST = 1111, WARLOCK = 1111, PALADIN = 1111, SHAMAN = 1111 }
                 or { DRUID = 6 }, addonVersion = "0.6.2",
             guildDescription = string.rep("a", 160), guildDescriptionTimestamp = sender.env.time(),
-            guildDescriptionEditedBy = mode == "maximum" and string.rep("e", 80) or "Editor", rules = {}, classBreakdownMode = "ALL",
+            guildDescriptionEditedBy = mode == "maximum" and string.rep("e", 80) or "Editor", rules = {}, rulesKnown = true, classBreakdownMode = "ALL",
         }, true))
     end
     local bothFighting = mode == "continuous-combat" or mode == "chain-pulls"

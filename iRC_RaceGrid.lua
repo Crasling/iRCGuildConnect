@@ -47,8 +47,8 @@ local function validatePacketProtocol(prefix, message, sender, distribution)
     local protocol = PACKET_PROTOCOLS[packetKind]
     if not protocol then return true end
     if prefix == protocol.prefix and packetVersion == protocol.version then
-        if prefix ~= GRID_PREFIX or iRC:IsGuildDirectoryPacketCurrent(message) then return true end
-        iRC:DebugMsg("Ignored guild report traffic from " .. tostring(sender) .. ": server ruleset is different or unavailable.", 3)
+        if prefix ~= GRID_PREFIX or iRC:IsGuildDirectoryPacketSupported(message) then return true end
+        iRC:DebugMsg("Ignored guild report traffic from " .. tostring(sender) .. ": origin is missing or belongs to another game/region.", 3)
         return false
     end
     iRC:DebugMsg(string.format("Ignored %s from %s via %s/%s: protocol %s, expected %s/%s.",
@@ -123,6 +123,7 @@ end
 
 local function send(prefix, message, distribution, target)
     if iRC.IsChatMessagingLocked and iRC:IsChatMessagingLocked() then return false end
+    if prefix == LAYER_PREFIX and distribution == "CHANNEL" then return false end
     if prefix == GRID_PREFIX then
         local scope = iRC:GetGuildDirectoryScope()
         if not scope then return false end
@@ -255,9 +256,11 @@ end
 
 -- Server-wide report cache and activity samples ----------------------------
 
-local function getServerStore()
-    local scope
-    if RaceGrid.CheckRuleset then scope = RaceGrid:CheckRuleset() else scope = iRC:GetGuildDirectoryScope() end
+local function getServerStore(origin)
+    local scope = origin
+    if not scope then
+        if RaceGrid.CheckRuleset then scope = RaceGrid:CheckRuleset() else scope = iRC:GetGuildDirectoryScope() end
+    end
     local realm
     if iRC:IsForeverClient() then
         realm = "Forever"
@@ -286,9 +289,55 @@ local function getServerStore()
     return store
 end
 
-local function recordGuildActivity(guildName, onlinePlayers)
-    local activity = getServerStore().guildActivity
-    local key, now = normalizeGuildName(guildName), time()
+local function reportKey(guildName, serverName)
+    local key = normalizeGuildName(guildName)
+    -- Forever exposes internal realm labels that can differ between members
+    -- of one guild. Its server ruleset scope supplies the shared context.
+    if iRC:IsForeverClient() then return key end
+    return serverName and serverName ~= "" and key .. "@" .. serverName:lower() or key
+end
+
+function RaceGrid:GetReportIdentity(report)
+    return tostring(report.serverRuleset or "") .. ":" .. reportKey(report.guildName, report.serverName)
+end
+
+local function preserveKnownGuildRules(report, known)
+    if not known or known.rulesKnown ~= true or type(known.rules) ~= "table" then return end
+    local knownAt = tonumber(known.rulesSnapshotAt) or tonumber(known.timestamp) or 0
+    local currentAt = tonumber(report.rulesSnapshotAt) or tonumber(report.timestamp) or 0
+    if report.rulesKnown == true and (not report.rulesInherited or knownAt <= currentAt) then return end
+    report.rules = {}
+    for key, value in pairs(known.rules) do report.rules[key] = value end
+    report.rulesKnown, report.rulesInherited, report.rulesSnapshotAt = true, true, knownAt
+    if report.rules.raceLock == true then report.race = known.race end
+end
+
+local function directoryReports()
+    local currentScope = iRC:GetGuildDirectoryContext()
+    if not currentScope then return {} end
+    getServerStore()
+    local reports, seen = {}, {}
+    local stores = iRCDB and iRCDB.globalRaceGrid and iRCDB.globalRaceGrid.servers or {}
+    for _, store in pairs(stores) do
+        for _, report in pairs(store.guildReports or {}) do
+            if type(report) == "table" and iRC:IsGuildDirectoryScopeSupported(report.serverRuleset, currentScope) then
+                local key = RaceGrid:GetReportIdentity(report)
+                if not seen[key] or (tonumber(report.timestamp) or 0) > (tonumber(seen[key].timestamp) or 0) then
+                    preserveKnownGuildRules(report, seen[key])
+                    seen[key] = report
+                else
+                    preserveKnownGuildRules(seen[key], report)
+                end
+            end
+        end
+    end
+    for _, report in pairs(seen) do reports[#reports + 1] = report end
+    return reports
+end
+
+local function recordGuildActivity(guildName, onlinePlayers, scope, serverName)
+    local activity = getServerStore(scope).guildActivity
+    local key, now = reportKey(guildName, serverName), time()
     local samples = activity[key]
     if type(samples) ~= "table" then
         samples = {}
@@ -816,7 +865,7 @@ function RaceGrid:GetLocalReport()
     if not guild then return {} end
     return {
         name = profile.name,
-        serverRuleset = guild.serverRuleset,
+        serverRuleset = guild.serverRuleset, serverName = guild.serverName,
         guid = profile.guid,
         guildName = guild.guildName, race = guild.race, faction = guild.faction,
         members = guild.members, activePlayers = guild.activePlayers,
@@ -841,9 +890,11 @@ end
 
 function RaceGrid:StoreGuildReport(report, silent, received)
     if type(report) ~= "table" or type(report.guildName) ~= "string" or report.guildName == "" then return false end
-    local scope = iRC:GetGuildDirectoryScope()
-    if not scope or report.serverRuleset and report.serverRuleset ~= scope or received and report.serverRuleset ~= scope then return false end
+    local scope = report.serverRuleset or (not received and iRC:GetGuildDirectoryScope())
+    if not iRC:IsGuildDirectoryScopeSupported(scope) then return false end
     report.serverRuleset = scope
+    if report.serverName ~= nil and (type(report.serverName) ~= "string" or #report.serverName > 80
+        or report.serverName:find("[%c|]")) then return false end
     if isMutedOlympusGuild(report.guildName) then return false end
     -- Received reports only contain validated saved fields. Rebuilding our
     -- own live roster remains separate and can still wait for a safe moment.
@@ -873,12 +924,40 @@ function RaceGrid:StoreGuildReport(report, silent, received)
     elseif report.classBreakdownMode == "MAX" then
         report.classBreakdownMinLevel, report.classBreakdownMaxLevel = 60, 60
     end
-    local reports = getServerStore().guildReports
-    local key = normalizeGuildName(report.guildName)
+    local reports = getServerStore(scope).guildReports
+    if not report.serverName or report.serverName == "" then
+        for _, known in pairs(reports) do
+            if known.guid == report.guid and normalizeGuildName(known.guildName) == normalizeGuildName(report.guildName)
+                and known.serverName and known.serverName ~= "" then report.serverName = known.serverName; break end
+        end
+    end
+    local key = reportKey(report.guildName, report.serverName)
+    -- An older packet may omit the realm. Replace that record only when the
+    -- reporter GUID confirms it is the same guild, never just by guild name.
+    local legacyKey = normalizeGuildName(report.guildName)
+    local legacy = reports[legacyKey]
+    if key ~= legacyKey and legacy and legacy.guid == report.guid then
+        if not reports[key] then reports[key] = legacy end
+        reports[legacyKey] = nil
+        local activity = getServerStore(scope).guildActivity
+        activity[key] = activity[key] or activity[legacyKey]
+        activity[legacyKey] = nil
+    end
     local old = reports[key]
+    -- Read existing realm-labelled cache entries through the same identity.
+    -- Keep their data; no cache wipe is needed to repair older duplicates.
+    if iRC:IsForeverClient() then
+        for _, known in pairs(reports) do
+            if known.serverRuleset == scope and normalizeGuildName(known.guildName) == normalizeGuildName(report.guildName) then
+                preserveKnownGuildRules(report, known)
+                if not old or (tonumber(known.timestamp) or 0) > (tonumber(old.timestamp) or 0) then old = known end
+            end
+        end
+    end
     local oldTimestamp, newTimestamp = old and (tonumber(old.timestamp) or 0) or 0, tonumber(report.timestamp) or 0
     if old and (oldTimestamp > newTimestamp
         or (oldTimestamp == newTimestamp and (tonumber(old.cacheHop) or 0) < (tonumber(report.cacheHop) or 0))) then return false end
+    preserveKnownGuildRules(report, old)
     if old and (tonumber(old.guildDescriptionTimestamp) or 0) > (tonumber(report.guildDescriptionTimestamp) or 0) then
         report.guildDescription = old.guildDescription
         report.guildDescriptionTimestamp = old.guildDescriptionTimestamp
@@ -891,7 +970,7 @@ function RaceGrid:StoreGuildReport(report, silent, received)
         report.races = old.races
     end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
-    report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
+    report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers, scope, report.serverName)
     if report.faction ~= "Alliance" and report.faction ~= "Horde" then
         report.faction = ALLIANCE_RACES[report.race] and "Alliance" or "Horde"
     end
@@ -990,8 +1069,11 @@ function RaceGrid:BuildOwnGuildReports()
     local classBreakdownMaxLevel = classBreakdownMode == "MAX" and 60
         or classBreakdownMode == "RANGE" and math.max(classBreakdownMinLevel,
             math.min(60, math.floor(tonumber(classBreakdown.maxLevel) or 60))) or 60
+    local realmOK, realm = pcall(GetRealmName or function() end)
+    if not realmOK or iRC:IsSecretValue(realm) or type(realm) ~= "string" then realm = "" end
     local group = {
         serverRuleset = scope,
+        serverName = realm:gsub("[%c|]", ""):sub(1, 80),
         name = profile.name, guid = profile.guid, addonVersion = iRC.Version,
         race = guildRace, faction = UnitFactionGroup and UnitFactionGroup("player")
             or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
@@ -1070,7 +1152,7 @@ function RaceGrid:BuildOwnGuildReports()
         end
     end
     if group.members == 0 then return {} end
-    group.activePlayers = recordGuildActivity(guildName, group.activePlayers)
+    group.activePlayers = recordGuildActivity(guildName, group.activePlayers, scope, group.serverName)
     group.averageLevel = group.totalLevel / group.members
     for class, count in pairs(group.classes) do group.classAverageLevels[class] = group.classTotals[class] / count end
     group.totalLevel, group.classTotals = nil, nil
@@ -1092,8 +1174,8 @@ end
 -- Report serialization and publication ------------------------------------
 
 local function serializeGuildReport(report, includeDescription)
-    local scope = iRC:GetGuildDirectoryScope()
-    if not scope or report.serverRuleset and report.serverRuleset ~= scope then return nil end
+    local scope = report.serverRuleset or iRC:GetGuildDirectoryScope()
+    if not iRC:IsGuildDirectoryScopeSupported(scope) then return nil end
     local fields = {
         "GUILD_REPORT", WIRE_VERSION, tostring(report.name or ""), tostring(report.guid or ""),
         tostring(report.guildName or ""), tostring(report.race or ""),
@@ -1103,7 +1185,8 @@ local function serializeGuildReport(report, includeDescription)
     for _, class in ipairs({ "DRUID", "ROGUE", "HUNTER", "WARRIOR", "MAGE", "PRIEST", "WARLOCK", "PALADIN", "SHAMAN" }) do
         fields[#fields + 1] = tostring((report.classes or {})[class] or 0)
     end
-    local rules, ruleMask = report.rules or {}, report.rulesKnown == false and 256 or 0
+    local rulesKnown = report.rulesKnown == true and type(report.rules) == "table"
+    local rules, ruleMask = report.rules or {}, rulesKnown and 0 or 256
     for _, entry in ipairs({
         { "nativeTongueOnly", 1 }, { "selfFoundOnly", 2 }, { "level60GuildFound", 4 },
         { "allowLevel60WithoutSelfFound", 8 }, { "sameRaceGroupsOnly", 16 },
@@ -1112,12 +1195,12 @@ local function serializeGuildReport(report, includeDescription)
     }) do
         local raceOnly = entry[1] == "nativeTongueOnly" or entry[1] == "sameRaceGroupsOnly"
             or entry[1] == "allowLevel60MixedRaceGroups"
-        if report.rulesKnown ~= false and rules[entry[1]]
+        if rulesKnown and rules[entry[1]]
             and (not raceOnly or rules.raceLock == true) then ruleMask = ruleMask + entry[2] end
     end
     -- Class-Locked must be present in the base report. The optional details
     -- packet supplies the class name, but may arrive before or after this one.
-    if report.rulesKnown ~= false and rules.classLock == true then ruleMask = ruleMask + 512 end
+    if rulesKnown and rules.classLock == true then ruleMask = ruleMask + 512 end
     fields[#fields + 1] = tostring(ruleMask)
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.sameRaceMinimumLevel) or 1)))
     fields[#fields + 1] = tostring(math.max(1, math.min(60, tonumber(rules.guildGroupsMinimumLevel) or 1)))
@@ -1131,10 +1214,12 @@ local function serializeGuildReport(report, includeDescription)
     fields[#fields + 1] = rules.guildFoundOnly and "1" or "0"
     fields[#fields + 1] = tostring(math.max(0, math.min(#iRC.GuildHomepageIcons, math.floor(tonumber(report.guildHomepageIcon) or 0))))
     fields[#fields + 1] = report.faction == "Alliance" and "Alliance" or "Horde"
-    if includeDescription then
-        fields[#fields + 1] = tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength)
-        fields[#fields + 1] = tostring(math.floor(tonumber(report.guildDescriptionTimestamp) or 0))
-        fields[#fields + 1] = tostring(report.guildDescriptionEditedBy or ""):gsub("[%c]", ""):sub(1, 80)
+    do
+        -- Compact broadcasts omit the description, but still carry origin
+        -- and challenge fields so the base report is useful on its own.
+        fields[#fields + 1] = includeDescription and tostring(report.guildDescription or ""):gsub("[%c]", " "):sub(1, iRC.GuildHomepageDescriptionMaxLength) or ""
+        fields[#fields + 1] = includeDescription and tostring(math.floor(tonumber(report.guildDescriptionTimestamp) or 0)) or "0"
+        fields[#fields + 1] = includeDescription and tostring(report.guildDescriptionEditedBy or ""):gsub("[%c]", ""):sub(1, 80) or ""
         fields[#fields + 1] = report.classBreakdownMode == "RANGE" and "RANGE"
             or report.classBreakdownMode == "MAX" and "MAX" or "ALL"
         fields[#fields + 1] = tostring(math.max(1, math.min(60,
@@ -1150,6 +1235,7 @@ local function serializeGuildReport(report, includeDescription)
         fields[#fields + 1] = iRC:NormalizeGuildClass(rules.guildClass)
         fields[#fields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
         fields[#fields + 1] = serializeRaces(report.races)
+        fields[#fields + 1] = tostring(report.serverName or ""):gsub("[%c|]", ""):sub(1, 80)
     end
     return table.concat(fields, SEP) .. SEP .. "@" .. scope
 end
@@ -1206,6 +1292,7 @@ function RaceGrid:BroadcastReport(fromClick)
     classBreakdownFields[#classBreakdownFields + 1] = iRC:NormalizeGuildClass(report.rules and report.rules.guildClass)
     classBreakdownFields[#classBreakdownFields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
     classBreakdownFields[#classBreakdownFields + 1] = serializeRaces(report.races)
+    classBreakdownFields[#classBreakdownFields + 1] = tostring(report.serverName or ""):gsub("[%c|]", ""):sub(1, 80)
     send(GRID_PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel60,
         report.activeMembers, report.activePlayers, report.members), 3)
@@ -1248,7 +1335,7 @@ end
 
 local function parseGuildReport(parts)
     if parts[1] ~= "GUILD_REPORT" or parts[2] ~= WIRE_VERSION then return nil end
-    if not parts.serverRuleset or parts.serverRuleset ~= iRC:GetGuildDirectoryScope() then return nil end
+    if not iRC:IsGuildDirectoryScopeSupported(parts.serverRuleset) then return nil end
     local name, guid, guildName, race = parts[3], parts[4], parts[5], normalizeRaceToken(parts[6])
     local level60 = validNumber(parts[7], 0, 10000)
     local active = validNumber(parts[8], 0, 10000)
@@ -1266,7 +1353,7 @@ local function parseGuildReport(parts)
         classes[class], classTotal = count, classTotal + count
     end
     if classTotal > members then return nil end
-    local rules, rulesKnown
+    local rules, rulesKnown = nil, false
     if parts[22] ~= nil then
         -- Mask 256 means the guild report was assembled during first-start
         -- bootstrap and intentionally does not claim authoritative rules.
@@ -1349,8 +1436,10 @@ local function parseGuildReport(parts)
     local guildPreferredLanguage = cleanGuildLanguage(parts[descriptionStart + 18])
     local races, validRaces = parseRaces(parts[descriptionStart + 19], members)
     if not validRaces then return nil end
+    local serverName = tostring(parts[descriptionStart + 20] or "")
+    if #serverName > 80 or serverName:find("[%c|]") then return nil end
     return {
-        serverRuleset = parts.serverRuleset,
+        serverRuleset = parts.serverRuleset, serverName = serverName,
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
         activeLevel60 = activeLevel60, activeMembers = activeMembers,
@@ -1412,7 +1501,7 @@ end
 
 local function queueCachePayload(requestId, guildName, checksum, payload, target)
     local scope = iRC:GetGuildDirectoryScope()
-    if not scope or not iRC:IsGuildDirectoryPacketCurrent(payload) then return false end
+    if not scope or not iRC:IsGuildDirectoryPacketSupported(payload) then return false end
     local hex = bytesToHex(payload)
     local header = table.concat({ "CACHE_DATA", WIRE_VERSION, requestId, guildName,
         MAX_CACHE_PARTS, MAX_CACHE_PARTS, checksum, "" }, SEP) .. "@" .. scope
@@ -1567,7 +1656,7 @@ local function holdPublicDetail(parts, sender)
             if entry.seenAt < oldestAt then oldestKey, oldestAt = key, entry.seenAt end
         end
     end
-    local key, kind = fullNameKey(sender), parts[1]
+    local key, kind = tostring(parts.serverRuleset) .. ":" .. fullNameKey(sender), parts[1]
     local entry = pendingPublicDetails[key]
     if not entry then
         if count >= MAX_PUBLIC_DETAIL_SENDERS then pendingPublicDetails[oldestKey] = nil end
@@ -1586,7 +1675,7 @@ local function storeIncomingReport(report)
     local lowCpu = iRC:IsPerformanceMode() and C_Timer and C_Timer.After
     local stored = RaceGrid:StoreGuildReport(report, lowCpu, true)
     if stored then
-        local key = fullNameKey(report.name)
+        local key = tostring(report.serverRuleset) .. ":" .. fullNameKey(report.name)
         local pending = pendingPublicDetails[key]
         pendingPublicDetails[key] = nil
         if pending and cacheTime() - pending.seenAt <= PUBLIC_DETAILS_LIFETIME then
@@ -1694,19 +1783,18 @@ local function cleanCacheState()
     return count, oldestKey
 end
 
-local function sendCacheOffers(requestId, requester)
-    local store, now = getServerStore(), time()
+local function sendCacheOffers(requestId, requester, allRulesets)
+    local now = time()
     local scope = iRC:GetGuildDirectoryScope()
     observedCacheOffers[requestId] = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
-    for _, report in pairs(store.guildReports) do
+    for _, report in ipairs(directoryReports()) do
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or 0
         local hasSenderIdentity = type(report) == "table" and type(report.name) == "string" and report.name ~= ""
             and type(report.guid) == "string" and report.guid ~= ""
-        if hasSenderIdentity and report.serverRuleset == scope
+        if hasSenderIdentity and (allRulesets or report.serverRuleset == scope)
             and report.activeLevel60 ~= nil and not isMutedOlympusGuild(report.guildName)
             and timestamp > 0 and now - timestamp <= REPORT_MAX_AGE then
             local snapshot, guildName = report, report.guildName
-            local guildKey = normalizeGuildName(guildName)
             local function offer()
                 if not iRC:IsGuildConnectionActive() or not iRC:IsGuildMemberName(requester) then return end
                 local observed = observedCacheOffers[requestId]
@@ -1715,9 +1803,12 @@ local function sendCacheOffers(requestId, requester)
                 local payload = serializeGuildReport(snapshot, true)
                 if not payload then return end
                 local checksum = payloadChecksum(payload)
+                local guildKey = normalizeGuildName(guildName) .. ":" .. checksum
                 local cacheHop = math.max(0, math.min(1, math.floor(tonumber(snapshot.cacheHop) or 0)))
                 local reportTimestamp = tonumber(snapshot.timestamp) or 0
-                local best = observed.guilds[guildKey]
+                local identityKey = allRulesets and snapshot.serverRuleset .. ":" .. normalizeGuildName(guildName) .. ":#" .. payloadChecksum(RaceGrid:GetReportIdentity(snapshot))
+                    or snapshot.serverRuleset .. ":" .. normalizeGuildName(guildName)
+                local best = observed.guilds[identityKey]
                 if best and (best.timestamp > reportTimestamp
                     or (best.timestamp == reportTimestamp and (best.cacheHop or 1) < cacheHop)
                     or (best.timestamp == reportTimestamp and (best.cacheHop or 1) == cacheHop
@@ -1734,11 +1825,20 @@ local function sendCacheOffers(requestId, requester)
                 offered.guilds[guildKey] = {
                     payload = payload, timestamp = reportTimestamp, checksum = checksum, cacheHop = cacheHop,
                 }
-                if send(GRID_PREFIX, table.concat({ "CACHE_OFFER", WIRE_VERSION, requestId, requester, guildName, reportTimestamp, checksum, cacheHop }, SEP), "GUILD") then
+                -- The identity digest keeps offers bounded even with long
+                -- character, guild and realm names. The payload retains the
+                -- complete origin; receivers verify it against this digest.
+                local fields = { "CACHE_OFFER", WIRE_VERSION, requestId, allRulesets and "*" or requester,
+                    guildName, reportTimestamp, checksum, cacheHop }
+                if allRulesets then
+                    fields[#fields + 1] = snapshot.serverRuleset
+                    fields[#fields + 1] = "#" .. payloadChecksum(RaceGrid:GetReportIdentity(snapshot))
+                end
+                if send(GRID_PREFIX, table.concat(fields, SEP), "GUILD") then
                     iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_OFFER_SENT", guildName, requester), 3)
                 end
             end
-            queueReportWork("cache-offer:" .. requestId .. ":" .. guildKey, offer, timestamp, true)
+            queueReportWork("cache-offer:" .. requestId .. ":" .. RaceGrid:GetReportIdentity(snapshot), offer, timestamp, true)
         end
     end
 end
@@ -1762,17 +1862,47 @@ local function requestBestCacheOffers(requestId)
         end
         request.discoveryDone = true
     end
-    local requested = 0
+    local requested, knownIdentities, unlabelledSnapshots = 0, {}, nil
+    local knownReports = directoryReports()
+    for _, report in ipairs(knownReports) do
+        knownIdentities[report.serverRuleset .. ":" .. normalizeGuildName(report.guildName) .. ":#"
+            .. payloadChecksum(RaceGrid:GetReportIdentity(report))] = report
+    end
     for guildKey, offer in pairs(request.offers) do
-        local localReport = getServerStore().guildReports[guildKey]
+        local localReport
+        if offer.identityHash then
+            localReport = knownIdentities[guildKey]
+        else
+            localReport = getServerStore(offer.serverRuleset).guildReports[reportKey(offer.guildName, offer.serverName)]
+        end
+        if not localReport then
+            -- Older peers can offer the same saved snapshot without a realm.
+            -- Compare its full payload, including reporter GUID and origin,
+            -- rather than treating a shared guild name as proof of identity.
+            if not unlabelledSnapshots then
+                unlabelledSnapshots = {}
+                for _, report in ipairs(knownReports) do
+                    local payload = serializeGuildReport(report, true)
+                    if payload then
+                        local older = payload:gsub("\t[^\t]*(\t@[%w%-]+)$", "%1")
+                        local unlabelled = older:gsub("(\t@[%w%-]+)$", "\t%1")
+                        local key = report.serverRuleset .. ":" .. normalizeGuildName(report.guildName) .. ":"
+                        unlabelledSnapshots[key .. payloadChecksum(older)] = report
+                        unlabelledSnapshots[key .. payloadChecksum(unlabelled)] = report
+                    end
+                end
+            end
+            localReport = unlabelledSnapshots[offer.serverRuleset .. ":" .. normalizeGuildName(offer.guildName) .. ":" .. offer.checksum]
+        end
         local localTimestamp = localReport and localReport.activeLevel60 ~= nil
             and (tonumber(localReport.timestamp) or 0) or 0
         -- A report timestamp identifies the snapshot. A lower cache hop does
         -- not make the same snapshot newer and previously caused it to be
         -- downloaded again whenever the short recent-receive window expired.
         local shouldRequest = offer.timestamp > localTimestamp
-        if shouldRequest and not request.selected[guildKey] then
-            request.selected[guildKey] = offer
+        local selectionKey = normalizeGuildName(offer.guildName) .. ":" .. offer.checksum
+        if shouldRequest and not request.selected[selectionKey] then
+            request.selected[selectionKey] = offer
             requested = requested + 1
             send(GRID_PREFIX, table.concat({ "CACHE_GET", WIRE_VERSION, requestId, offer.guildName,
                 offer.timestamp, offer.checksum }, SEP), "WHISPER", offer.sender)
@@ -1800,8 +1930,9 @@ function RaceGrid:RequestGuildCache()
         end
     end
     local requestId = string.format("%x%x", time() % 0xFFFFFF, math.floor(GetTime() * 1000) % 0xFFFF)
+        .. payloadChecksum(iRC:GetPlayerName())
     cacheRequests[requestId] = { startedAt = cacheTime(), createdAt = GetTime(), offers = {}, selected = {} }
-    if not send(GRID_PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId }, SEP), "GUILD") then
+    if not send(GRID_PREFIX, table.concat({ "CACHE_REQUEST", WIRE_VERSION, requestId, "ALL" }, SEP), "GUILD") then
         cacheRequests[requestId] = nil
         return false
     end
@@ -1830,7 +1961,7 @@ local function handleCacheMessage(parts, sender, distribution)
         if previous and (previous.requestId == requestId
             or now - previous.receivedAt < CACHE_REQUEST_SENDER_COOLDOWN) then return true end
         cacheRequestBySender[senderKey] = { requestId = requestId, receivedAt = now }
-        sendCacheOffers(requestId, sender)
+        sendCacheOffers(requestId, sender, parts[4] == "ALL")
         iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_DISCOVERY_RECEIVED", sender), 3)
         return true
     elseif kind == "CACHE_OFFER" and distribution == "GUILD" then
@@ -1840,7 +1971,14 @@ local function handleCacheMessage(parts, sender, distribution)
         local cacheHop = validNumber(parts[8] or "0", 0, 1)
         if guildName == "" or #guildName > 80 or isMutedOlympusGuild(guildName) or not timestamp or not cacheHop
             or #checksum ~= 8 or not checksum:match("^[0-9a-f]+$") then return true end
-        local guildKey = normalizeGuildName(guildName)
+        local origin = parts[9] or parts.serverRuleset
+        local serverName = tostring(parts[10] or "")
+        local identityHash = serverName:match("^#([0-9a-f]+)$")
+        if identityHash and #identityHash ~= 8 then return true end
+        if identityHash then serverName = "" end
+        if not iRC:IsGuildDirectoryScopeSupported(origin) or #serverName > 80 or serverName:find("[%c|]") then return true end
+        local guildKey = identityHash and origin .. ":" .. normalizeGuildName(guildName) .. ":#" .. identityHash
+            or origin .. ":" .. reportKey(guildName, serverName)
         local observed = observedCacheOffers[requestId] or { startedAt = GetTime(), guilds = {} }
         observedCacheOffers[requestId] = observed
         observed.lastActivityAt = GetTime()
@@ -1851,7 +1989,7 @@ local function handleCacheMessage(parts, sender, distribution)
                 and fullNameKey(sender) < fullNameKey(current.sender)) then
             observed.guilds[guildKey] = { timestamp = timestamp, cacheHop = cacheHop, sender = sender }
         end
-        if iRC:NormalizeName(requester) == iRC:NormalizeName(iRC:GetPlayerName()) then
+        if requester == "*" or iRC:NormalizeName(requester) == iRC:NormalizeName(iRC:GetPlayerName()) then
             local request = cacheRequests[requestId]
             if request then
                 local offer = request.offers[guildKey]
@@ -1861,6 +1999,8 @@ local function handleCacheMessage(parts, sender, distribution)
                         and fullNameKey(sender) < fullNameKey(offer.sender)) then
                     request.offers[guildKey] = {
                         guildName = guildName, timestamp = timestamp, checksum = checksum,
+                        serverRuleset = origin, serverName = serverName,
+                        identityHash = identityHash,
                         cacheHop = cacheHop, sender = sender,
                     }
                     request.lastOfferAt, request.lastActivityAt = cacheTime(), cacheTime()
@@ -1876,7 +2016,7 @@ local function handleCacheMessage(parts, sender, distribution)
         if isMutedOlympusGuild(guildName) then return true end
         local offered = offeredCachePayloads[requestId]
         if not offered or iRC:NormalizeName(offered.requester) ~= iRC:NormalizeName(sender) then return true end
-        local snapshot = offered and offered.guilds[normalizeGuildName(guildName)]
+        local snapshot = offered and offered.guilds[normalizeGuildName(guildName) .. ":" .. checksum]
         if not snapshot or snapshot.timestamp ~= timestamp or snapshot.checksum ~= checksum then return true end
         if not parts.cacheSendQueued then
             parts.cacheSendQueued = true
@@ -1902,7 +2042,8 @@ local function handleCacheMessage(parts, sender, distribution)
         local part, total = tonumber(parts[5]), tonumber(parts[6])
         local checksum, chunk = tostring(parts[7] or ""):lower(), tostring(parts[8] or "")
         local request = cacheRequests[requestId]
-        local selected = request and request.selected[normalizeGuildName(guildName)]
+        local selectionKey = normalizeGuildName(guildName) .. ":" .. checksum
+        local selected = request and request.selected[selectionKey]
         if not request or not selected or iRC:NormalizeName(selected.sender) ~= iRC:NormalizeName(sender)
             or normalizeGuildName(selected.guildName) ~= normalizeGuildName(guildName)
             or selected.checksum ~= checksum
@@ -1928,9 +2069,12 @@ local function handleCacheMessage(parts, sender, distribution)
         incomingCacheTransfers[key] = nil
         local payload = hexToBytes(table.concat(transfer.parts))
         if not payload or payloadChecksum(payload) ~= checksum then return true end
-        queueReportWork("cache:" .. normalizeGuildName(guildName), function()
+        queueReportWork("cache:" .. selectionKey, function()
             local report = parseGuildReport(split(payload))
             if not report or normalizeGuildName(report.guildName) ~= normalizeGuildName(guildName)
+                or report.serverRuleset ~= selected.serverRuleset
+                or selected.identityHash and payloadChecksum(RaceGrid:GetReportIdentity(report)) ~= selected.identityHash
+                or not selected.identityHash and (report.serverName or "") ~= selected.serverName
                 or tonumber(report.timestamp) ~= selected.timestamp
                 or time() - (tonumber(report.timestamp) or 0) > REPORT_MAX_AGE then return end
             report.cacheHop, report.relayedBy = 1, sender
@@ -1939,7 +2083,7 @@ local function handleCacheMessage(parts, sender, distribution)
                 iRC:DebugMsg(iRC:Text("RACEGRID_CACHE_REPORT_RECEIVED", report.guildName, sender), 3)
             end
         end, selected.timestamp, true)
-        request.selected[normalizeGuildName(guildName)] = nil
+        request.selected[selectionKey] = nil
         local pending
         for _ in pairs(request.selected) do pending = true; break end
         if not pending then
@@ -1951,7 +2095,7 @@ local function handleCacheMessage(parts, sender, distribution)
     return false
 end
 
-handleMessage = function(prefix, message, sender, distribution, queued)
+handleMessage = function(prefix, message, sender, distribution, queued, channelTarget)
     if not PREFIX_SCOPES[prefix] or not RaceGrid:IsEnabled() then return end
     if prefix == GRID_PREFIX then RaceGrid:CheckRuleset() end
     if iRC:NormalizeName(sender) == iRC:NormalizeName(iRC:GetPlayerName()) then return end
@@ -1973,7 +2117,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         local layerParts = split(message)
         if tostring(layerParts[2] or "") ~= LAYER_WIRE_VERSION then return end
         if iRC.LayerSync and iRC.LayerSync:IsMessage(layerParts[1]) then
-            return iRC.LayerSync:Receive(message, distribution, sender)
+            return iRC.LayerSync:Receive(message, distribution, sender, channelTarget)
         end
         if layerParts[1] == "LAYER_STATE" then
             iRC.GuildMap:ReceiveLayerState(layerParts, sender)
@@ -1992,12 +2136,12 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     if distribution == "CHANNEL" and message:match("^GUILD_REPORT\t") then
         publicParts = split(message)
         if isMutedOlympusGuild(publicParts[5]) then return end
-        local guildKey = normalizeGuildName(publicParts[5])
+        local guildKey = reportKey(publicParts[5], publicParts[55])
         if guildKey ~= "" then
-            local existing = getServerStore().guildReports[guildKey]
+            local existing = getServerStore(publicParts.serverRuleset).guildReports[guildKey]
             if existing and (tonumber(existing.lastSeen) or 0) > time() - RECENT_REPORT_WINDOW then return end
             if not queued and C_Timer and C_Timer.After then
-                queueReportWork("public:" .. guildKey, function()
+                queueReportWork("public:" .. publicParts.serverRuleset .. ":" .. guildKey .. ":" .. tostring(publicParts[4]), function()
                     handleMessage(prefix, message, sender, distribution, true)
                 end, tonumber(publicParts[11]) or 0, true)
                 return
@@ -2016,7 +2160,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
         and not queued and C_Timer and C_Timer.After then
         -- Base reports and their extra details must keep separate queue entries.
         local fields = publicParts or split(message)
-        local key = "public:" .. reportKind .. ":" .. fullNameKey(sender)
+        local key = "public:" .. reportKind .. ":" .. tostring(fields.serverRuleset) .. ":" .. fullNameKey(sender)
         if reportKind == "GUILD_REPORT" then key = key .. ":" .. normalizeGuildName(fields[5]) end
         queueReportWork(key, function() handleMessage(prefix, message, sender, distribution, true) end,
             tonumber(fields[reportKind == "GUILD_REPORT" and 11 or 3]) or 0, true)
@@ -2070,7 +2214,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             and #value <= iRC.GuildHomepageDescriptionMaxLength and not value:find("[%c]")
             and not iRC:ContainsProfanity(value) then
             local hasBase = false
-            for _, report in pairs(getServerStore().guildReports) do
+            for _, report in pairs(getServerStore(parts.serverRuleset).guildReports) do
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender) then hasBase = true end
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and timestamp > math.floor(tonumber(report.guildDescriptionTimestamp) or 0) then
@@ -2104,7 +2248,7 @@ handleMessage = function(prefix, message, sender, distribution, queued)
             and maxLevel and maxLevel == math.floor(maxLevel) and maxLevel >= minLevel and maxLevel <= 60
             and validClasses and validClassLock then
             local needsBase = true
-            for _, report in pairs(getServerStore().guildReports) do
+            for key, report in pairs(getServerStore(parts.serverRuleset).guildReports) do
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and (tonumber(report.timestamp) or 0) >= reportTimestamp then needsBase = false end
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
@@ -2117,12 +2261,22 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                     report.classBreakdownMaxLevel = mode == "MAX" and 60 or mode == "ALL" and 60 or maxLevel
                     report.classBreakdownClasses = filteredClasses
                     if races then report.races = races end
+                    local serverName = tostring(parts[21] or "")
+                    if #serverName > 80 or serverName:find("[%c|]") then return end
+                    if serverName ~= "" then
+                        report.serverName = serverName
+                        local reports = getServerStore(parts.serverRuleset).guildReports
+                        reports[key] = nil
+                        reports[reportKey(report.guildName, serverName)] = report
+                    end
                     local guildHomepageTag = tostring(parts[16] or "NORMAL")
                     report.guildHomepageTag = guildHomepageTag == "PVE" and "PVE"
                         or guildHomepageTag == "PVP" and "PVP" or guildHomepageTag == "RP" and "RP" or "NORMAL"
-                    report.rules = report.rules or {}
-                    report.rules.classLock = classLockFlag == "1" and guildClass ~= ""
-                    report.rules.guildClass = guildClass
+                    if not report.rulesInherited then
+                        report.rules = report.rules or {}
+                        report.rules.classLock = classLockFlag == "1" and guildClass ~= ""
+                        report.rules.guildClass = guildClass
+                    end
                     if guildPreferredLanguage ~= "" then
                         report.guildPreferredLanguage = guildPreferredLanguage
                     end
@@ -2143,7 +2297,9 @@ handleMessage = function(prefix, message, sender, distribution, queued)
     rememberAdminVersion(sender, report.addonVersion, report.guildName)
     if distribution == "CHANNEL" then
         local ownGuildName = GetGuildInfo and GetGuildInfo("player")
-        if ownGuildName and normalizeGuildName(report.guildName) == normalizeGuildName(ownGuildName) then return end
+        if ownGuildName and normalizeGuildName(report.guildName) == normalizeGuildName(ownGuildName)
+            and report.serverRuleset == iRC:GetGuildDirectoryScope()
+            and (not report.serverName or report.serverName == "" or GetRealmName and report.serverName == GetRealmName()) then return end
     end
     iRC:CheckForNewVersion(report.addonVersion)
     storeIncomingReport(report)
@@ -2154,19 +2310,16 @@ end
 -- Leaderboard aggregation ---------------------------------------------------
 
 function iRC:GetGlobalRaceOverview()
-    local serverStore = getServerStore()
-    local scope = self:GetGuildDirectoryScope()
-    local stored = serverStore.guildReports
     local result = {}
     local now = time()
-    for key, report in pairs(stored) do
+    for _, report in ipairs(directoryReports()) do
         local timestamp = type(report) == "table" and tonumber(report.timestamp) or nil
         if not timestamp or timestamp <= 0 or now - timestamp > REPORT_MAX_AGE or isMutedOlympusGuild(report.guildName)
             or (not iRC:IsLowTrafficMode() and iRC:ContainsProfanity(report.guildDescription)) then
-            stored[key] = nil
-            serverStore.guildActivity[key] = nil
-        elseif report.serverRuleset == scope
-            and normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then
+            local store = getServerStore(report.serverRuleset)
+            local key = reportKey(report.guildName, report.serverName)
+            store.guildReports[key], store.guildActivity[key] = nil, nil
+        elseif normalizeRaceToken(report.race) and (tonumber(report.members) or 0) > 0 then
             report.cached = (tonumber(report.cacheHop) or 0) > 0 or now - timestamp > STALE_AFTER
             result[#result + 1] = report
         end
@@ -2188,19 +2341,21 @@ local function guildDirectoryOrder(a, b, sortKey)
         local first, second = tonumber(a[field]) or -1, tonumber(b[field]) or -1
         if first ~= second then return first > second end
     end
-    return normalizeGuildName(a.guildName) < normalizeGuildName(b.guildName)
+    local first, second = normalizeGuildName(a.guildName), normalizeGuildName(b.guildName)
+    if first ~= second then return first < second end
+    return RaceGrid:GetReportIdentity(a) < RaceGrid:GetReportIdentity(b)
 end
 
 function iRC:GetGuildDirectoryOverview(sortKey)
     if sortKey ~= "MEMBERS" and sortKey ~= "NAME" then sortKey = "ACTIVITY" end
     local groups = {}
     if RaceGrid:IsEnabled() then
-        for _, report in ipairs(self:GetGlobalRaceOverview()) do groups[normalizeGuildName(report.guildName)] = report end
+        for _, report in ipairs(self:GetGlobalRaceOverview()) do groups[RaceGrid:GetReportIdentity(report)] = report end
     end
     for _, report in ipairs(RaceGrid:BuildOwnGuildReports()) do
         if not isMutedOlympusGuild(report.guildName) then
             RaceGrid:StoreGuildReport(report, true)
-            groups[normalizeGuildName(report.guildName)] = report
+            groups[RaceGrid:GetReportIdentity(report)] = report
         end
     end
 
@@ -2285,6 +2440,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 LeaveChannelByName(CHANNEL_NAME)
             else
                 hideChannelFromChatWindows(CHANNEL_NAME)
+                if iRC.LayerSync then iRC.LayerSync:OnChannelReady() end
             end
         elseif not channelJoinReady and channelJoinStartedAt > 0 and hasRestoredServerChannel() then
             -- Wait for the rest of Blizzard's auto-joined channels to settle.
@@ -2293,6 +2449,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "CHANNEL_ROSTER_UPDATE" then
         local displayIndex, rosterCount = ...
         invalidateChannelRoster()
+        if iRC.LayerSync then iRC.LayerSync:OnChannelReady() end
         if adminPresence.requestedAt > 0 and time() - adminPresence.requestedAt <= 10 then
             refreshAdminChannelRoster(displayIndex, rosterCount)
         end
@@ -2306,9 +2463,15 @@ frame:SetScript("OnEvent", function(_, event, ...)
         end
         local scope = PREFIX_SCOPES[prefix]
         if not scope then return end
+        local channelTarget
+        if prefix == LAYER_PREFIX and distribution == "CHANNEL" then
+            channelTarget = select(7, ...)
+            if not iRC.LayerSync or not iRC.LayerSync:IsChannelTarget(channelTarget)
+                or not iRC:IsGuildDirectoryPacketCurrent(message) then return end
+        end
         if not validatePacketProtocol(prefix, message, sender, distribution) then return end
         if not iRC:AcceptIncomingAddonTraffic(prefix, message, distribution, sender, scope) then return end
-        handleMessage(prefix, message, sender, distribution)
+        handleMessage(prefix, message, sender, distribution, nil, channelTarget)
     elseif event == "CHAT_MSG_CHANNEL_LIST" or event == "CHAT_MSG_SYSTEM" then
         captureAdminChannelList(...)
     elseif event == "CHAT_MSG_CHANNEL" then

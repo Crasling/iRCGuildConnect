@@ -36,6 +36,8 @@ function addon:IsGuildMemberName(name) return name ~= "Outsider" end
 function addon:AcceptIncomingAddonTraffic() return true end
 function addon:GetStartupTrafficDelay() return 2 end
 function addon:GetGuildDirectoryScope() return "s-18-3-10-0-pve" end
+WOW_PROJECT_ID = 18
+function GetCurrentRegion() return 3 end
 function addon:ContainsProfanity() return false end
 function addon:CheckForNewVersion() end
 function addon:Text(key) return key end
@@ -94,7 +96,7 @@ local function fixture(guild, name)
         membersLevel60 = 6, activeLevel60 = 6, activePlayers = 6, activeMembers = 6,
         timestamp = time(), classes = { DRUID = 6 }, addonVersion = "0.6.2",
         guildDescription = string.rep("a", 160), guildDescriptionTimestamp = time(),
-        guildDescriptionEditedBy = "Editor", rules = {}, classBreakdownMode = "ALL",
+        guildDescriptionEditedBy = "Editor", rules = {}, rulesKnown = true, classBreakdownMode = "ALL",
     }
     report.payload = serialize(report, true)
     report.checksum = checksum(report.payload)

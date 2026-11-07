@@ -96,8 +96,11 @@ local function report(state, guild)
     return { serverRuleset = state.addon:GetGuildDirectoryScope(), name = state.name, guid = "Player-1-" .. state.name,
         guildName = guild, race = "HUMAN", faction = "Alliance", members = 6, activePlayers = 6,
         activeMembers = 6, membersLevel60 = 0, activeLevel60 = 0, averageLevel = 15,
-        timestamp = state.env.time(), classes = { DRUID = 6 }, rules = {}, guildDescription = "Public description",
+        timestamp = state.env.time(), classes = { DRUID = 6 }, rules = {}, rulesKnown = true, guildDescription = "Public description",
         guildDescriptionTimestamp = state.env.time(), guildDescriptionEditedBy = "Editor", classBreakdownMode = "ALL" }
+end
+local function findGuild(state, name)
+    for _, value in ipairs(state.addon:GetGlobalRaceOverview()) do if value.guildName == name then return value end end
 end
 local pve, pvp, same = client("PvE Reporter", false, false, false), client("PvP Reporter", true, false, false), client("PvP Receiver", true, false, false)
 local scopes = {}
@@ -112,24 +115,23 @@ assert(#pvp.addon:GetGlobalRaceOverview() == 0 and pvp.env.iRCDB.globalRaceGrid.
 pve.report, pvp.report = report(pve, "PvE Guild"), report(pvp, "PvP Guild")
 pvp.report.races = { HUMAN = 3, SKYBORNE = 2, UNKNOWN = 1 }
 assert(pve.grid:BroadcastReport(true)); advance(2)
-assert(#pvp.addon:GetGlobalRaceOverview() == 0, "public PvE traffic cannot enter a PvP cache")
+assert(findGuild(pvp, "PvE Guild").serverRuleset == pve.addon:GetGuildDirectoryScope(), "public reports retain their origin across server rulesets")
 assert(pvp.grid:BroadcastReport(true)); advance(2)
-assert(same.addon:GetGlobalRaceOverview()[1].races.HUMAN == 3,
+assert(findGuild(same, "PvP Guild").races.HUMAN == 3,
     "public guild reports include race counts in the expanded preview")
-assert(#same.addon:GetGlobalRaceOverview() == 1 and same.addon:GetGlobalRaceOverview()[1].guildName == "PvP Guild",
+assert(#same.addon:GetGlobalRaceOverview() == 2 and findGuild(same, "PvP Guild"),
     "matching clients still decode fragmented public reports")
-assert(#pve.addon:GetGlobalRaceOverview() == 1 and pve.addon:GetGlobalRaceOverview()[1].guildName == "PvE Guild",
-    "public PvP traffic cannot enter a PvE cache")
-assert(not pve.grid:StoreGuildReport(pvp.report, true, true), "storage rejects a foreign tagged report")
+assert(#pve.addon:GetGlobalRaceOverview() == 2 and findGuild(pve, "PvP Guild"),
+    "the directory includes reports from every visible server ruleset")
+assert(pve.grid:StoreGuildReport(pvp.report, true, true), "storage preserves a foreign report's own server ruleset")
 assert(not same.grid:StoreGuildReport({ guildName = "Unknown" }, true, true), "received unlabelled reports are not adopted")
 assert(pvp.grid:StoreGuildReport(pvp.report, true))
 same.env.iRCDB.globalRaceGrid.servers["forever:" .. same.addon:GetGuildDirectoryScope()].guildReports = {}
 assert(same.grid:RequestGuildCache()); advance(12)
-assert(#same.addon:GetGlobalRaceOverview() == 1, "same-ruleset cached report offers and downloads still work")
-assert(same.addon:GetGlobalRaceOverview()[1].races.SKYBORNE == 2,
+assert(#same.addon:GetGlobalRaceOverview() == 2, "cached report downloads preserve guilds from both server rulesets")
+assert(findGuild(same, "PvP Guild").races.SKYBORNE == 2,
     "cached guild previews retain the optional race breakdown")
-assert(#pve.addon:GetGlobalRaceOverview() == 1 and pve.addon:GetGlobalRaceOverview()[1].guildName == "PvE Guild",
-    "cache broadcasts cannot leak another ruleset's guilds")
+assert(#pve.addon:GetGlobalRaceOverview() == 2, "public cache discovery keeps existing reports")
 local function upvalue(callback, wanted)
     for index = 1, 100 do
         local key, value = debug.getupvalue(callback, index)
@@ -168,7 +170,7 @@ local function receive(fields)
         table.concat(fields, "\t") .. "\t@" .. guard.addon:GetGuildDirectoryScope(), "GUILD", "Cache Relay")
 end
 receive({ "CACHE_OFFER", "8", requestId, guard.name, foreign.guildName, foreign.timestamp, hash, "0" })
-advance(5.3)
+advance(15)
 local requestedForeign = false
 for _, packet in ipairs(wire) do
     if packet.from == guard.name and packet.message:match("^CACHE_GET\t")
@@ -225,19 +227,19 @@ end
 assert(detailReceived and detailReceived.races and detailReceived.races.SKYBORNE == 2,
     "race data also survives the separate public detail packet")
 pvp.record = 11
-assert(pvp.addon:GetGuildDirectoryScope() ~= pvpScope and #pvp.addon:GetGlobalRaceOverview() == 0,
-    "a different game-mode record cannot inherit the same category's cache")
+assert(pvp.addon:GetGuildDirectoryScope() ~= pvpScope and findGuild(pvp, "PvP Guild"),
+    "changing the current server context does not hide public guild reports")
 pvp.record = nil
 pvp.pvp = false
-assert(#pvp.addon:GetGlobalRaceOverview() == 0, "switching to PvE hides the PvP cache")
+assert(findGuild(pvp, "PvP Guild"), "switching to PvE keeps the PvP origin on its cached guilds")
 assert(pvp.grid:StoreGuildReport(report(pvp, "Second PvE Guild"), true))
 pvp.pvp = true
 local restored = false
 for _, value in ipairs(pvp.addon:GetGlobalRaceOverview()) do
     if value.guildName == "PvP Guild" then restored = true end
-    assert(value.guildName ~= "Second PvE Guild")
 end
 assert(pvp.addon:GetGuildDirectoryScope() == pvpScope and restored, "returning to a ruleset restores its original cache")
+assert(findGuild(pvp, "Second PvE Guild"), "all public ruleset caches remain browsable")
 local before = #wire
 pvp.locked = true
 assert(pvp.addon:SendAddonTraffic("iRCGridV1", "CACHE_REQUEST\t8\tabcd\t@" .. pvpScope, "GUILD"))
@@ -246,9 +248,179 @@ advance(2)
 assert(#wire == before, "a queued packet is discarded at the real send boundary after a ruleset switch")
 before = #wire
 pvp.unreadable = true
-assert(not pvp.addon:GetGuildDirectoryScope() and #pvp.addon:GetGlobalRaceOverview() == 0)
+assert(not pvp.addon:GetGuildDirectoryScope() and findGuild(pvp, "PvP Guild"),
+    "known report origins remain readable when the current character's ruleset is temporarily unavailable")
+assert(pvp.grid:StoreGuildReport(report(pve, "Reported PvE Origin"), true, true),
+    "receiving a known origin does not depend on the current character's unavailable game-mode APIs")
 assert(not pvp.grid:RequestGuildCache() and #wire == before, "secret ruleset values block sharing without falling back to PvE")
 pvp.unreadable = false
 assert(pvp.addon.GridWireVersion == "8" and pvp.addon.LayerWireVersion == "8" and pvp.addon.AdminWireVersion == "6",
     "only the guild-report protocol changes")
-print("PASS: five native rulesets, public/cache isolation, preserved legacy data, ruleset switching, and stale/secret send guards")
+print("PASS: five server origins, cross-ruleset public reports, origin validation, preserved caches, and stale/secret send guards")
+
+-- A relay's own realm and rules never become the origin of cached reports.
+clients, timers, wire = {}, {}, {}
+local relay = client("Directory Relay", false, false, false)
+local receiver = client("Directory Receiver", true, false, false)
+local originPvP = receiver.addon:GetGuildDirectoryScope()
+local originPvE = relay.addon:GetGuildDirectoryScope()
+local expected = {}
+for index, origin in ipairs({ originPvE, originPvP, originPvP }) do
+    local snapshot = report(relay, "Same Guild Name")
+    snapshot.serverRuleset, snapshot.serverName = origin, "Realm " .. index
+    snapshot.guid = "Player-" .. index .. "-Origin"
+    snapshot.rules = { guildFoundOnly = index >= 2 }
+    snapshot.races = { HUMAN = 6 }
+    assert(relay.grid:StoreGuildReport(snapshot, true, true))
+    expected[relay.grid:GetReportIdentity(snapshot)] = true
+end
+local long = report(relay, string.rep("g", 80))
+long.serverName, long.serverRuleset = string.rep("r", 80), originPvP
+long.races = { HUMAN = 6 }
+assert(relay.grid:StoreGuildReport(long, true, true))
+expected[relay.grid:GetReportIdentity(long)] = true
+assert(receiver.grid:RequestGuildCache()); advance(45)
+local received = receiver.addon:GetGlobalRaceOverview()
+assert(#received == 3, "Forever internal realm labels merge while different server rulesets remain separate")
+for _, snapshot in ipairs(received) do
+    assert(expected[receiver.grid:GetReportIdentity(snapshot)], "cache relays must preserve the exact origin identity")
+    if snapshot.serverName == "Realm 2" then
+        assert(snapshot.serverRuleset == originPvP and snapshot.rules.guildFoundOnly,
+            "server PvP and the Guild-Found challenge stay independent")
+    end
+end
+assert(receiver.addon:GetGuildDirectoryRulesetLabel(originPvP) == "PvP")
+assert(relay.addon:GetGuildDirectoryRulesetLabel(originPvE) == "PvE")
+local function countData()
+    local count = 0
+    for _, packet in ipairs(wire) do if packet.message:match("^CACHE_DATA\t") then count = count + 1 end end
+    return count
+end
+local dataCount = countData()
+assert(receiver.grid:RequestGuildCache()); advance(30)
+assert(countData() == dataCount, "refreshing known foreign reports does not download them again")
+
+-- A maximum-size public base must retain its realm even if details are lost.
+relay.report = long
+relay.report.name = relay.name
+relay.pvp = true
+assert(relay.grid:BroadcastReport(true)); advance(2)
+assert(#receiver.addon:GetGlobalRaceOverview() == 3, "public refreshes merge by origin rather than creating a second realm-less entry")
+local wrongGame = report(relay, "Wrong Game")
+wrongGame.serverRuleset = originPvE:gsub("s%-18%-", "s-1-")
+assert(not receiver.grid:StoreGuildReport(wrongGame, true, true), "other game projects are not accepted as server rulesets")
+wrongGame.serverRuleset = originPvE:gsub("s%-18%-3%-", "s-18-1-")
+assert(not receiver.grid:StoreGuildReport(wrongGame, true, true), "other regions remain outside the directory")
+print("PASS: mixed-origin cache transfers, separate same-named guilds, bounded long-name packets, independent challenge tags, and no repeated downloads")
+
+-- 0.7.7 reports omit the optional realm field. Match the complete old
+-- snapshot rather than guessing a realm from a shared guild name.
+clients, timers, wire = { receiver }, {}, {}
+function receiver.addon:IsForeverClient() return false end
+local known = report(receiver, "Older Peer Guild")
+known.serverName = "Known Realm"
+assert(receiver.grid:StoreGuildReport(known, true, true))
+local serialize = upvalue(receiver.grid.BroadcastReport, "serializeGuildReport")
+local checksum = upvalue(receiver.grid.RequestGuildCache, "payloadChecksum")
+local function offerFromOlderPeer(snapshot, relayed)
+    assert(receiver.grid:RequestGuildCache())
+    local id = assert(wire[#wire].message:match("^CACHE_REQUEST\t8\t([^\t]+)"))
+    local oldPayload = serialize(snapshot, true):gsub("\t[^\t]*(\t@[%w%-]+)$", "%1")
+    if relayed then oldPayload = oldPayload:gsub("(\t@[%w%-]+)$", "\t%1") end
+    local fields = { "CACHE_OFFER", "8", id, receiver.name, snapshot.guildName,
+        snapshot.timestamp, checksum(oldPayload), "0" }
+    if relayed then
+        fields[#fields + 1] = originPvP
+        fields[#fields + 1] = "#" .. checksum(receiver.grid:GetReportIdentity({ guildName = snapshot.guildName, serverRuleset = originPvP }))
+    end
+    fields[#fields + 1] = "@" .. originPvP
+    receiver.frame.OnEvent(receiver.frame, "CHAT_MSG_ADDON", "iRCGridV1",
+        table.concat(fields, "\t"), "GUILD", "Older Peer")
+    advance(8)
+    return id
+end
+local oldRequest = offerFromOlderPeer(known)
+for _, packet in ipairs(wire) do
+    assert(not packet.message:find("CACHE_GET\t8\t" .. oldRequest .. "\t", 1, true),
+        "an unchanged 0.7.7 snapshot is not downloaded again when a realm-labelled copy is already saved")
+end
+local relayedRequest = offerFromOlderPeer(known, true)
+for _, packet in ipairs(wire) do
+    assert(not packet.message:find("CACHE_GET\t8\t" .. relayedRequest .. "\t", 1, true),
+        "a newer relay of the same realm-less snapshot also avoids a repeated download")
+end
+local distinct = report(receiver, known.guildName)
+distinct.timestamp, distinct.guid = known.timestamp, "Player-Other-Realm"
+local distinctRequest = offerFromOlderPeer(distinct)
+local requested
+for _, packet in ipairs(wire) do
+    if packet.message:find("CACHE_GET\t8\t" .. distinctRequest .. "\t", 1, true) then requested = true end
+end
+assert(requested, "the same guild name and timestamp alone cannot suppress a different snapshot")
+assert(findGuild(receiver, known.guildName).serverName == "Known Realm", "comparison never rewrites the saved origin")
+print("PASS: older-peer refreshes recognize identical snapshots without merging guild origins")
+
+-- Real realm names still distinguish guilds on clients that use them.
+clients, timers, wire = {}, {}, {}
+local realms = client("Realm Reporter", false, false, false)
+function realms.addon:IsForeverClient() return false end
+for _, realm in ipairs({ "First Realm", "Second Realm" }) do
+    local snapshot = report(realms, "Matching Name")
+    snapshot.serverName = realm
+    assert(realms.grid:StoreGuildReport(snapshot, true, true))
+end
+assert(#realms.addon:GetGlobalRaceOverview() == 2, "distinct real realms are not combined")
+
+clients, timers, wire = {}, {}, {}
+local repair = client("Local Reporter", false, false, false)
+local knownRules = report(repair, "Home Guild")
+knownRules.name, knownRules.guid = "Informed Member", "Player-1-Informed"
+knownRules.serverName, knownRules.timestamp = "CAMWOW EU4 Realm 6 PvE", repair.env.time() - 20
+knownRules.rules = { guildFoundOnly = true }
+assert(repair.grid:StoreGuildReport(knownRules, true, true))
+local store = repair.env.iRCDB.globalRaceGrid.servers["forever:" .. repair.addon:GetGuildDirectoryScope()]
+store.guildReports["home guild@camwow eu4 realm 6 pve"] = knownRules
+store.guildReports["home guild"] = nil
+local bootstrap = report(repair, "Home Guild")
+bootstrap.name, bootstrap.guid = "Uninformed Member", "Player-1-Uninformed"
+bootstrap.serverName, bootstrap.timestamp = "CAMWOW EU4 Realm 7 PvE", repair.env.time() - 10
+bootstrap.rulesKnown, bootstrap.rules = false, {}
+local serializer = upvalue(repair.grid.BroadcastReport, "serializeGuildReport")
+local parsedBootstrap = assert(parsePayload(serializer(bootstrap, true)))
+assert(parsedBootstrap.rulesKnown == false and parsedBootstrap.rules == nil)
+assert(parsePayload(serializer(parsedBootstrap, true)).rulesKnown == false,
+    "an unknown-rules report retains its marker through cache relaying")
+store.guildReports["home guild@camwow eu4 realm 7 pve"] = parsedBootstrap
+local directory = repair.addon:GetGlobalRaceOverview()
+assert(#directory == 1 and directory[1].timestamp == bootstrap.timestamp,
+    "old realm-labelled duplicates collapse to the newest stats without deleting the cache")
+assert(directory[1].rulesKnown and directory[1].rules.guildFoundOnly,
+    "a bootstrap report cannot erase the previous Guild-Found tag")
+assert(store.guildReports["home guild@camwow eu4 realm 6 pve"], "older cached entries are preserved")
+local own = report(repair, "Home Guild")
+own.serverName, own.rulesKnown, own.rules = "Forever", false, {}
+function repair.grid:BuildOwnGuildReports() return { own } end
+directory = repair.addon:GetGuildDirectoryOverview("NAME")
+assert(#directory == 1 and directory[1] == own and own.rules.guildFoundOnly,
+    "the live own-guild report replaces its cached aliases and keeps known challenge rules")
+local confirmedChange = report(repair, "Home Guild")
+confirmedChange.timestamp, confirmedChange.serverName = own.timestamp + 1, "CAMWOW EU4 Realm 8 PvE"
+assert(repair.grid:StoreGuildReport(confirmedChange, true, true))
+directory = repair.addon:GetGuildDirectoryOverview("NAME")
+assert(#directory == 1 and directory[1].rules.guildFoundOnly ~= true,
+    "a later known-rules report can genuinely remove Guild-Found")
+
+local classKnown = report(repair, "Class Guild")
+classKnown.rules = { classLock = true, guildClass = "MAGE" }
+assert(repair.grid:StoreGuildReport(classKnown, true, true))
+local classBootstrap = report(repair, "Class Guild")
+classBootstrap.name, classBootstrap.guid = "Uninformed Member", "Player-1-Uninformed"
+classBootstrap.timestamp, classBootstrap.rulesKnown, classBootstrap.rules = classKnown.timestamp + 1, false, {}
+assert(repair.grid:StoreGuildReport(classBootstrap, true, true))
+local details = { "GUILD_CLASS_BREAKDOWN", "8", classBootstrap.timestamp, "ALL", 1, 60,
+    6, 0, 0, 0, 0, 0, 0, 0, 0, "NORMAL", "0", "", "", "", "", "@" .. repair.addon:GetGuildDirectoryScope() }
+repair.frame.OnEvent(repair.frame, "CHAT_MSG_ADDON", "iRCGridV1", table.concat(details, "\t"), "GUILD", classBootstrap.name)
+local restoredClass = findGuild(repair, "Class Guild")
+assert(restoredClass.rules.classLock and restoredClass.rules.guildClass == "MAGE",
+    "bootstrap detail packets cannot overwrite inherited Class-Locked rules")
+print("PASS: Forever duplicate repair, live own-guild replacement, preserved challenge tags, unknown-rules relays and confirmed rule changes")

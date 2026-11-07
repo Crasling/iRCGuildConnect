@@ -10,6 +10,7 @@ iRC.LayerRegistry = Registry
 
 local MAX_ROWS, ROW_LIFETIME, CLOCK_TOLERANCE = 99, 3600, 300
 local books, bookCount = {}, 0
+local attachedRoot, activeServerScope
 
 local function readable(value)
     return not (iRC.IsSecretValue and iRC:IsSecretValue(value))
@@ -122,6 +123,14 @@ local function rebuild(book)
 end
 
 local function getBook(serverId, mapId, create)
+    if iRC.GetGuildDirectoryScope then
+        local serverScope = iRC:GetGuildDirectoryScope()
+        if not serverScope then return nil end
+        if serverScope ~= activeServerScope then
+            if attachedRoot then Registry:AttachStore(attachedRoot)
+            else books, bookCount, activeServerScope = {}, 0, serverScope end
+        end
+    end
     local key = scope(serverId, mapId)
     if not key then return nil end
     local book = books[key]
@@ -242,6 +251,19 @@ end
 
 function Registry:AttachStore(store)
     if not readable(store) or type(store) ~= "table" then return false end
+    if iRC.GetGuildDirectoryScope then
+        attachedRoot = store
+        local serverScope = iRC:GetGuildDirectoryScope()
+        if not serverScope then return false end
+        store.layerRulesetBooks = store.layerRulesetBooks or {}
+        store.layerRulesetBooks[serverScope] = store.layerRulesetBooks[serverScope] or {}
+        store = store.layerRulesetBooks[serverScope]
+        if activeServerScope ~= serverScope then
+            books, bookCount, activeServerScope = {}, 0, serverScope
+        end
+        -- Older unlabelled books remain saved, but cannot be attributed to
+        -- the current server safely. New claims stay in their own ruleset.
+    end
     local saved = store.worldNumberBooks
     if saved == books then return true end
     if type(saved) == "table" and readable(saved) then

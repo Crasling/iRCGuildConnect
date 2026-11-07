@@ -434,7 +434,7 @@ local function tradeExceptionsMask(settings)
     for index, key in ipairs(TRADE_EXCEPTION_KEYS) do
         if settings and settings[key] == true then mask = mask + (2 ^ (index - 1)) end
     end
-    return mask
+    return math.floor(mask)
 end
 
 local TRADE_ITEM_CATEGORIES = { "conjured", "healthstones", "questItems", "lockpickOutgoing", "lockpickIncoming" }
@@ -444,7 +444,7 @@ local function tradeItemMask(settings, category)
     for index, itemId in ipairs(iRC.GuildFoundTradeExceptionItems[category] or {}) do
         if selected[itemId] == true then mask = mask + (2 ^ (index - 1)) end
     end
-    return mask
+    return math.floor(mask)
 end
 
 local function tradeItemMasks(settings)
@@ -472,6 +472,18 @@ end
 
 local function tradeExceptionsChecksum(mask, itemMasks, timestamp, source)
     return rulesBackupChecksum(table.concat({ tostring(mask), tostring(itemMasks or "0,0,0,0,0"), tostring(timestamp or 0), tostring(source or "") }, SEP))
+end
+
+local function mailExceptionChecksum(mask, itemMasks, timestamp, source, outgoingMail)
+    return rulesBackupChecksum(tradeExceptionsChecksum(mask, itemMasks, timestamp, source) .. SEP .. outgoingMail)
+end
+
+local function validMailException(parts, mask, itemMasks, timestamp, source)
+    -- Older clients only send the item settings. Keep their eight-bit mask
+    -- intact and leave the mail choice alone when that extension is absent.
+    if parts[8] == nil and parts[9] == nil then return true end
+    return (parts[8] == "0" or parts[8] == "1")
+        and tostring(parts[9] or ""):lower() == mailExceptionChecksum(mask, itemMasks, timestamp, source, parts[8])
 end
 
 local function rankPermissionsWire(values)
@@ -884,6 +896,7 @@ function iRC:SetGuildFoundTradeException(key, enabled)
     settings.source = self:GetPlayerName()
     self:RecordManagementConnectionStatus("guildFound", settings.source, settings.timestamp, self:GetPlayerName(), settings.timestamp)
     self:SendGuildFoundTradeExceptions(nil, true)
+    if self.Enforcement then self.Enforcement:UpdateMailRestriction() end
     if self.RefreshOptionsIfShown then self:RefreshOptionsIfShown() end
     return true
 end
@@ -918,8 +931,10 @@ function iRC:SendGuildFoundTradeExceptions(targetName, force)
     if timestamp <= 0 or source == "" then return false end
     local mask = tradeExceptionsMask(settings)
     local itemMasks = tradeItemMasks(settings)
+    local outgoingMail = settings.outgoingMail == true and "1" or "0"
     send(self.Prefix, table.concat({ "GF_TRADE_EXCEPTIONS", WIRE_VERSION, tostring(mask),
-        tostring(timestamp), source, tradeExceptionsChecksum(mask, itemMasks, timestamp, source), itemMasks }, SEP),
+        tostring(timestamp), source, tradeExceptionsChecksum(mask, itemMasks, timestamp, source), itemMasks,
+        outgoingMail, mailExceptionChecksum(mask, itemMasks, timestamp, source, outgoingMail) }, SEP),
         targetName and "WHISPER" or "GUILD", targetName)
     return true
 end
@@ -1113,6 +1128,7 @@ end
 local GUILD_FOUND_AUDIT_ACTIONS = {
     TRADE_BLOCKED = true,
     TRADE_EXCEPTION_APPROVED = true,
+    MAIL_EXCEPTION_APPROVED = true,
     MAIL_BLOCKED = true,
     INBOX_BLOCKED = true,
     AUCTION_HOUSE_BLOCKED = true,
@@ -1290,6 +1306,8 @@ local function isUnchangedManagementPacket(parts)
         local mask, itemMasks = tradeExceptionsMask(saved), tradeItemMasks(saved)
         return tonumber(parts[3]) == mask and tostring(parts[7] or "") == itemMasks
             and tostring(parts[6] or ""):lower() == tradeExceptionsChecksum(mask, itemMasks, saved.timestamp, saved.source)
+            and validMailException(parts, mask, itemMasks, saved.timestamp, saved.source)
+            and (parts[8] == nil or (parts[8] == "1") == (saved.outgoingMail == true))
     else
         local saved = connection.guildHomepageDescription
         return saved and tonumber(parts[4]) and tonumber(parts[4]) <= tonumber(saved.timestamp or 0)
@@ -1807,7 +1825,8 @@ local function handleMessage(prefix, message, distribution, sender)
             and mask and mask >= 0 and mask <= 255 and mask == math.floor(mask)
             and timestamp and timestamp > 0 and timestamp <= now + 300 and source ~= ""
             and itemMasks:match("^%d+,%d+,%d+,%d+,%d+$") and #itemMasks <= 45
-            and checksum == tradeExceptionsChecksum(mask, itemMasks, timestamp, source) then
+            and checksum == tradeExceptionsChecksum(mask, itemMasks, timestamp, source)
+            and validMailException(parts, mask, itemMasks, timestamp, source) then
             local settings = connection.guildFoundTradeExceptionSettings
             local savedTimestamp = math.floor(tonumber(settings.timestamp) or 0)
             if timestamp < savedTimestamp then return end
@@ -1819,7 +1838,9 @@ local function handleMessage(prefix, message, distribution, sender)
                 local itemMaskValues = {}
                 for value in itemMasks:gmatch("%d+") do itemMaskValues[#itemMaskValues + 1] = tonumber(value) or 0 end
                 applyTradeItemMasks(settings, itemMaskValues)
+                if parts[8] ~= nil then settings.outgoingMail = parts[8] == "1" end
                 settings.timestamp, settings.source = math.floor(timestamp), source
+                if iRC.Enforcement then iRC.Enforcement:UpdateMailRestriction() end
                 iRC:RecordManagementConnectionStatus("guildFound", source, timestamp, sender, now)
                 if receiverIsGuildMaster and not senderIsGuildMaster then
                     settings.timestamp = math.max(now, settings.timestamp + 1)

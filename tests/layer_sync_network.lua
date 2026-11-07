@@ -2,6 +2,8 @@ local function key(instance, server, map) return tostring(server) .. "-" .. tost
 -- Two independent clients exchange real protocol packets through the core
 -- queues. Timers, guild/group delivery and friend status checks are simulated.
 local function scenario(mode)
+    local measured = mode == "measured" or mode == "global-restricted"
+    local channelMode = mode:match("^channel") ~= nil
     local clock, timers, clients, packets, dropped = 1000, {}, {}, {}, false
     local function later(delay, callback) timers[#timers + 1] = { at = clock + delay, run = callback } end
     local function advance(seconds)
@@ -35,17 +37,27 @@ local function scenario(mode)
             return frame
         end
         env.LibStub = function(library) if library == "AceAddon-3.0" then return { NewAddon = function() return addon end } end end
-        local state = { name = name, guild = guild, group = group, addon = addon, env = env, ready = {}, notes = {}, notifications = 0 }
+        local state = { name = name, guild = guild, group = group, addon = addon, env = env, ready = {}, notes = {}, notifications = 0, publicCalls = 0,
+            ruleset = "s-18-3-10-0-pve", channelId = channelMode and mode ~= "channel-late" and 6 or 0 }
         clients[#clients + 1] = state
+        env.GetChannelName = function(channel) assert(channel == "iRCCommsV1"); return state.channelId end
+        env.SendChatMessage = function()
+            state.publicCalls = state.publicCalls + 1
+            -- WoW can report ADDON_ACTION_BLOCKED without throwing a Lua
+            -- error. A normal return must never count as a safe workaround.
+            state.blockedActions = (state.blockedActions or 0) + 1
+        end
         env.C_ChatInfo = { SendAddonMessage = function(prefix, message, distribution, target)
             assert(#message <= 255, "every registry packet fits the real transport limit")
             packets[#packets + 1] = { from = name, message = message, distribution = distribution, target = target, at = clock }
+            if mode == "channel-rejected" and distribution == "CHANNEL" then return 4 end
             assert(not (distribution == "WHISPER" and message:match("^LAYER_STATE")), "no periodic state whispers")
             if mode == "lost-part" and not dropped and message:match("^LAYER_BOOK\t") then dropped = true; return 0 end
             for _, peer in ipairs(clients) do
                 local deliver = distribution == "GUILD" and guild and peer.guild == guild
                     or (distribution == "PARTY" or distribution == "RAID") and group and peer.group == group
                     or distribution == "WHISPER" and target == peer.name
+                    or distribution == "CHANNEL" and channelMode and tostring(target) == "6"
                 if peer ~= state and deliver then
                     local deliveryDelay = mode == "delayed-friends" and distribution == "WHISPER" and 85 or 0.02
                     if mode == "reordered" and message:match("^LAYER_BOOK\t") then
@@ -53,7 +65,8 @@ local function scenario(mode)
                         deliveryDelay = deliveryDelay + (3 - part % 3) * 0.08
                     end
                     later(deliveryDelay, function()
-                        peer.raceFrame.OnEvent(peer.raceFrame, "CHAT_MSG_ADDON", prefix, message, distribution, name)
+                        peer.raceFrame.OnEvent(peer.raceFrame, "CHAT_MSG_ADDON", prefix, message, distribution, name, nil, 0,
+                            distribution == "CHANNEL" and peer.channelId or nil, "iRCCommsV1")
                     end)
                 end
             end
@@ -61,6 +74,7 @@ local function scenario(mode)
         end }
         assert(loadfile("iRC_Core.lua", "t", env))("iRC", private)
         function addon:GetPlayerName() return name end
+        function addon:GetGuildDirectoryScope() return state.ruleset end
         function addon:GetGuildKey() return guild end
         function addon:GetSettings() return { showLayerPanel = false } end
         function addon:GetGuildRosterSnapshot()
@@ -110,7 +124,7 @@ local function scenario(mode)
                 return false
             end,
         }
-        if mode == "measured" then
+        if measured then
             env.C_Map = { GetBestMapForUnit = function() return 1420 end, GetMapInfo = function() return { mapType = 3 } end }
             env.UnitGUID = function() return state.targetGUID end
             env.UnitPlayerControlled = function() return false end
@@ -135,14 +149,18 @@ local function scenario(mode)
     local sharedGroup = (mode == "party" or mode == "raid" or mode == "measured") and "Shared Group" or nil
     local a = client("Alpha One", mode == "bridge" and "Guild A" or sharedGuild, sharedGroup)
     local b = client("Beta Two", mode == "bridge" and "Guild B" or sharedGuild, mode == "bridge" and "Group BC" or sharedGroup)
+    if mode == "channel-mixed" then b.ruleset = "s-18-3-11-0-pvp" end
     local c = mode == "bridge" and client("Gamma Three", "Guild C", "Group BC")
         or mode == "friend-star" and client("Gamma Three") or nil
     local d = mode == "friend-star" and client("Delta Four") or nil
     local aBook, bBook = a.addon.LayerRegistry, b.addon.LayerRegistry
-    if mode == "measured" then
-        aBook:Claim("7098-0-1420", 7098, 1420, 1, "alpha", 1800000900, 1800000990)
-        bBook:Claim("7099-0-1420", 7099, 1420, 1, "beta", 1800000800, 1800000990)
-        bBook:Claim("7098-0-1420", 7098, 1420, 2, "beta", 1800000950, 1800000990)
+    if measured then
+        local empty = mode == "global-restricted"
+        if not empty then
+            aBook:Claim("7098-0-1420", 7098, 1420, 1, "alpha", 1800000900, 1800000990)
+            bBook:Claim("7099-0-1420", 7099, 1420, 1, "beta", 1800000800, 1800000990)
+            bBook:Claim("7098-0-1420", 7098, 1420, 2, "beta", 1800000950, 1800000990)
+        end
         local measured = { "Creature-0-7098-0-2-246378-3E9E2142A4", "Creature-0-7098-0-4-246378-906a87b9ac" }
         for index, peer in ipairs({ a, b }) do
             for npc = 246378, 246380 do
@@ -150,13 +168,18 @@ local function scenario(mode)
                 peer.addon.GuildMap:ObserveLocalLayer("target", "target")
             end
         end
-        advance(15)
+        advance(25)
         local ownA, ownB = assert(a.addon.GuildMap:GetLocalLayer()), assert(b.addon.GuildMap:GetLocalLayer())
+        assert(a.publicCalls == 0 and b.publicCalls == 0, "automatic layer observations never call protected public chat")
         assert(ownA.zoneUID == 2 and ownB.zoneUID == 4 and ownA.identityKey == "7098-0-1420" and ownA.identityKey == ownB.identityKey)
         assert(ownA.number == ownB.number and a.displayNumber == b.displayNumber,
             "the measured GUIDs converge through actual observation, transport, routing, registry and own-panel code")
-        assert(#aBook:Export(7098, 1420) == 2 and #bBook:Export(7098, 1420) == 2,
-            "distinct servers remain separate references in a shared zone book")
+        if empty then
+            assert(ownA.provisional and ownB.provisional, "no matching reply must remain an unconfirmed local estimate")
+        else
+            assert(#aBook:Export(7098, 1420) == 2 and #bBook:Export(7098, 1420) == 2,
+                "distinct servers remain separate references in a shared zone book")
+        end
         local count = #packets
         advance(180)
         assert(#packets == count, "measured world synchronization creates no repeated traffic")
@@ -172,7 +195,7 @@ local function scenario(mode)
     if mode == "wide" or mode == "reordered" or mode == "lost-part" then
         for rawId = 300, 350 do bBook:Claim(key(rawId, 4621, 1415), 4621, 1415, 1, "beta", 1800000900, 1800000990) end
     end
-    if mode == "maximum" then
+    if mode == "maximum" or mode == "channel-maximum" then
         for rawId = 300, 396 do bBook:Claim(key(rawId, 4621, 1415), 4621, 1415, 1, string.rep("beta", 16), 1800000900, 1800000990) end
         assert(#bBook:Export(4621, 1415) == 99, "the largest supported book is exercised through the actual transport")
     end
@@ -185,7 +208,12 @@ local function scenario(mode)
         d.addon.LayerRegistry:Claim(key(200, 4621, 1415), 4621, 1415, 4, "delta", 1800000990, 1800000990)
     end
     local layer = { zoneUID = 2, instanceId = 200, serverId = 4621, mapId = 1415 }
-    assert(a.addon.LayerSync:Request(layer) == (mode ~= "solo"), "a lookup uses only available audiences")
+    assert(a.addon.LayerSync:Request(layer) == (mode ~= "solo" and mode ~= "channel-rejected" and mode ~= "channel-late"), "a lookup uses only available audiences: " .. mode)
+    if mode == "channel-late" then
+        a.channelId, b.channelId = 6, 6
+        a.addon.LayerSync:OnChannelReady()
+        a.addon.LayerSync:OnChannelReady()
+    end
     if mode == "concurrent" then
         local other = { zoneUID = 4, instanceId = 100, serverId = 4621, mapId = 1415 }
         assert(b.addon.LayerSync:Request(other))
@@ -200,16 +228,24 @@ local function scenario(mode)
         aBook:Claim(key(200, 4621, 1415), 4621, 1415, 1, "alpha", 1800001002, 1800001002)
         assert(a.addon.LayerSync:Publish(layer), "the created row is returned to the friend who answered missing")
     end
-    advance(mode == "delayed-friends" and 280 or mode == "maximum" and 90 or 15)
+    advance(mode == "delayed-friends" and 280 or (mode == "maximum" or mode == "channel-maximum") and 90 or 15)
     if mode == "lost-part" then
         assert(a.notifications == 0, "an incomplete snapshot never partially updates or confirms a registry")
         assert(a.addon.LayerSync:Request(layer), "a new explicit lookup can recover a lost snapshot")
         advance(25)
     end
-    if mode == "offline-friend" or mode == "solo" then
+    if mode == "channel-rejected" then
+        assert(#packets == 1 and packets[1].distribution == "CHANNEL", "a rejected native route stops after its first attempt")
+        assert(a.addon.LayerSync:GetChannelTarget() == nil, "unsupported clients disable the native channel for this session")
+        assert(not a.addon.LayerSync:Request(layer), "new observations cannot retry a permanently rejected channel")
+    elseif mode == "channel-mixed" then
+        assert(#packets == 1 and a.notifications == 0 and b.notifications == 0,
+            "another server ruleset ignores the question without replying or merging")
+    elseif mode == "offline-friend" or mode == "solo" then
         assert(#packets == 0, "no outgoing whisper is used when a friend is offline or no audience exists")
     else
-        assert(aBook:GetNumber(key(200, 4621, 1415), 4621, 1415) == bBook:GetNumber(key(200, 4621, 1415), 4621, 1415), "same raw ID has the same short number on both clients")
+        assert(aBook:GetNumber(key(200, 4621, 1415), 4621, 1415) == bBook:GetNumber(key(200, 4621, 1415), 4621, 1415),
+            "same raw ID has the same short number on both clients: " .. mode .. "; packets=" .. #packets .. "; " .. table.concat(a.notes, "; ") .. "; " .. table.concat(b.notes, "; "))
         assert(aBook:GetNumber(key(100, 4621, 1415), 4621, 1415) == bBook:GetNumber(key(100, 4621, 1415), 4621, 1415), "other IDs remain coherent after collision resolution")
         local first, second = aBook:Export(4621, 1415), bBook:Export(4621, 1415)
         assert(#first == #second and first[2].owner == second[2].owner, "the requester returns missing claim origins to its peer")
@@ -238,10 +274,11 @@ local function scenario(mode)
     local count = #packets
     advance(180)
     assert(#packets == count, "no lookup or state traffic repeats on a timer")
+    for _, peer in ipairs(clients) do assert(peer.publicCalls == 0, "no automatic scenario may enter protected public chat") end
     return a, b, packets, advance
 end
 
-for _, mode in ipairs({ "guild", "cross-context", "party", "raid", "measured", "friends", "friend-star", "missing-friend", "delayed-friends",
+for _, mode in ipairs({ "channel", "channel-late", "channel-maximum", "channel-mixed", "channel-rejected", "guild", "cross-context", "party", "raid", "measured", "global-restricted", "friends", "friend-star", "missing-friend", "delayed-friends",
     "concurrent", "wide", "maximum", "reordered", "lost-part", "bridge", "offline-friend", "solo" }) do scenario(mode) end
 
 local a, _, packets, advance = scenario("friends")
@@ -253,3 +290,42 @@ assert(not a.addon:SendAddonTraffic("iRCLayerV1", "LAYER_QUERY\t8\tqbad\t4621\t1
 advance(2)
 assert(#packets == count, "invalid or unsolicited packets trigger no response")
 print("PASS: independent guild, party, raid and friend clients share registry claims; offline/solo stays silent; no periodic traffic")
+
+local safeA, safeB, safePackets, safeAdvance = scenario("guild")
+local query
+for _, packet in ipairs(safePackets) do if packet.message:match("^LAYER_QUERY\t") then query = packet.message; break end end
+assert(query)
+local before = #safePackets
+assert(not safeA.addon:SendAddonTraffic("iRCLayerV1", query, "CHANNEL", "6"), "the core refuses even an otherwise valid lookup on public chat")
+assert(not safeB.addon.LayerSync:Receive(query, "CHANNEL", safeA.name), "public questions cannot trigger protected registry replies")
+local encoded = "iRCLayerV1:" .. query:gsub(".", function(value) return string.format("%02x", value:byte()) end)
+safeB.raceFrame.OnEvent(safeB.raceFrame, "CHAT_MSG_CHANNEL", encoded, safeA.name, nil, nil, nil, nil, nil, nil, "iRCCommsV1")
+safeAdvance(5)
+assert(#safePackets == before and safeA.publicCalls == 0 and safeB.publicCalls == 0,
+    "a public question received through the real event path never sends chat or a reply")
+print("PASS: protected channel sends blocked before API calls, including native silent failures and incoming public questions")
+
+local channelA, channelB, channelPackets, channelAdvance = scenario("channel")
+local book, channelQuery
+for _, packet in ipairs(channelPackets) do
+    assert(packet.distribution == "CHANNEL" and packet.target == "6", "unrelated guildless clients use only the existing channel")
+    assert(packet.message:match("\t@s%-18%-3%-10%-0%-pve$"), "every question and reply declares its server ruleset")
+    if packet.message:match("^LAYER_BOOK\t") then book = packet.message end
+    if packet.message:match("^LAYER_QUERY\t") then channelQuery = packet.message end
+end
+assert(book and channelQuery and channelA.publicCalls == 0 and channelB.publicCalls == 0)
+local count, notifications = #channelPackets, channelA.notifications
+for _, foreign in ipairs({ "s-18-3-11-0-pvp", "s-18-3-12-0-hc", "s-18-3-13-0-rppve", "s-18-3-14-0-rppvp",
+    "s-18-3-99-0-pve", "s-18-1-10-0-pve", "s-1-3-10-0-pve" }) do
+    local foreignBook = book:gsub("\t@[%w%-]+$", "\t@" .. foreign)
+    assert(not channelA.addon.LayerSync:Receive(foreignBook, "CHANNEL", channelB.name, 6),
+        "foreign server responses cannot confirm a local estimate")
+    channelA.raceFrame.OnEvent(channelA.raceFrame, "CHAT_MSG_ADDON", "iRCLayerV1", foreignBook, "CHANNEL", channelB.name, nil, 0, 6)
+end
+assert(not channelA.addon.LayerSync:Receive(book:gsub("\t@[%w%-]+$", ""), "CHANNEL", channelB.name, 6),
+    "unlabelled channel responses are not attributed to the current ruleset")
+assert(not channelA.addon.LayerSync:Receive(book, "CHANNEL", channelB.name, 7), "another custom channel cannot supply layer data")
+channelA.raceFrame.OnEvent(channelA.raceFrame, "CHAT_MSG_ADDON", "iRCLayerV1", channelQuery, "CHANNEL", channelB.name, nil, 0, 7)
+channelAdvance(2)
+assert(#channelPackets == count and channelA.notifications == notifications, "foreign and wrong-channel traffic creates no replies or merges")
+print("PASS: native iRCCommsV1 questions and replies, same-server-only confirmation, no visible chat calls, and no periodic polling")

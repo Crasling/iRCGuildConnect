@@ -1,7 +1,7 @@
 local function key(instance, server, map) return tostring(server) .. "-" .. tostring(instance) .. "-" .. tostring(map) end
 -- Independent clients must derive the same display numbers after merging claims.
 local clock, secret = 1800000000, {}
-local function client(clockMode)
+local function client(clockMode, getScope)
     local env, addon = {}, {}
     setmetatable(env, { __index = _G })
     env.GetServerTime = function() return clock end
@@ -10,6 +10,7 @@ local function client(clockMode)
     if clockMode == "monotonic" then env.time = false end
     env.GetTime = function() return 100 end
     function addon:IsSecretValue(value) return value == secret end
+    if getScope then addon.GetGuildDirectoryScope = getScope end
     assert(loadfile("iRC_LayerRegistry.lua", "t", env))("iRC", { iRC = addon })
     return addon.LayerRegistry
 end
@@ -158,3 +159,21 @@ assert(worlds:Claim("7098-1-1420", 7098, 1420, nil, "three", clock - 1, clock).n
 assert(worlds:Claim("7098-0-1421", 7098, 1421, nil, "other zone", clock, clock).number == 1,
     "different servers and instances are distinct within a zone; another zone has its own numbering")
 print("PASS: independent shared layer books, deterministic claim merging, collision-free numbers, scopes, TTL, bounded rows, and relay safety")
+
+local currentScope = "s-18-3-10-0-pve"
+local savedRulesets = {}
+local isolated = client(nil, function() return currentScope end)
+assert(isolated:AttachStore(savedRulesets))
+assert(isolated:Claim(key(456, server, map), server, map, 2, "pve owner", clock - 10, clock))
+currentScope = "s-18-3-11-0-pvp"
+assert(isolated:GetNumber(key(456, server, map), server, map) == nil, "PvP cannot inherit saved PvE numbering")
+assert(isolated:Claim(key(456, server, map), server, map, 4, "pvp owner", clock - 10, clock))
+currentScope = "s-18-3-10-0-pve"
+assert(isolated:GetNumber(key(456, server, map), server, map) == 2, "returning to PvE restores only its own book")
+currentScope = nil
+assert(#isolated:Export(server, map) == 0, "an unreadable ruleset cannot export another server's claims")
+currentScope = "s-18-3-11-0-pvp"
+local restored = client(nil, function() return currentScope end)
+assert(restored:AttachStore(savedRulesets) and restored:GetNumber(key(456, server, map), server, map) == 4,
+    "ruleset-specific layer books survive a reload")
+print("PASS: saved numbering stays separate across server rulesets and unreadable startup state")

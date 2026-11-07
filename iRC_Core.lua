@@ -40,6 +40,7 @@ iRC.TestAdminNames = {
     "Crasling Veyrath",
     "Crasling Vaelanar",
     "Crasling Moohorn",
+    "Crasling Baldwin",
 }
 iRC.Frame = CreateFrame("Frame")
 iRC.GameVersion, iRC.GameBuild, iRC.GameBuildDate, iRC.GameTocVersion = GetBuildInfo()
@@ -80,6 +81,34 @@ end
 function iRC:IsGuildDirectoryPacketCurrent(message)
     local scope = self:GetGuildDirectoryScope()
     return scope ~= nil and type(message) == "string" and message:match("\t@([%w%-]+)$") == scope
+end
+
+function iRC:GetGuildDirectoryContext()
+    if type(GetCurrentRegion) ~= "function" or self:IsSecretValue(WOW_PROJECT_ID)
+        or type(WOW_PROJECT_ID) ~= "number" then return nil end
+    local ok, region = pcall(GetCurrentRegion)
+    if not ok or self:IsSecretValue(region) or type(region) ~= "number" or region < 1 or region % 1 ~= 0 then return nil end
+    return "s-" .. WOW_PROJECT_ID .. "-" .. region .. "-"
+end
+
+function iRC:IsGuildDirectoryScopeSupported(scope, current)
+    -- Public reports describe their own server. Reading one does not require
+    -- the current character's game-mode APIs to be available.
+    current = current or self:GetGuildDirectoryContext()
+    if not current or type(scope) ~= "string" or #scope > 80 then return false end
+    local project, region, record, mode, category = scope:match("^s%-(%d+)%-(%d+)%-(%d+)%-(%d+)%-(%a+)$")
+    local localProject, localRegion = current:match("^s%-(%d+)%-(%d+)%-")
+    return project == localProject and region == localRegion and record ~= nil and mode ~= nil
+        and ({ pve = true, pvp = true, hc = true, rppve = true, rppvp = true })[category] == true
+end
+
+function iRC:GetGuildDirectoryRulesetLabel(scope)
+    return ({ pve = "PvE", pvp = "PvP", hc = "Hardcore", rppve = "RP-PvE", rppvp = "RP-PvP" })
+        [type(scope) == "string" and scope:match("%-(%a+)$") or ""] or "Unknown ruleset"
+end
+
+function iRC:IsGuildDirectoryPacketSupported(message)
+    return type(message) == "string" and self:IsGuildDirectoryScopeSupported(message:match("\t@([%w%-]+)$"))
 end
 local gameTocNumber = tonumber(iRC.GameTocVersion) or 0
 if gameTocNumber >= 120000 then
@@ -554,6 +583,9 @@ end
 
 local lastSendFailure, lastSendFailureAt
 local function sendAddonTrafficNow(prefix, message, distribution, target)
+    if prefix == "iRCLayerV1" and distribution == "CHANNEL"
+        and not (iRC.LayerSync and iRC.LayerSync:GetChannelTarget() and iRC.LayerSync:IsChannelTarget(target)
+            and iRC:IsGuildDirectoryPacketCurrent(message)) then return false end
     if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then return false end
     if prefix == "iRCGridV1" and not iRC:IsGuildDirectoryPacketCurrent(message) then return false end
     if chatMessagingLocked() then return false, true end
@@ -570,6 +602,9 @@ local function sendAddonTrafficNow(prefix, message, distribution, target)
     -- WoW returns an enum, not a boolean. Nonzero error codes are truthy in
     -- Lua, so testing only the return value silently discarded failed sends.
     local sent = ok and readable and (result == true or result == (results.Success or 0))
+    if prefix == "iRCLayerV1" and distribution == "CHANNEL" and iRC.LayerSync then
+        iRC.LayerSync:OnChannelSendResult(sent, readable and result or nil, kind)
+    end
     if sent and prefix == "iRCLayerV1" and iRC.LayerSync and iRC.LayerSync.OnPacketSent then
         iRC.LayerSync:OnPacketSent(kind, message, distribution, target)
     end
@@ -670,6 +705,11 @@ end
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
     if self:IsSecretValue(prefix) or self:IsSecretValue(message)
         or self:IsSecretValue(distribution) or self:IsSecretValue(target) then return false end
+    -- Layer traffic on the existing channel uses only the addon-message API.
+    -- Recheck its destination and server ruleset when queued packets are sent.
+    if prefix == "iRCLayerV1" and distribution == "CHANNEL"
+        and not (self.LayerSync and self.LayerSync:GetChannelTarget() and self.LayerSync:IsChannelTarget(target)
+            and self:IsGuildDirectoryPacketCurrent(message)) then return false end
     if distribution == "WHISPER" and self:IsAddonWhisperTargetUnavailable(target) then return false end
     message = tostring(message or "")
     if #message > 255 then
@@ -1050,7 +1090,7 @@ local DEFAULT_SETTINGS = {
     showGuildMap = true,
     guildMapPinSize = 12,
     shareGuildMapPosition = true,
-    showLayerPanel = false,
+    showLayerPanel = true,
     layerPanelPoint = "TOP",
     layerPanelRelativePoint = "TOP",
     layerPanelX = 0,
@@ -1136,6 +1176,7 @@ iRC.GuildHomepageIcons = {
 }
 
 iRC.DefaultGuildFoundTradeExceptions = {
+    outgoingMail = false,
     conjured = false, healthstones = false, questItems = false,
     customItems = false, lockpickOutgoing = false, lockpickIncoming = false,
     warlockSummons = false, magePortals = false,
@@ -1639,12 +1680,6 @@ function iRC:GetSettings()
         return startupSettings
     end
     local settings = ensureAccountSettingsStore()
-    -- Retire the old default-on indicator once. A later manual opt-in stays
-    -- enabled across reloads while the experimental reader is being tested.
-    if settings.experimentalLayerPanelInitialized ~= true then
-        settings.showLayerPanel = false
-        settings.experimentalLayerPanelInitialized = true
-    end
     for key, value in pairs(DEFAULT_SETTINGS) do
         if settings[key] == nil then
             settings[key] = value

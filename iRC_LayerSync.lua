@@ -11,6 +11,8 @@ local LIFETIME, CHUNK_SIZE, MAX_PARTS = 300, 120, 192
 local requests, replies, transfers, sentBooks, reconciliations, relays = {}, {}, {}, {}, {}, {}
 local sequence = 0
 local lastVerificationAt
+local CHANNEL_NAME = "iRCCommsV1"
+local channelRejected = false
 local function now() return GetTime and GetTime() or 0 end
 local function key(name)
     if iRC:IsSecretValue(name) or type(name) ~= "string" then return "" end
@@ -76,8 +78,38 @@ local function nonce(update)
     return (update and "u" or "q") .. checksum(key(iRC:GetPlayerName()))
         .. string.format("%x%x", math.floor(now() * 1000) % 0xffffff, sequence % 0xffff)
 end
+local function channelId()
+    if type(GetChannelName) ~= "function" then return nil end
+    local ok, id = pcall(GetChannelName, CHANNEL_NAME)
+    if not ok or iRC:IsSecretValue(id) or type(id) ~= "number" or id <= 0 or id ~= math.floor(id) then return nil end
+    return tostring(id)
+end
+
+function Sync:GetChannelTarget()
+    if channelRejected or not iRC.GetGuildDirectoryScope or not iRC:GetGuildDirectoryScope() then return nil end
+    return channelId()
+end
+
+function Sync:IsChannelTarget(target)
+    if iRC:IsSecretValue(target) or target == nil then return false end
+    local id = channelId()
+    return id ~= nil and tostring(target) == id
+end
+
+function Sync:OnChannelSendResult(sent, result, kind)
+    local codes = Enum and Enum.SendAddonMessageResult or {}
+    if sent and kind == "LAYER_QUERY" then
+        iRC:DebugMsg("Layer query accepted by the addon-channel API on iRCCommsV1; server ruleset=" .. tostring(iRC:GetGuildDirectoryScope()) .. ".", 3)
+    end
+    if not sent and result == (codes.InvalidChatType or 4) and not channelRejected then
+        channelRejected = true
+        iRC:DebugMsg("Layer query on iRCCommsV1 was rejected by this client's addon-channel API; using guild/group/friends for this session.", 3)
+    end
+end
+
 local function channels()
     local result = {}
+    if Sync:GetChannelTarget() then result[#result + 1] = "CHANNEL" end
     if iRC.GetGuildKey and iRC:GetGuildKey() ~= nil then result[#result + 1] = "GUILD" end
     if iRC.GuildMap and iRC.GuildMap.GetLayerGroupDistribution then
         local distribution = iRC.GuildMap:GetLayerGroupDistribution()
@@ -86,6 +118,12 @@ local function channels()
     return result
 end
 local function send(message, distribution, target)
+    if distribution == "CHANNEL" then
+        target = target or Sync:GetChannelTarget()
+        local scope = iRC:GetGuildDirectoryScope()
+        if not target or not scope then return false end
+        message = message .. "\t@" .. scope
+    end
     if #message > 255 then return false end
     return iRC:SendAddonTraffic(PREFIX, message, distribution, target) == true
 end
@@ -108,11 +146,20 @@ local function notify(serverId, mapId, rows)
 end
 local answer
 local function sendBook(id, serverId, mapId, distribution, target, response)
+    local chunkSize = CHUNK_SIZE
+    if distribution == "CHANNEL" then
+        target = Sync:GetChannelTarget()
+        local scope = iRC:GetGuildDirectoryScope()
+        if not target or not scope then return false end
+        local header = table.concat({ "LAYER_BOOK", VERSION, id, serverId, mapId, MAX_PARTS, MAX_PARTS, "ffffffff", "" }, "\t")
+        chunkSize = math.min(chunkSize, 255 - #header - #scope - 2)
+        if chunkSize < 1 then return false end
+    end
     local rows = iRC.LayerRegistry:Export(serverId, mapId)
     if iRC.GuildMap and iRC.GuildMap.OnLayerRegistryMerged then iRC.GuildMap:OnLayerRegistryMerged(serverId, mapId, false) end
     local wire, identity = encode(rows), fingerprint(rows)
     if wire == "" then return false end
-    local hash, total = checksum(wire), math.ceil(#wire / CHUNK_SIZE)
+    local hash, total = checksum(wire), math.ceil(#wire / chunkSize)
     if total > MAX_PARTS then
         iRC:DebugMsg("Layer registry is too large to share for map " .. mapId .. ".", 2)
         return false
@@ -137,7 +184,7 @@ local function sendBook(id, serverId, mapId, distribution, target, response)
     local sent = false
     for part = 1, total do
         local packet = table.concat({ "LAYER_BOOK", VERSION, id, serverId, mapId, part, total, hash,
-            wire:sub((part - 1) * CHUNK_SIZE + 1, part * CHUNK_SIZE) }, "\t")
+            wire:sub((part - 1) * chunkSize + 1, part * chunkSize) }, "\t")
         if send(packet, distribution, target) then sent = true end
     end
     return sent
@@ -159,6 +206,8 @@ function Sync:IsExpectedReply(message, sender)
 end
 
 function Sync:AllowsPacket(kind, message, distribution, target)
+    if distribution == "CHANNEL" and (not self:GetChannelTarget() or not self:IsChannelTarget(target)
+        or not iRC:IsGuildDirectoryPacketCurrent(message)) then return false end
     local parts = fields(message)
     if parts[2] ~= VERSION then return false end
     local id, targetKey = parts[3], key(target)
@@ -208,11 +257,16 @@ function Sync:Request(layer)
     if not serverId or not mapId or not identityKey then return false end
     clean()
     local id = nonce(false)
-    local request = { serverId = serverId, mapId = mapId, identityKey = identityKey, peers = {}, peerNames = {}, responders = {}, startedAt = now(), expiresAt = now() + LIFETIME }
+    local request = { serverId = serverId, mapId = mapId, identityKey = identityKey, peers = {}, peerNames = {}, responders = {},
+        serverRuleset = iRC.GetGuildDirectoryScope and iRC:GetGuildDirectoryScope(), startedAt = now(), expiresAt = now() + LIFETIME }
     requests[id] = request
     local payload = table.concat({ "LAYER_QUERY", VERSION, id, serverId, mapId, identityKey }, "\t")
+    request.payload = payload
     local sent = false
-    for _, distribution in ipairs(channels()) do if send(payload, distribution) then sent = true end end
+    for _, distribution in ipairs(channels()) do
+        if distribution == "CHANNEL" then request.channelAsked = true end
+        if send(payload, distribution) then sent = true end
+    end
     if iRC.LayerPeers then
         for _, peer in ipairs(iRC.LayerPeers:GetCandidates(mapId, 3)) do
             local peerName = peer.name
@@ -225,6 +279,23 @@ function Sync:Request(layer)
     end
     iRC:DebugMsg("Estimated layer lookup started for " .. identityKey .. ".", 3)
     return sent or next(request.peers) ~= nil
+end
+
+function Sync:OnChannelReady()
+    if not self:GetChannelTarget() then return end
+    -- Login restores the channel after early NPC observations. Send the
+    -- outstanding question once when it joins, without starting a poll.
+    local latest
+    for _, request in pairs(requests) do
+        if not request.channelAsked and request.serverRuleset == iRC:GetGuildDirectoryScope()
+            and now() - request.startedAt <= 30 and request.expiresAt > now()
+            and (not iRC.GuildMap or not iRC.GuildMap.IsLayerLookupCurrent or iRC.GuildMap:IsLayerLookupCurrent(request))
+            and (not latest or request.startedAt > latest.startedAt) then latest = request end
+    end
+    if latest then
+        latest.channelAsked = true
+        send(latest.payload, "CHANNEL")
+    end
 end
 
 function Sync:Publish(layer)
@@ -255,6 +326,7 @@ end
 
 answer = function(context)
     if replies[context.key] ~= context or context.expiresAt <= now() or context.covered then return end
+    if context.serverRuleset and context.serverRuleset ~= iRC:GetGuildDirectoryScope() then return end
     if context.receivingUntil and context.receivingUntil > now() then
         if C_Timer and C_Timer.After then C_Timer.After(context.receivingUntil - now(), function() answer(context) end) end
         return
@@ -277,8 +349,12 @@ local function scheduleAnswer(context)
     if C_Timer and C_Timer.After then C_Timer.After(delay, function() answer(context) end) else answer(context) end
 end
 
-function Sync:Receive(message, distribution, sender)
+function Sync:Receive(message, distribution, sender, channelTarget)
     if iRC:HasSecretValues(message, distribution, sender) or type(message) ~= "string" or not iRC.LayerRegistry then return false end
+    if distribution == "CHANNEL" then
+        if not self:IsChannelTarget(channelTarget) or not iRC:IsGuildDirectoryPacketCurrent(message) then return false end
+        message = message:gsub("\t@[%w%-]+$", "")
+    end
     local parts = fields(message)
     if parts[2] ~= VERSION or not self:IsMessage(parts[1]) then return false end
     local id = parts[3]
@@ -297,6 +373,7 @@ function Sync:Receive(message, distribution, sender)
             iRC.GuildMap:RefreshLocalLayerEvidence()
         end
         local context = { key = contextKey, id = id, sender = sender, distribution = distribution,
+            serverRuleset = distribution == "CHANNEL" and iRC:GetGuildDirectoryScope() or nil,
             serverId = serverId, mapId = mapId, identityKey = identityKey, createdAt = now(), expiresAt = now() + LIFETIME }
         replies[contextKey] = context
         scheduleAnswer(context)
@@ -394,6 +471,7 @@ function Sync:Receive(message, distribution, sender)
                 -- does not broadcast the identical correction at once.
                 local responseKey = "merge:" .. id .. ":" .. serverId .. ":" .. mapId .. ":" .. distribution
                 local response = { key = responseKey, id = id, sender = sender, distribution = distribution,
+                    serverRuleset = distribution == "CHANNEL" and iRC:GetGuildDirectoryScope() or nil,
                     serverId = serverId, mapId = mapId, identityKey = rows[1].identityKey, createdAt = now(), expiresAt = now() + LIFETIME }
                 replies[responseKey] = response
                 scheduleAnswer(response)
@@ -446,6 +524,8 @@ function Sync:Receive(message, distribution, sender)
             end
         end
     end
-    iRC:DebugMsg("Estimated layer registry received from " .. tostring(sender) .. ": " .. #rows .. " world references for map " .. mapId .. ".", 3)
+    iRC:DebugMsg("Estimated layer registry received from " .. tostring(sender)
+        .. (distribution == "CHANNEL" and " via iRCCommsV1 [" .. tostring(iRC:GetGuildDirectoryScope()) .. "]" or "")
+        .. ": " .. #rows .. " world references for map " .. mapId .. ".", 3)
     return true
 end

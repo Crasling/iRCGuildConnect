@@ -2,6 +2,15 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 local L = iRC.L
+local COMMUNITY_INVITE_URL = "https://www.worldofwarcraft.com/invite/3d423YnU7rA?region=EU&faction=Horde"
+
+local function CanShowCommunityInvite()
+    if type(GetCurrentRegion) ~= "function" or type(UnitFactionGroup) ~= "function" then return false end
+    local regionOK, region = pcall(GetCurrentRegion)
+    if not regionOK or iRC:IsSecretValue(region) or region ~= 3 then return false end
+    local factionOK, faction = pcall(UnitFactionGroup, "player")
+    return factionOK and not iRC:IsSecretValue(faction) and faction == "Horde"
+end
 
 -- Blizzard Settings panel and guild-management pages
 --
@@ -1480,7 +1489,7 @@ local tradeExceptionDisplayRows = {}
 
 local function GetActiveTradeExceptionGroups()
     local rules, settings = iRC:GetConnectionRules(), iRC:GetGuildFoundTradeExceptionSettings()
-    if not rules.guildFoundTradeExceptions then return {} end
+    if not iRC:IsGuildConnectionActive() or not rules.guildFoundTradeExceptions then return {} end
     local definitions = {
         { setting = "conjured", items = "conjured", label = L.GUILD_FOUND_EXCEPTION_CONJURED },
         { setting = "healthstones", items = "healthstones", label = L.GUILD_FOUND_EXCEPTION_HEALTHSTONES },
@@ -1489,6 +1498,9 @@ local function GetActiveTradeExceptionGroups()
         { setting = "lockpickIncoming", items = "lockpickIncoming", label = L.GUILD_FOUND_EXCEPTION_LOCKPICK_IN },
     }
     local groups = {}
+    if settings.outgoingMail == true then
+        groups[#groups + 1] = { label = L.GUILD_FOUND_EXCEPTION_OUTGOING_MAIL_ALLOWED, items = {} }
+    end
     for _, definition in ipairs(definitions) do
         local items = {}
         if settings[definition.setting] == true then
@@ -1548,14 +1560,20 @@ local function RefreshTradeExceptionPopup(groups)
     tradeExceptionContent:SetHeight(math.max(1, yOffset))
 end
 
+function iRC:ShowGuildFoundExceptions()
+    if not self:IsGuildConnectionActive() then return end
+    RefreshTradeExceptionPopup()
+    tradeExceptionScroll:SetVerticalScroll(0)
+    tradeExceptionPopup:Show()
+    tradeExceptionPopup:Raise()
+end
+
 readOnlyRules.tradeExceptionsButton = CreateFrame("Button", nil, readOnlyRules, "UIPanelButtonTemplate")
 readOnlyRules.tradeExceptionsButton:SetSize(190, 25)
 readOnlyRules.tradeExceptionsButton:SetPoint("TOPLEFT", readOnlyRules.rules, "BOTTOMLEFT", 0, -12)
 readOnlyRules.tradeExceptionsButton:SetText(L.RULES_TRADE_EXCEPTIONS_OPEN)
 readOnlyRules.tradeExceptionsButton:SetScript("OnClick", function()
-    RefreshTradeExceptionPopup()
-    tradeExceptionPopup:Show()
-    tradeExceptionPopup:Raise()
+    iRC:ShowGuildFoundExceptions()
 end)
 readOnlyRules.tradeExceptionsButton:Hide()
 readOnlyRules:Hide()
@@ -2392,17 +2410,60 @@ do
     local descriptionHeight = math.max(14, aboutDescription:GetStringHeight())
     y = y - descriptionHeight - 8
 
-    _, y = CreateSectionHeader(aboutContent, L.DISCORD_HEADER, y)
+    local communityTop = y
+    local communitySection = CreateFrame("Frame", nil, aboutContent)
+    communitySection:SetPoint("TOPLEFT", aboutContent, "TOPLEFT", 0, communityTop)
+    communitySection:SetPoint("TOPRIGHT", aboutContent, "TOPRIGHT", 0, communityTop)
+    y = 0
+    _, y = CreateSectionHeader(communitySection, L.COMMUNITY_HEADER, y)
+    _, y = CreateInfoText(communitySection, L.COMMUNITY_DESCRIPTION, y, "GameFontHighlight")
+    local communityBox = CreateFrame("EditBox", nil, communitySection, "InputBoxTemplate")
+    local communityHint
+    _, y = CreateSettingsButton(communitySection, L.COMMUNITY_JOIN, 200, y - 2, function()
+        if not CanShowCommunityInvite() then return end
+        communityHint:SetText(L.COMMUNITY_COPY_HINT)
+        communityBox:SetText(COMMUNITY_INVITE_URL)
+        communityBox:SetFocus()
+        communityBox:HighlightText()
+    end, L.COMMUNITY_JOIN_DESCRIPTION)
+    communityHint = communitySection:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    communityHint:SetPoint("TOPLEFT", communitySection, "TOPLEFT", 25, y)
+    communityHint:SetWidth(470)
+    communityHint:SetHeight(30)
+    communityHint:SetJustifyH("LEFT")
+    communityHint:SetJustifyV("TOP")
+    communityHint:SetText(L.COMMUNITY_LINK_HINT)
+    y = y - 32
+    communityBox:SetSize(470, 22)
+    communityBox:SetPoint("TOPLEFT", communitySection, "TOPLEFT", 25, y)
+    communityBox:SetAutoFocus(false)
+    communityBox:SetFontObject(GameFontHighlight)
+    communityBox:SetText(COMMUNITY_INVITE_URL)
+    communityBox:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+    communityBox:SetScript("OnEditFocusLost", function(self)
+        self:HighlightText(0, 0)
+        self:SetText(COMMUNITY_INVITE_URL)
+    end)
+    communityBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    communityBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    y = y - 32
+    local communityHeight = math.abs(y)
+
+    local aboutFooter = CreateFrame("Frame", nil, aboutContent)
+    aboutFooter:SetPoint("TOPLEFT", communitySection, "BOTTOMLEFT", 0, 0)
+    aboutFooter:SetPoint("TOPRIGHT", communitySection, "BOTTOMRIGHT", 0, 0)
+    y = 0
+    _, y = CreateSectionHeader(aboutFooter, L.DISCORD_HEADER, y)
     y = y - 2
 
-    local discordDescription = aboutContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    discordDescription:SetPoint("TOPLEFT", aboutContent, "TOPLEFT", 25, y)
+    local discordDescription = aboutFooter:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    discordDescription:SetPoint("TOPLEFT", aboutFooter, "TOPLEFT", 25, y)
     discordDescription:SetText(L.DISCORD_LINK_MESSAGE)
     y = y - 16
 
-    local discordBox = CreateFrame("EditBox", nil, aboutContent, "InputBoxTemplate")
+    local discordBox = CreateFrame("EditBox", nil, aboutFooter, "InputBoxTemplate")
     discordBox:SetSize(280, 22)
-    discordBox:SetPoint("TOPLEFT", aboutContent, "TOPLEFT", 25, y)
+    discordBox:SetPoint("TOPLEFT", aboutFooter, "TOPLEFT", 25, y)
     discordBox:SetAutoFocus(false)
     discordBox:SetText(L.DISCORD_LINK)
     discordBox:SetFontObject(GameFontHighlight)
@@ -2414,22 +2475,35 @@ do
     discordBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     y = y - 30
 
-    _, y = CreateSectionHeader(aboutContent, "Links", y)
-    _, y = CreateInfoText(aboutContent, "GitHub: github.com/Crasling/iRCGuildConnect", y, "GameFontDisableSmall")
+    _, y = CreateSectionHeader(aboutFooter, "Links", y)
+    _, y = CreateInfoText(aboutFooter, "GitHub: github.com/Crasling/iRCGuildConnect", y, "GameFontDisableSmall")
 
     -- Translation credits are prepared here but intentionally hidden until
     -- iRC ships with additional maintained locales.
     local showTranslations = false
     if showTranslations then
-        _, y = CreateSectionHeader(aboutContent, L.TRANSLATIONS_HEADER, y - 6)
-        _, y = CreateInfoText(aboutContent, L.TRANSLATIONS_EMPTY, y, "GameFontDisableSmall")
+        _, y = CreateSectionHeader(aboutFooter, L.TRANSLATIONS_HEADER, y - 6)
+        _, y = CreateInfoText(aboutFooter, L.TRANSLATIONS_EMPTY, y, "GameFontDisableSmall")
     end
 
-    _, y = CreateSectionHeader(aboutContent, L.DEVELOPER_HEADER, y - 6)
-    debugModeCheck, y = CreateSettingsCheckbox(aboutContent, L.ENABLE_DEBUG_MODE, L.ENABLE_DEBUG_MODE_DESC, y,
+    _, y = CreateSectionHeader(aboutFooter, L.DEVELOPER_HEADER, y - 6)
+    debugModeCheck, y = CreateSettingsCheckbox(aboutFooter, L.ENABLE_DEBUG_MODE, L.ENABLE_DEBUG_MODE_DESC, y,
         function() return iRC:GetSettings().debugMode end,
         function(value) iRC:GetSettings().debugMode = value and true or false end)
-    aboutContent:SetHeight(math.abs(y) + 20)
+    local footerHeight = math.abs(y) + 20
+    aboutFooter:SetHeight(footerHeight)
+    local function RefreshCommunityVisibility()
+        local shown = CanShowCommunityInvite()
+        if not shown then communityBox:ClearFocus() end
+        communitySection:SetShown(shown)
+        communitySection:SetHeight(shown and communityHeight or 1)
+        aboutContent:SetHeight(math.abs(communityTop) + (shown and communityHeight or 1) + footerHeight)
+    end
+    aboutContent:HookScript("OnShow", RefreshCommunityVisibility)
+    communitySection:RegisterEvent("PLAYER_ENTERING_WORLD")
+    communitySection:RegisterUnitEvent("UNIT_FACTION", "player")
+    communitySection:SetScript("OnEvent", RefreshCommunityVisibility)
+    RefreshCommunityVisibility()
 end
 
 local companionAddons = {
@@ -2526,6 +2600,11 @@ do
     local exceptionTop = y - 4
     local exceptionCard, exceptionY = CreateManagementSettingsCard(guildFoundContent,
         L.GUILD_FOUND_TRADE_EXCEPTIONS_HEADER, L.GUILD_FOUND_TRADE_EXCEPTIONS_DESC, exceptionTop)
+    local outgoingMailCheck
+    outgoingMailCheck, exceptionY = CreateSettingsCheckbox(exceptionCard, L.GUILD_FOUND_EXCEPTION_OUTGOING_MAIL,
+        L.GUILD_FOUND_EXCEPTION_OUTGOING_MAIL_DESC, exceptionY,
+        function() return iRC:GetGuildFoundTradeExceptionSettings().outgoingMail end,
+        function(value) iRC:SetGuildFoundTradeException("outgoingMail", value) end, 0, true)
     local itemListFrame = CreateFrame("Frame", nil, exceptionCard, "BackdropTemplate")
     itemListFrame:SetPoint("TOPLEFT", exceptionCard, "TOPLEFT", 12, exceptionY - 2)
     itemListFrame:SetPoint("TOPRIGHT", exceptionCard, "TOPRIGHT", -12, exceptionY - 2)
@@ -2642,6 +2721,9 @@ do
         local settings = iRC:GetGuildFoundTradeExceptionSettings()
         local canEdit = iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("tradeExceptions")
             and iRC:GetConnectionRules().guildFoundTradeExceptions == true
+        outgoingMailCheck:Refresh()
+        outgoingMailCheck:SetEnabled(canEdit and true or false)
+        outgoingMailCheck:SetAlpha(canEdit and 1 or 0.45)
         local offset = 0
         for _, category in ipairs(categories) do
             local categoryEnabled = settings[category.setting] == true
@@ -3648,6 +3730,7 @@ local function RestorePanelScrollAfterLayout(panel, position)
 end
 
 iRC.RefreshOptionsIfShown = function()
+    if tradeExceptionPopup:IsShown() then RefreshTradeExceptionPopup() end
     -- Homepage Save invokes several existing setters. Refresh once after the
     -- batch rather than rebuilding every settings page between those setters.
     if homepageDescriptionUI.saving then return end

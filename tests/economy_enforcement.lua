@@ -4,10 +4,15 @@ local tradePartner = "Outside"
 local tradeOpen, exceptionEnabled, playerTradeLink = true, false, nil
 local targetTradeLink, playerOffer, targetOffer, typedOffer = nil, 0, 0, 0
 local mailSubject, mailLookups, economyActive = "", 0, true
+local outgoingMailEnabled, mailCOD = false, 0
+function GetSendMailCOD() return mailCOD end
 local audits, discrepancies, frames = {}, {}, {}
+local completedInbox, completeOnTake, eventFrame = {}, {}, nil
+local attachmentSender = "Guildie"
 
 local function control()
-    return { active = true, SetEnabled = function(self, value) self.active = value and true or false end }
+    return { active = true, SetEnabled = function(self, value) self.active = value and true or false end,
+        Enable = function(self) self.active = true end }
 end
 
 UIParent = {}
@@ -50,9 +55,15 @@ function GetTradePlayerItemLink(slot) if slot == 1 then return playerTradeLink e
 function GetTradeTargetItemLink(slot) if slot == 1 then return targetTradeLink end end
 function AcceptTrade() accepted = accepted + 1 end
 function SendMail() sentMail = sentMail + 1 end
-function TakeInboxItem() inboxItems = inboxItems + 1 end
-function TakeInboxMoney() inboxMoney = inboxMoney + 1 end
-function AutoLootMailItem() autoLoot = autoLoot + 1 end
+local function finishPickup(index)
+    if completeOnTake[index] then
+        completedInbox[index] = true
+        if completeOnTake[index] == "refresh-before-hook" then eventFrame.OnEvent(nil, "MAIL_INBOX_UPDATE") end
+    end
+end
+function TakeInboxItem(index) inboxItems = inboxItems + 1; finishPickup(index) end
+function TakeInboxMoney(index) inboxMoney = inboxMoney + 1; finishPickup(index) end
+function AutoLootMailItem(index) autoLoot = autoLoot + 1; finishPickup(index) end
 function hooksecurefunc(owner, method, callback)
     if type(owner) ~= "table" then owner, method, callback = _G, owner, method end
     local original = owner[method]
@@ -63,9 +74,14 @@ function hooksecurefunc(owner, method, callback)
     end
 end
 function GetInboxHeaderInfo(index)
+    if completedInbox[index] then return end
     if index == 1 then return 1, nil, "Outside", nil, 0, 0, nil, true, nil, nil, nil, true, false end
     if index == 2 then return 1, nil, "Guildie", nil, 100, 0, nil, false, nil, nil, nil, true, false end
     if index == 3 then return 1, nil, "Quest NPC", nil, 0, 0, nil, true, nil, nil, nil, false, false end
+    if index == 5 then return 1, nil, attachmentSender, nil, 0, 0, nil, 1, nil, nil, nil, true, false end
+    if index == 6 then return 1, nil, nil, nil, 1, 0, nil, false, nil, nil, nil, true, false end
+    if index == 7 then return 1, nil, "", nil, 0, 0, nil, true, nil, nil, nil, true, false end
+    if index == 8 then return nil, nil, nil, nil, 0, 0, nil, 0 end
     return 134939, nil, "Auction House", nil, 100, 0, nil, false, nil, nil, nil, false, false
 end
 function GetInboxInvoiceInfo(index) if index == 4 then return "seller" end end
@@ -80,7 +96,8 @@ local iRC = {
     IsGuildMemberName = function(_, name) return name == "Guildie" end,
     GetConnectionRules = function() return { guildFoundOnly = true, guildFoundTradeExceptions = exceptionEnabled } end,
     GetGuildFoundTradeExceptionSettings = function()
-        return { conjured = exceptionEnabled, items = { conjured = { [5350] = exceptionEnabled } } }
+        return { conjured = exceptionEnabled, outgoingMail = outgoingMailEnabled,
+            items = { conjured = { [5350] = exceptionEnabled } } }
     end,
     GetSelfFoundState = function() return false end,
     GetGuildFoundTradeStatus = function(_, name, allowOffline)
@@ -101,6 +118,7 @@ local iRC = {
         return true
     end,
     DebugMsg = function() end,
+    IsSecretValue = function() return false end,
     RaceLockedSync = {
         FlagMonitoringDiscrepancy = function(_, reason, beforeMoney, afterMoney)
             discrepancies[#discrepancies + 1] = { reason = reason, beforeMoney = beforeMoney, afterMoney = afterMoney }
@@ -112,7 +130,7 @@ local iRC = {
 local private = { iRC = iRC }
 assert(loadfile("iRC_Enforcement.lua"))("iRC", private)
 local enforcement = assert(iRC.Enforcement)
-local eventFrame = frames[#frames]
+eventFrame = frames[#frames]
 enforcement:InstallMailAPIGuards()
 
 enforcement:UpdateTradeRestriction()
@@ -243,6 +261,30 @@ SendMailFrame_CanSend(); SendMailFrame_EnableSendMailButton()
 MailFrame:OnEvent("MAIL_SUCCESS"); MailFrame:OnEvent("MAIL_FAILED")
 assert(not SendMailMailButton.active and #notices == priorNotices and #audits == priorAudits,
     "a finalized non-guild name remains disabled without inventing a send attempt")
+for _, edit in ipairs({ "subject", "body", "money", "attachment" }) do
+    SendMailMailButton:SetEnabled(true)
+    assert(not SendMailMailButton.active, edit .. " updates cannot directly enable Send for an unverified recipient")
+    SendMailMailButton:Enable()
+    assert(not SendMailMailButton.active, edit .. " updates cannot use Enable to bypass recipient verification")
+end
+assert(#notices == priorNotices and #audits == priorAudits,
+    "editing a restricted draft does not create warning or audit spam")
+local normalGuildMembership = iRC.IsGuildMemberName
+iRC.IsGuildMemberName = function(_, name) return name == "Unverified Guildie" or name == "Guildie" end
+SendMailNameEditBox:SetText("Unverified Guildie"); SendMailNameEditBox.hooks.OnEditFocusLost()
+SendMailMailButton:Enable(); SendMailMailButton:SetEnabled(true)
+assert(not SendMailMailButton.active, "guild membership alone never enables Send without verification")
+iRC.IsGuildMemberName = normalGuildMembership
+SendMailNameEditBox:SetText("Outside"); SendMailNameEditBox.hooks.OnEditFocusLost()
+local normalMailStatus = iRC.GetGuildFoundTradeStatus
+iRC.GetGuildFoundTradeStatus = function() error("verification unavailable") end
+SendMailMailButton:Enable()
+assert(not SendMailMailButton.active, "an unreadable verification disables Send without recursive hooks")
+iRC.GetGuildFoundTradeStatus = normalMailStatus
+SendMailNameEditBox:SetText("Guildie"); SendMailNameEditBox.hooks.OnEditFocusLost()
+SendMailMailButton:Enable()
+assert(SendMailMailButton.active, "the guard recovers when the verified recipient becomes readable again")
+SendMailNameEditBox:SetText("Outside"); SendMailNameEditBox.hooks.OnEditFocusLost()
 
 -- Success belongs to the submitted recipient, not a field subsequently reset
 -- by Blizzard or changed by the player before the reply arrives.
@@ -267,6 +309,60 @@ SendMail("Guildie")
 MailFrame:OnEvent("MAIL_FAILED")
 eventFrame.OnEvent(nil, "MAIL_FAILED")
 assert(SendMailMailButton.active, "an eligible recipient can retry after a native send failure in either event order")
+-- The outgoing exception never authorizes incoming mail or ordinary trades.
+exceptionEnabled, outgoingMailEnabled = true, true
+SendMailNameEditBox:SetText("Outside")
+assert(not SendMailMailButton.active, "the exception still waits for the recipient to be finalized")
+SendMailNameEditBox.hooks.OnEditFocusLost()
+assert(SendMailMailButton.active, "an enabled exception allows a finalized external recipient")
+SendMailMailButton:SetEnabled(true); SendMailMailButton:Enable()
+assert(SendMailMailButton.active, "direct mail refreshes preserve an approved outgoing exception")
+SendMailCODButton = { GetChecked = function() return true end }
+SendMailMailButton:Enable()
+assert(not SendMailMailButton.active, "selecting C.O.D. blocks external sends before the typed amount reaches GetSendMailCOD")
+SendMailCODButton = nil
+SendMailFrame_CanSend()
+assert(SendMailMailButton.active, "switching back to outgoing mail restores the approved exception")
+local exceptionAuditCount, exceptionDiscrepancies = #audits, #discrepancies
+SendMail("Outside")
+assert(#audits == exceptionAuditCount and not SendMailMailButton.active, "approval is recorded on success, not submission")
+SendMailNameEditBox:SetText("")
+eventFrame.OnEvent(nil, "MAIL_CLOSED")
+eventFrame.OnEvent(nil, "MAIL_SEND_SUCCESS")
+assert(#discrepancies == exceptionDiscrepancies and #audits == exceptionAuditCount + 1
+    and audits[#audits].action == "MAIL_EXCEPTION_APPROVED" and audits[#audits].target == "Outside",
+    "success keeps the submitted exception recipient even after the mailbox closes")
+SendMail("Outside"); eventFrame.OnEvent(nil, "MAIL_FAILED")
+eventFrame.OnEvent(nil, "MAIL_SEND_SUCCESS")
+assert(#audits == exceptionAuditCount + 1, "failure clears a pending exception approval")
+SendMailNameEditBox:SetText("Outside"); SendMailNameEditBox.hooks.OnEditFocusLost()
+mailSubject = ""; SendMailFrame_CanSend()
+assert(not SendMailMailButton.active, "the exception preserves native subject checks")
+mailSubject = "Test"; SendMailFrame_CanSend()
+mailCOD = 100; eventFrame.OnEvent(nil, "MAIL_SEND_INFO_UPDATE")
+assert(not SendMailMailButton.active, "C.O.D. cannot turn an outgoing exception into external income")
+local normalCOD = GetSendMailCOD
+GetSendMailCOD = function() error("unavailable mail value") end
+enforcement:UpdateMailRestriction()
+assert(not SendMailMailButton.active, "an unavailable C.O.D. value cannot authorize an exception")
+GetSendMailCOD = function() return nil end
+enforcement:UpdateMailRestriction()
+assert(not SendMailMailButton.active, "an unreadable C.O.D. value keeps the external send disabled")
+GetSendMailCOD = normalCOD
+mailCOD = 0; eventFrame.OnEvent(nil, "MAIL_SEND_INFO_UPDATE")
+assert(SendMailMailButton.active, "removing C.O.D. restores the allowed outgoing send")
+exceptionEnabled = false; enforcement:UpdateMailRestriction()
+assert(not SendMailMailButton.active, "the saved exception has no effect while the master rule is off")
+exceptionEnabled = true; outgoingMailEnabled = false; enforcement:UpdateMailRestriction()
+assert(not SendMailMailButton.active, "turning the exception off restores verified-recipient restrictions")
+outgoingMailEnabled = true
+tradePartner, playerTradeLink = "Outside", nil
+enforcement:UpdateTradeRestriction()
+assert(not TradeFrameTradeButton.active, "the outgoing-mail exception does not authorize trades")
+OpenMailFrame.openMailID = 1; enforcement:UpdateInboxRestriction()
+assert(not OpenMailAttachmentButton1.active, "the outgoing-mail exception does not authorize external incoming attachments")
+exceptionEnabled, outgoingMailEnabled = false, false
+
 economyActive = false
 SendMailNameEditBox:SetText("Outside"); SendMailFrame_CanSend()
 assert(SendMailMailButton.active, "characters outside Guild Found keep Blizzard's normal send behavior")
@@ -287,4 +383,67 @@ assert(OpenMailMoneyButton.active == true and OpenMailPackageButton.active == tr
 
 assert(AcceptTrade ~= nil and SendMail ~= nil and TakeInboxItem ~= nil and TakeInboxMoney ~= nil
     and AutoLootMailItem ~= nil, "Blizzard economy APIs remain untouched")
+
+for _, ordering in ipairs({ "refresh-before-hook", "refresh-after-hook" }) do
+  for _, pickup in ipairs({ { TakeInboxItem, 5 }, { TakeInboxMoney, 2 }, { AutoLootMailItem, 5 } }) do
+    local index = pickup[2]
+    eventFrame.OnEvent(nil, "MAIL_CLOSED")
+    completedInbox[index], completeOnTake[index] = nil, ordering
+    OpenMailFrame.openMailID = index
+    enforcement:UpdateInboxRestriction()
+    assert(OpenMailAttachmentButton1.active, "verified guild attachments remain collectable")
+    local beforeNotices, beforeAudits, beforeFlags = #notices, #audits, #discrepancies
+    pickup[1](index, 1)
+    eventFrame.OnEvent(nil, "MAIL_INBOX_UPDATE")
+    assert(#notices == beforeNotices and #audits == beforeAudits and #discrepancies == beforeFlags,
+        "the last authorized attachment becoming an empty header cannot warn, audit or flag the player: " .. ordering)
+    assert(not OpenMailAttachmentButton1.active, "unavailable header data stays disabled during the transition")
+  end
+end
+completedInbox[5], attachmentSender, OpenMailFrame.openMailID = nil, "Outside", 5
+enforcement:UpdateInboxRestriction()
+assert(not OpenMailAttachmentButton1.active and enforcement:IsInboxMailRestricted(5),
+    "a new restricted mail reusing the same inbox slot cannot inherit the previous sender's approval")
+attachmentSender = "Guildie"
+eventFrame.OnEvent(nil, "MAIL_CLOSED")
+OpenMailFrame.openMailID = 8
+local beforeNotices, beforeAudits = #notices, #audits
+enforcement:UpdateInboxRestriction()
+assert(not OpenMailAttachmentButton1.active and #notices == beforeNotices and #audits == beforeAudits,
+    "an empty pending header is blocked silently; numeric zero is not an attachment")
+for _, index in ipairs({ 6, 7 }) do
+    OpenMailFrame.openMailID = index
+    enforcement:UpdateInboxRestriction()
+    assert(enforcement:IsInboxMailRestricted(index) and not OpenMailAttachmentButton1.active,
+        "unknown senders with actual money or attachments remain restricted")
+end
+eventFrame.OnEvent(nil, "MAIL_CLOSED")
+OpenMailFrame.openMailID = 1
+enforcement:UpdateInboxRestriction()
+local beforeFlags = #discrepancies
+completeOnTake[1] = "refresh-before-hook"
+TakeInboxItem(1, 1)
+assert(#discrepancies == beforeFlags + 1 and discrepancies[#discrepancies].reason == "INBOX_BLOCK_BYPASS",
+    "a restricted-mail bypass still retains its evidence when the native header disappears before the post-hook")
+beforeFlags = #discrepancies
+economyActive = false
+TakeInboxMoney(1)
+assert(#discrepancies == beforeFlags, "old inbox evidence cannot enforce restrictions after Guild Found is paused")
+economyActive = true
+eventFrame.OnEvent(nil, "MAIL_CLOSED")
+OpenMailFrame.openMailID = nil
+InboxFrame = { OpenAllMail = control() }
+function GetInboxNumItems() return 1 end
+local inboxHeader = GetInboxHeaderInfo
+GetInboxHeaderInfo = function() return nil, nil, nil, nil, 0, 0, nil, 0 end
+beforeNotices, beforeAudits = #notices, #audits
+enforcement:UpdateInboxRestriction()
+assert(not InboxFrame.OpenAllMail.active and #notices == beforeNotices and #audits == beforeAudits,
+    "Open All stays blocked without warnings while an inbox header is unavailable")
+completedInbox[2] = nil
+GetInboxHeaderInfo = function() return inboxHeader(2) end
+enforcement:UpdateInboxRestriction()
+assert(InboxFrame.OpenAllMail.active, "Open All becomes available once the actual verified sender returns")
+GetInboxHeaderInfo = inboxHeader
+print("PASS: completed guild-mail pickups stay quiet in either event order; pending mail stays disabled and real bypass evidence remains")
 print("Guild Found economy enforcement tests passed.")
