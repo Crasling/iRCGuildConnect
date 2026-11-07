@@ -2774,7 +2774,7 @@ do
         verification = "Verification decisions", presence = "Presence checks and automatic warnings",
         incidents = "Incident history", tradeExceptions = "Guild-Found trade exceptions",
         notifications = "Welcome notifications", homepage = "Guild Homepage contacts",
-        rosterHistory = "Guild Log and member history", identity = "Assign member mains and alts",
+        rosterHistory = "Detailed member history and note changes", identity = "Assign member mains and alts",
         memberRemoval = "Review and remove inactive members",
         rankManagement = "Promote and demote guild members",
         recruitment = "Search for and invite guild recruits",
@@ -3131,11 +3131,20 @@ if iRC:IsTestAdmin() then
     _, y = CreateSubcategoryHeader(adminContent, L.TEST_ADMIN_ONLINE_HEADER, y - 5)
     _, y = CreateInfoText(adminContent, L.TEST_ADMIN_ONLINE_DESC, y, "GameFontDisableSmall")
     local adminOnlineStatus, adminOnlineRows = nil, {}
-    _, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ONLINE_REFRESH, 190, y - 3, function()
+    local showFeedbackHistory, RefreshAdminOnlineUsers = false, nil
+    local onlineRefreshButton
+    onlineRefreshButton, y = CreateSettingsButton(adminContent, L.TEST_ADMIN_ONLINE_REFRESH, 190, y - 3, function()
         if not iRC.RaceGrid or not iRC.RaceGrid:RequestAdminOnlineUsers() then
             iRC:Print(L.TEST_ADMIN_ONLINE_UNAVAILABLE)
         end
     end, L.TEST_ADMIN_ONLINE_DESC)
+    local feedbackHistoryButton = CreateSettingsButton(adminContent, L.TEST_ADMIN_FEEDBACK_HISTORY, 190, y + 34, function(self)
+        showFeedbackHistory = not showFeedbackHistory
+        self:SetText(showFeedbackHistory and L.TEST_ADMIN_FEEDBACK_ONLINE or L.TEST_ADMIN_FEEDBACK_HISTORY)
+        if RefreshAdminOnlineUsers then RefreshAdminOnlineUsers() end
+    end, L.TEST_ADMIN_FEEDBACK_DESC)
+    feedbackHistoryButton:ClearAllPoints()
+    feedbackHistoryButton:SetPoint("LEFT", onlineRefreshButton, "RIGHT", 10, 0)
     adminOnlineStatus = adminContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     adminOnlineStatus:SetPoint("TOPLEFT", adminContent, "TOPLEFT", 25, y - 1)
     adminOnlineStatus:SetPoint("RIGHT", adminContent, "RIGHT", -20, 0)
@@ -3162,13 +3171,15 @@ if iRC:IsTestAdmin() then
         label:SetPoint("LEFT", parent, "LEFT", point, 0)
         label:SetWidth(width)
         label:SetJustifyH("LEFT")
+        label:SetWordWrap(false)
         label:SetText(text)
         label:SetTextColor(ORANGE[1], ORANGE[2], ORANGE[3])
         return label
     end
-    CreateOnlineColumn(onlineHeader, "Player", 5, 175)
-    CreateOnlineColumn(onlineHeader, "Version", 185, 85)
-    CreateOnlineColumn(onlineHeader, "Guild", 275, 205)
+    CreateOnlineColumn(onlineHeader, "Player", 5, 165)
+    local onlineVersionHeader = CreateOnlineColumn(onlineHeader, "Version", 175, 65)
+    local onlineGuildHeader = CreateOnlineColumn(onlineHeader, "Guild", 245, 125)
+    CreateOnlineColumn(onlineHeader, L.TEST_ADMIN_FEEDBACK_LAST, 375, 105)
     local onlineScroll = CreateFrame("ScrollFrame", nil, onlineList, "UIPanelScrollFrameTemplate")
     iRC:StyleScrollFrame(onlineScroll)
     onlineScroll:SetPoint("TOPLEFT", onlineList, "TOPLEFT", 5, -25)
@@ -3183,10 +3194,13 @@ if iRC:IsTestAdmin() then
     end)
     y = y - 193
 
-    local function RefreshAdminOnlineUsers()
+    RefreshAdminOnlineUsers = function()
         if not iRC.RaceGrid then return end
         local rows, stats = iRC.RaceGrid:GetAdminOnlineUsers()
-        if (stats.total or 0) == 0 then
+        if showFeedbackHistory then
+            rows = iRC.AdminFeedback:GetHistory()
+            adminOnlineStatus:SetText(#rows > 0 and iRC:Text("TEST_ADMIN_FEEDBACK_STATS", #rows) or L.TEST_ADMIN_FEEDBACK_EMPTY)
+        elseif (stats.total or 0) == 0 then
             adminOnlineStatus:SetText(L.TEST_ADMIN_ONLINE_EMPTY)
         else
             local coverage = stats.total > 0 and stats.known * 100 / stats.total or 0
@@ -3207,6 +3221,8 @@ if iRC:IsTestAdmin() then
             adminOnlineStatus:SetText(iRC:Text("TEST_ADMIN_ONLINE_STATS", stats.total, stats.known, coverage) .. "\n"
                 .. iRC:Text("TEST_ADMIN_ONLINE_VERSIONS", #labels > 0 and table.concat(labels, ", ") or L.TEST_ADMIN_ONLINE_UNKNOWN))
         end
+        onlineVersionHeader:SetText(showFeedbackHistory and L.TEST_ADMIN_FEEDBACK_COUNT or "Version")
+        onlineGuildHeader:SetText(showFeedbackHistory and L.TEST_ADMIN_FEEDBACK_SENDER or "Guild")
         for index, data in ipairs(rows) do
             local row = adminOnlineRows[index]
             if not row then
@@ -3219,11 +3235,14 @@ if iRC:IsTestAdmin() then
                 row.highlight:SetAllPoints()
                 row.highlight:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.14)
                 row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                row.name:SetPoint("LEFT", row, "LEFT", 5, 0); row.name:SetWidth(175); row.name:SetJustifyH("LEFT")
+                row.name:SetPoint("LEFT", row, "LEFT", 5, 0); row.name:SetWidth(165); row.name:SetJustifyH("LEFT")
                 row.version = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                row.version:SetPoint("LEFT", row, "LEFT", 185, 0); row.version:SetWidth(85); row.version:SetJustifyH("LEFT")
+                row.version:SetPoint("LEFT", row, "LEFT", 175, 0); row.version:SetWidth(65); row.version:SetJustifyH("LEFT")
                 row.guild = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                row.guild:SetPoint("LEFT", row, "LEFT", 275, 0); row.guild:SetWidth(205); row.guild:SetJustifyH("LEFT")
+                row.guild:SetPoint("LEFT", row, "LEFT", 245, 0); row.guild:SetWidth(125); row.guild:SetJustifyH("LEFT")
+                row.feedback = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                row.feedback:SetPoint("LEFT", row, "LEFT", 375, 0); row.feedback:SetWidth(105); row.feedback:SetJustifyH("LEFT")
+                for _, text in ipairs({ row.name, row.version, row.guild, row.feedback }) do text:SetWordWrap(false) end
                 row:SetScript("OnClick", function(self, mouseButton)
                     if mouseButton == "RightButton" and self.playerName then
                         iRC:OpenWhisper(self.playerName, L.TEST_ADMIN_ONLINE_WHISPER_MESSAGE)
@@ -3234,6 +3253,20 @@ if iRC:IsTestAdmin() then
                     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                     GameTooltip:SetText(iRC:FormatPlayerName(self.playerName), 1, 0.82, 0)
                     GameTooltip:AddLine(iRC:Text("TEST_ADMIN_ONLINE_WHISPER", iRC:FormatPlayerName(self.playerName)), 1, 1, 1)
+                    local entry = iRC.AdminFeedback:GetEntry(self.playerName)
+                    if entry then
+                        GameTooltip:AddLine(" ")
+                        GameTooltip:AddLine(iRC:Text("TEST_ADMIN_FEEDBACK_TOTAL", entry.count), 0.5, 1, 0.5)
+                        GameTooltip:AddLine(iRC:Text("TEST_ADMIN_FEEDBACK_FIRST", date("%Y-%m-%d %H:%M:%S", entry.sends[1].timestamp)), 1, 1, 1)
+                        GameTooltip:AddLine(L.TEST_ADMIN_FEEDBACK_RECENT, 1, 0.82, 0)
+                        for index = #entry.sends, math.max(1, #entry.sends - 4), -1 do
+                            local sent = entry.sends[index]
+                            GameTooltip:AddLine(date("%Y-%m-%d %H:%M:%S", sent.timestamp)
+                                .. " - " .. iRC:FormatPlayerName(sent.sender), 1, 1, 1)
+                        end
+                    else
+                        GameTooltip:AddLine(L.TEST_ADMIN_FEEDBACK_NEVER, 0.65, 0.65, 0.65)
+                    end
                     GameTooltip:Show()
                 end)
                 row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -3245,13 +3278,20 @@ if iRC:IsTestAdmin() then
             row.bg:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.035 or 0.075)
             row.playerName = data.name
             row.name:SetText(iRC:FormatPlayerName(data.name))
-            row.version:SetText(data.version or L.TEST_ADMIN_ONLINE_UNKNOWN)
+            local feedback = iRC.AdminFeedback:GetEntry(data.name)
+            row.version:SetText(showFeedbackHistory and tostring(data.count) or data.version or L.TEST_ADMIN_ONLINE_UNKNOWN)
             row.version:SetTextColor(data.version and 0.35 or 0.65, data.version and 1 or 0.65, data.version and 0.40 or 0.65)
-            row.guild:SetText(data.guildName ~= "" and data.guildName or "-")
+            local lastSend = feedback and feedback.sends[#feedback.sends]
+            row.guild:SetText(showFeedbackHistory and lastSend and iRC:FormatPlayerName(lastSend.sender)
+                or data.guildName and data.guildName ~= "" and data.guildName or "-")
+            row.feedback:SetText(feedback and date("%d %b %H:%M", feedback.lastSent) or L.TEST_ADMIN_FEEDBACK_NEVER)
+            row.feedback:SetTextColor(feedback and 0.5 or 0.65, feedback and 1 or 0.65, feedback and 0.5 or 0.65)
             row:Show()
         end
         for index = #rows + 1, #adminOnlineRows do adminOnlineRows[index]:Hide() end
         onlineChild:SetHeight(math.max(1, #rows * 22))
+        local maximum = math.max(0, onlineChild:GetHeight() - onlineScroll:GetHeight())
+        if onlineScroll:GetVerticalScroll() > maximum then onlineScroll:SetVerticalScroll(maximum) end
     end
     _, y = CreateSubcategoryHeader(adminContent, L.TEST_ADMIN_TRAFFIC_HEADER, y - 5)
     local trafficStatus

@@ -173,12 +173,38 @@ local RACE_COLORS = {
     HUMAN = { 0.82, 0.62, 0.25 }, DWARF = { 0.74, 0.43, 0.18 }, NIGHTELF = { 0.56, 0.30, 0.78 }, GNOME = { 0.35, 0.68, 0.95 }, DRAENEI = { 0.45, 0.46, 0.90 },
     ORC = { 0.62, 0.18, 0.14 }, SCOURGE = { 0.43, 0.63, 0.50 }, TAUREN = { 0.56, 0.32, 0.18 }, TROLL = { 0.12, 0.62, 0.88 }, BLOODELF = { 0.84, 0.22, 0.24 },
     Unknown = { 0.45, 0.45, 0.45 },
+    SKYBORNE = { 0.65, 0.75, 0.95 },
 }
 
 local RACE_LABELS = {
     HUMAN = "Human", DWARF = "Dwarf", NIGHTELF = "Night Elf", GNOME = "Gnome", DRAENEI = "Draenei",
     ORC = "Orc", SCOURGE = "Undead", TAUREN = "Tauren", TROLL = "Troll", BLOODELF = "Blood Elf",
+    SKYBORNE = "Skyborne", UNKNOWN = "Unknown",
 }
+
+local function guildRaceDistribution(counts, total)
+    local rows = {}
+    for race, count in pairs(type(counts) == "table" and counts or {}) do
+        if type(count) == "number" and count > 0 then
+            rows[#rows + 1] = { race = race, label = RACE_LABELS[race] or race, total = count,
+                percent = total > 0 and math.floor(count / total * 100 + 0.5) or 0 }
+        end
+    end
+    table.sort(rows, function(a, b)
+        if (a.race == "UNKNOWN") ~= (b.race == "UNKNOWN") then return b.race == "UNKNOWN" end
+        if a.total ~= b.total then return a.total > b.total end
+        return a.label < b.label
+    end)
+    return rows
+end
+
+local function guildRaceSummary(counts, total)
+    local lines = {}
+    for _, row in ipairs(guildRaceDistribution(counts, tonumber(total) or 0)) do
+        lines[#lines + 1] = row.label .. ": " .. row.total .. " (" .. row.percent .. "%)"
+    end
+    return #lines > 0 and table.concat(lines, "   |   ") or "No race data reported yet."
+end
 
 local FACTION_STYLES = {
     Horde = { border = { 0.72, 0.18, 0.15, 1 }, background = { 0.13, 0.035, 0.03, 0.92 } },
@@ -557,6 +583,8 @@ local function makeRaceCard(parent)
     card.descriptionTitle:SetText(iRC:Text("GUILD_DIRECTORY_DESCRIPTION"))
     card.rulesTitle:SetText(iRC:Text("GUILD_STATS_ACTIVE_RULES"))
     card.classesTitle, card.detailStats = title(), body()
+    card.racesTitle, card.racesText = title(), body()
+    card.racesTitle:SetText("Race Distribution (all characters)")
     card.classText = body()
     card.classText:SetJustifyH("CENTER")
     card.classBar = CreateFrame("Frame", nil, card.details, "BackdropTemplate")
@@ -614,11 +642,11 @@ local MAIN_NAVIGATION = {
     { id = "Guild Overview", label = "Guild Overview", child = true },
     { id = "Guild Rules", label = "Guild Rules", child = true },
     { id = "Guild Members", label = "Guild Members", child = true },
+    { id = "Guild Log", label = "Guild Log", child = true, requiresGuild = true },
     { id = "Personal", header = true },
     { id = "Personal Settings", label = "Personal Settings", child = true },
     { id = "Management", header = true, managementHeader = true },
     { id = "Permission Management", label = "Permissions", child = true, guildMasterOnly = true, panelKey = "permissions", requiresConnection = true },
-    { id = "Guild Log", label = "Guild Log", child = true, permission = "rosterHistory" },
     { id = "Member Management", label = "Member Management", child = true, memberManagement = true, requiresGuild = true },
     { id = "Recruitment Management", label = "Recruitment", child = true, permission = "recruitment", requiresGuild = true },
     { id = "Verification Management", label = iRC:Text("DASHBOARD_VERIFICATION_TITLE"), child = true, verificationManagement = true, dashboardTab = "Verification", requiresConnection = true },
@@ -4016,6 +4044,9 @@ function UI:Create()
             add("Class Distribution", class.label, class.total, data.total,
                 tostring(class.active) .. " active this month")
         end
+        for _, race in ipairs(data.races or {}) do
+            add("Race Distribution", race.label, race.total, data.total, tostring(race.percent) .. "% of counted players")
+        end
         for index, label in ipairs(data.retentionLabels) do
             add("Member Activity", label, data.retention[index] or 0, data.total, "")
         end
@@ -4121,7 +4152,7 @@ function UI:Create()
         else
             lines[#lines + 1] = iRC.Colors.Gray .. "No profession data received." .. iRC.Colors.Reset
         end
-        if iRC:HasGuildPermission("rosterHistory") then
+        if iRC:IsInGuildConnection() then
             local activity = iRC.Identity and iRC.Identity:GetMemberActivity(profile.name, 8) or {}
             lines[#lines + 1] = infoSection("Recent guild activity")
             if #activity > 0 then
@@ -4230,6 +4261,8 @@ function UI:Create()
                 lines[#lines + 1] = infoLine(displayClass:gsub("_", " "), classData[className])
             end
         end
+        lines[#lines + 1] = infoSection("Race distribution (all characters)")
+        lines[#lines + 1] = guildRaceSummary(group.races, group.members)
         lines[#lines + 1] = infoSection("Guild information")
         lines[#lines + 1] = iRC.Colors.Gray .. tostring(group.guildDescription and group.guildDescription ~= ""
             and group.guildDescription or "No guild description reported.") .. iRC.Colors.Reset
@@ -5331,10 +5364,14 @@ function UI:RenderMemberRows()
         end
         row.profileName = profile.name
         local professionData = profile.professionData
-        local professionNames = {}
+        local professionNames, knownRecipes = {}, 0
         for _, option in ipairs(iRC.Professions:GetOptions()) do
             local rank = professionData and professionData.skills and professionData.skills[option[1]]
-            if rank then professionNames[#professionNames + 1] = option[2] .. " " .. rank end
+            if rank then
+                professionNames[#professionNames + 1] = option[2] .. " " .. rank
+                local recipes = professionData.recipes and professionData.recipes[option[1]]
+                if type(recipes) == "table" then knownRecipes = knownRecipes + #recipes end
+            end
         end
         if #professionNames > 0 then
             row.detail:SetText(row.detail:GetText() .. " | " .. table.concat(professionNames, ", "))
@@ -5343,18 +5380,36 @@ function UI:RenderMemberRows()
         row:SetScript("OnEnter", function(self)
             if not GameTooltip then return end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText(iRC:FormatPlayerName(profile.name))
+            GameTooltip:SetText(iRC:FormatPlayerName(profile.name), 1, 0.82, 0)
             GameTooltip:AddLine(characterDetail, 0.75, 0.75, 0.75)
-            if identityLabel then GameTooltip:AddLine(identityLabel == "Main" and "Main character" or identityLabel, 0.8, 0.7, 1, true) end
-            if #professionNames > 0 then GameTooltip:AddLine(table.concat(professionNames, ", "), 0.85, 0.85, 0.85, true) end
-            if professionData and professionData.skills then
-                local lines = iRC.Professions:DescribeRecipes(professionData)
-                for index = 1, math.min(#lines, 18) do GameTooltip:AddLine(lines[index], 1, 1, 1) end
-                if #lines > 18 then GameTooltip:AddLine("Click to view all known recipes.", 1, 0.7, 0.2) end
-            else
-                GameTooltip:AddLine("No profession data received from this member.", 0.7, 0.7, 0.7)
+            if profile.rankName and profile.rankName ~= "" then
+                GameTooltip:AddLine("Guild rank: " .. profile.rankName, 0.85, 0.85, 0.85)
             end
-            GameTooltip:AddLine("Left-click to view member profile.", 1, 0.72, 0.22)
+            if identityLabel then GameTooltip:AddLine(identityLabel == "Main" and "Main character" or identityLabel, 0.8, 0.7, 1, true) end
+            if profile.online then
+                local liveIRC = profile.verification and iRC:IsLiveAddonState(profile.verification.state)
+                local status = liveIRC and ("Online | iRC" .. (profile.addonVersion and " v" .. profile.addonVersion or "")) or "Online"
+                GameTooltip:AddLine(status, 0.30, 1, 0.35)
+            else
+                local days = tonumber(profile.lastOnlineDays)
+                local lastOnline = "Last online unknown"
+                if days and days >= 0 then
+                    local fullDays, hours = math.floor(days), math.floor(days * 24) % 24
+                    lastOnline = fullDays > 0 and (fullDays .. "d " .. hours .. "h ago")
+                        or hours > 0 and (hours .. "h ago") or "Less than an hour ago"
+                end
+                GameTooltip:AddLine("Offline | " .. lastOnline, 0.65, 0.65, 0.65)
+            end
+            GameTooltip:AddLine(" ")
+            if #professionNames > 0 then
+                GameTooltip:AddLine(table.concat(professionNames, ", "), 0.85, 0.85, 0.85, true)
+                if knownRecipes > 0 then GameTooltip:AddLine("Known recipes: " .. knownRecipes, 0.65, 0.65, 0.65) end
+            else
+                GameTooltip:AddLine("No profession data available.", 0.65, 0.65, 0.65)
+            end
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Left-click for profile and recipes.", 1, 0.72, 0.22)
+            GameTooltip:AddLine("Right-click for member options.", 1, 0.72, 0.22)
             GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -6264,41 +6319,45 @@ local function ensureGuildOverview(frame)
     end
 
     root.levels = makeGuildHealthPanel(root, "Level Distribution", 330, 188)
-    root.levels:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -76)
+    root.levels:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -272)
     root.levels.rows = {}
     for index = 1, 7 do root.levels.rows[index] = makeGuildHealthBarRow(root.levels, -45 - (index - 1) * 20, 82, 160) end
 
-    root.classes = makeGuildHealthPanel(root, "Class Distribution", 340, 188)
-    root.classes:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -76)
+    root.classes = makeGuildHealthPanel(root, "Class Distribution", 330, 188)
+    root.classes:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -76)
     root.classes.rows = {}
     for index = 1, #GUILD_HEALTH_CLASS_ORDER do
         root.classes.rows[index] = makeGuildHealthBarRow(root.classes, -41 - (index - 1) * 16, 72, 155)
     end
 
-    root.retention = makeGuildHealthPanel(root, "Member Activity", 330, 190)
-    root.retention:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -272)
+    root.races = makeGuildHealthPanel(root, "Race Distribution", 340, 188)
+    root.races:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -76)
+    root.races.rows = {}
+
+    root.retention = makeGuildHealthPanel(root, "Member Activity", 340, 190)
+    root.retention:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -272)
     root.retention.rows = {}
     for index = 1, 6 do root.retention.rows[index] = makeGuildHealthBarRow(root.retention, -45 - (index - 1) * 24, 108, 134) end
 
-    root.vitality = makeGuildHealthPanel(root, "Guild Activity Score", 340, 190)
-    root.vitality:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -272)
+    root.vitality = makeGuildHealthPanel(root, "Guild Activity Score", 670, 128)
+    root.vitality:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -470)
     root.vitality.score = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-    root.vitality.score:SetPoint("TOP", root.vitality, "TOP", 0, -43)
+    root.vitality.score:SetPoint("TOPLEFT", root.vitality, "TOPLEFT", 20, -43)
     root.vitality.explanation = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    root.vitality.explanation:SetPoint("TOP", root.vitality.score, "BOTTOM", 0, -5)
-    root.vitality.explanation:SetWidth(300)
-    root.vitality.explanation:SetJustifyH("CENTER")
+    root.vitality.explanation:SetPoint("TOPLEFT", root.vitality, "TOPLEFT", 20, -86)
+    root.vitality.explanation:SetWidth(250)
+    root.vitality.explanation:SetJustifyH("LEFT")
     root.vitality.separator = root.vitality:CreateTexture(nil, "ARTWORK")
-    root.vitality.separator:SetPoint("TOPLEFT", 14, -105)
-    root.vitality.separator:SetPoint("TOPRIGHT", -14, -105)
-    root.vitality.separator:SetHeight(1)
+    root.vitality.separator:SetPoint("TOPLEFT", 290, -40)
+    root.vitality.separator:SetPoint("BOTTOMLEFT", 290, 12)
+    root.vitality.separator:SetWidth(1)
     root.vitality.separator:SetColorTexture(0.30, 0.26, 0.19, 0.8)
     root.vitality.activity = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    root.vitality.activity:SetPoint("TOPLEFT", 16, -119)
+    root.vitality.activity:SetPoint("TOPLEFT", 315, -46)
     root.vitality.coverage = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    root.vitality.coverage:SetPoint("TOPLEFT", 16, -142)
+    root.vitality.coverage:SetPoint("TOPLEFT", 315, -72)
     root.vitality.risk = root.vitality:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    root.vitality.risk:SetPoint("TOPLEFT", 16, -165)
+    root.vitality.risk:SetPoint("TOPLEFT", 315, -98)
     frame.guildOverview = root
     return root
 end
@@ -6309,7 +6368,6 @@ updateGuildOverview = function(frame)
     for _, row in ipairs(frame.memberRows) do row:Hide() end
 
     local overview = ensureGuildOverview(frame)
-    frame.scroll:SetVerticalScroll(0)
     local excludeAlts = iRC:GetSettings().excludeAltsFromGuildSnapshot ~= false
     frame.guildOverviewAltToggle:SetText(excludeAlts and "Main characters only: ON" or "Main characters only: OFF")
     frame.guildOverviewAltToggle:SetBackdropColor(excludeAlts and 0.18 or 0.055,
@@ -6360,7 +6418,7 @@ updateGuildOverview = function(frame)
     end
     local total, online, onlineViaAlt, active30, verifiedOnline, attention = #members, 0, 0, 0, 0, 0
     local levelCounts = { 0, 0, 0, 0, 0, 0, 0 }
-    local classTotals, classActive = {}, {}
+    local classTotals, classActive, raceTotals = {}, {}, {}
     local retention = { 0, 0, 0, 0, 0, 0 }
     local retentionPoints, knownActivity, recencyTotal = 0, 0, 0
     local responseRequired = iRC:IsAddonResponseRequired()
@@ -6376,6 +6434,9 @@ updateGuildOverview = function(frame)
         levelCounts[levelBucket] = levelCounts[levelBucket] + 1
         local class = tostring(member.class or "UNKNOWN"):upper():gsub("[^A-Z]", "")
         classTotals[class] = (classTotals[class] or 0) + 1
+        local race = iRC:NormalizeGuildRace(member.race)
+        if race == "" then race = "UNKNOWN" end
+        raceTotals[race] = (raceTotals[race] or 0) + 1
         if memberOnline then
             online = online + 1
             if activity and activity.altOnline and not activity.mainOnline then onlineViaAlt = onlineViaAlt + 1 end
@@ -6462,6 +6523,32 @@ updateGuildOverview = function(frame)
         exportClasses[#exportClasses + 1] = { label = label, total = totalClass, active = activeClass }
     end
 
+    local exportRaces = guildRaceDistribution(raceTotals, total)
+    overview.races.subtitle:SetText("Count and share of counted players")
+    local distributionHeight = math.max(188, 48 + #exportRaces * 16)
+    overview.races:SetHeight(distributionHeight)
+    overview.classes:SetHeight(distributionHeight)
+    for index, race in ipairs(exportRaces) do
+        local row = overview.races.rows[index]
+        if not row then
+            row = makeGuildHealthBarRow(overview.races, -41 - (index - 1) * 16, 88, 140)
+            overview.races.rows[index] = row
+        end
+        setGuildHealthBar(row, race.label, race.total, math.max(1, total),
+            RACE_COLORS[race.race] or RACE_COLORS.Unknown, race.total .. " (" .. race.percent .. "%)")
+        row:Show()
+    end
+    for index = #exportRaces + 1, #overview.races.rows do overview.races.rows[index]:Hide() end
+    local activityTop = 76 + distributionHeight + 8
+    overview.levels:ClearAllPoints()
+    overview.levels:SetPoint("TOPLEFT", overview, "TOPLEFT", 0, -activityTop)
+    overview.retention:ClearAllPoints()
+    overview.retention:SetPoint("TOPRIGHT", overview, "TOPRIGHT", 0, -activityTop)
+    overview.vitality:ClearAllPoints()
+    overview.vitality:SetPoint("TOPLEFT", overview, "TOPLEFT", 0, -activityTop - 198)
+    local overviewHeight = activityTop + 198 + 128
+    overview:SetHeight(overviewHeight)
+
     overview.retention.subtitle:SetText("Last seen by the guild roster - "
         .. (excludeAlts and "alt activity included with mains" or "all characters"))
     local retentionLabels = { "Seen this week", "Seen last week", "Seen this month", "Inactive 30-59 days", "Inactive 60+ days", "Activity unknown" }
@@ -6516,15 +6603,18 @@ updateGuildOverview = function(frame)
         levelLabels = levelLabels,
         levelCounts = levelCounts,
         classes = exportClasses,
+        races = exportRaces,
         retentionLabels = retentionLabels,
         retention = retention,
     }
 
     overview:Show()
-    frame.scrollContent:SetHeight(462)
+    frame.scrollContent:SetHeight(overviewHeight)
+    local maximumScroll = math.max(0, overviewHeight - frame.scroll:GetHeight())
+    if frame.scroll:GetVerticalScroll() > maximumScroll then frame.scroll:SetVerticalScroll(maximumScroll) end
     frame.contentTitle:SetText("Guild Overview")
     local updated = date and date("%H:%M") or "now"
-    frame.contentSubtitle:SetText("Membership, activity, level and class distribution, and iRC adoption. Updated "
+    frame.contentSubtitle:SetText("Members, classes, races, levels and activity. Updated "
         .. updated .. ".")
 end
 
@@ -7111,7 +7201,11 @@ local function guildCardLayout(group, expanded, width)
     layout.statsTop = layout.classesTitle + 20
     layout.classText = layout.statsTop + 21
     layout.classBar = layout.classText + 18
-    layout.contactsTitle = layout.classBar + 27
+    layout.racesTitle = layout.classBar + 27
+    layout.racesTop = layout.racesTitle + 20
+    layout.racesText = guildRaceSummary(group.races, group.members)
+    layout.racesHeight = measureGuildText(layout.racesText, width)
+    layout.contactsTitle = layout.racesTop + layout.racesHeight + 13
     layout.contactsTop = layout.contactsTitle + 21
     layout.contacts = guildCardContacts(group)
     layout.height = layout.contactsTop + math.max(1, math.ceil(#layout.contacts / 2)) * 23 + 13
@@ -7213,7 +7307,8 @@ local function setRaceCard(card, group, forceExpanded)
     card.freshness:SetText(guildReportAge(group) .. (group.cached and (" · " .. iRC:Text("RL_GRID_CACHED")) or ""))
     card.expandButton:SetText(expanded and "-" or "+")
     for _, field in ipairs({ card.rulesSeparator, card.detailsGuildName, card.descriptionTitle, card.description, card.rulesTitle,
-        card.rulesText, card.classesTitle, card.detailStats, card.classText, card.classBar, card.contactsLabel }) do
+        card.rulesText, card.classesTitle, card.detailStats, card.classText, card.classBar,
+        card.racesTitle, card.racesText, card.contactsLabel }) do
         field:SetShown(expanded)
     end
     if expanded then
@@ -7247,6 +7342,10 @@ local function setRaceCard(card, group, forceExpanded)
         card.classBar:SetPoint("TOPLEFT", card, "TOPLEFT", 16, -layout.classBar)
         card.classBar:SetPoint("TOPRIGHT", card, "TOPRIGHT", -16, -layout.classBar)
         updateClassBreakdown(card, group.classBreakdownClasses or group.classes, group.members)
+        place(card.racesTitle, layout.racesTitle)
+        place(card.racesText, layout.racesTop, true)
+        card.racesText:SetText(layout.racesText)
+        card.racesText:SetHeight(layout.racesHeight)
         place(card.contactsLabel, layout.contactsTitle)
         place(card.noContacts, layout.contactsTop, true)
         card.noContacts:SetShown(#layout.contacts == 0)
@@ -7692,7 +7791,7 @@ function UI:Refresh()
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
     frame.scroll:SetShown(not embeddedManagement)
     if frame.scroll.ScrollBar then
-        frame.scroll.ScrollBar:SetShown(frame.category ~= "Guild Overview")
+        frame.scroll.ScrollBar:Show()
     end
     frame.contentTitle:SetShown(not embeddedManagement)
     frame.contentSubtitle:SetShown(not embeddedManagement)

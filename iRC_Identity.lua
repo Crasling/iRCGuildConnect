@@ -34,6 +34,17 @@ local SYNCED_EVENT_TYPES = {
     JOIN = true, REJOIN = true, LEAVE = true, KICK = true, PROMOTE = true, DEMOTE = true,
     LEVEL = true, NAME = true, NOTE = true, OFFICER_NOTE = true, RETURN = true,
 }
+local PUBLIC_EVENT_TYPES = {
+    JOIN = true, REJOIN = true, LEAVE = true, KICK = true, PROMOTE = true, DEMOTE = true,
+    LEVEL = true, NAME = true, RETURN = true,
+}
+
+local function canReadGuildEvent(eventType, viewer)
+    if PUBLIC_EVENT_TYPES[eventType] then return true end
+    if not SYNCED_EVENT_TYPES[eventType] then return false end
+    if viewer then return iRC:GuildMemberHasPermission(viewer, "rosterHistory") end
+    return iRC:HasGuildPermission("rosterHistory")
+end
 
 -- Guild-log deduplication and compaction -----------------------------------
 
@@ -212,26 +223,36 @@ local function rankTransitionTextKey(text)
         :gsub("%s+", " "):match("^%s*(.-)%s*$"):lower()
 end
 
-local function findRecentRankTransition(store, eventType, name, text, occurredAt)
+local function findDuplicateRankTransition(store, eventType, name, text, occurredAt)
     if eventType ~= "PROMOTE" and eventType ~= "DEMOTE" then return nil, nil end
     local wantedName, wantedAt = iRC:NormalizeName(name), tonumber(occurredAt) or 0
     local wantedText = rankTransitionTextKey(text)
-    for index = #(store and store.guildLog or {}), 1, -1 do
-        local existing = store.guildLog[index]
-        local existingAt = tonumber(existing and existing.occurredAt) or 0
-        if existingAt < wantedAt - GUILD_LOG_DUPLICATE_WINDOW then break end
-        if iRC:NormalizeName(existing.name) == wantedName
-            and (existing.eventType == "PROMOTE" or existing.eventType == "DEMOTE") then
-            if existing.eventType == eventType and rankTransitionTextKey(existing.text) == wantedText then
-                return index, existing
+    local previousIndex, previousRecord, nextIndex, nextRecord
+    -- Roster observations can arrive minutes apart. Match the adjacent rank
+    -- transition, stopping at rank or membership changes that make it distinct.
+    -- Looking on both sides also handles older events arriving after newer ones.
+    for index, record in ipairs(store and store.guildLog or {}) do
+        if iRC:NormalizeName(record.name) == wantedName and (record.eventType == "PROMOTE"
+            or record.eventType == "DEMOTE" or MEMBERSHIP_EVENT_STATE[record.eventType]) then
+            if (tonumber(record.occurredAt) or 0) <= wantedAt then
+                previousIndex, previousRecord = index, record
+            else
+                nextIndex, nextRecord = index, record
+                break
             end
-            return nil, nil
         end
     end
+    if previousRecord and previousRecord.eventType == eventType
+        and rankTransitionTextKey(previousRecord.text) == wantedText then return previousIndex, previousRecord end
+    if nextRecord and nextRecord.eventType == eventType
+        and rankTransitionTextKey(nextRecord.text) == wantedText then return nextIndex, nextRecord end
     return nil, nil
 end
 
 local function findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt)
+    -- Rank transitions have their own state-aware matching. The generic time
+    -- window would hide a real promotion repeated after an intervening demotion.
+    if eventType == "PROMOTE" or eventType == "DEMOTE" then return nil, nil end
     local wantedKey = eventSemanticKey(eventType, name, text)
     local wantedAt = tonumber(occurredAt) or 0
     for index = #(store and store.guildLog or {}), 1, -1 do
@@ -295,7 +316,7 @@ local function guildStore(create)
                 store.guildLogIds[record.id] = true
                 local _, duplicateMembership = findDuplicateMembershipTransition(cleanedStore,
                     record.eventType, record.name, record.occurredAt)
-                local _, duplicateRank = findRecentRankTransition(cleanedStore,
+                local _, duplicateRank = findDuplicateRankTransition(cleanedStore,
                     record.eventType, record.name, record.text, record.occurredAt)
                 local _, duplicateLevel = findDuplicateLevelTransition(cleanedStore,
                     record.eventType, record.name, record.text)
@@ -644,7 +665,7 @@ local function addGuildLog(store, eventType, name, text, classFile)
     local occurredAt = time()
     if findDuplicateLevelTransition(store, eventType, name, text) then return false end
     if findRecentMatchingGuildLogEvent(store, eventType, name, text, occurredAt) then return false end
-    local _, duplicateRank = findRecentRankTransition(store, eventType, name, text, occurredAt)
+    local _, duplicateRank = findDuplicateRankTransition(store, eventType, name, text, occurredAt)
     if duplicateRank then
         local incomingHasOfficer = tostring(text or ""):find(" by ", 1, true) ~= nil
         local existingHasOfficer = tostring(duplicateRank.text or ""):find(" by ", 1, true) ~= nil
@@ -812,10 +833,11 @@ local function guildJoinText(eventType, name)
     return text
 end
 
-function Identity:GetGuildLog()
+function Identity:GetGuildLog(viewer)
     local store, result = guildStore(false), {}
     for index = #(store and store.guildLog or {}), 1, -1 do
-        result[#result + 1] = store.guildLog[index]
+        local record = store.guildLog[index]
+        if canReadGuildEvent(record.eventType, viewer) then result[#result + 1] = record end
     end
     return result
 end
@@ -841,6 +863,11 @@ end
 
 function Identity:BroadcastGuildLog(record, targetName)
     if not record or not iRC:IsGuildConnectionActive() or not iRC:HasGuildPermission("rosterHistory") then return false end
+    if not SYNCED_EVENT_TYPES[record.eventType] then return false end
+    if targetName and (not iRC:IsGuildMemberName(targetName) or not canReadGuildEvent(record.eventType, targetName)) then return false end
+    -- Restricted note history is only included in authorized catch-up replies.
+    -- A guild-wide addon message can be read by every guild member's client.
+    if not targetName and not PUBLIC_EVENT_TYPES[record.eventType] then return false end
     local payload = table.concat({
         "IDENT_EVENT", IDENTITY_WIRE_VERSION,
         cleanWireText(record.id or eventFingerprint(record.eventType, record.name, record.text, record.occurredAt), 12),
@@ -1158,7 +1185,7 @@ function Identity:ReceiveSync(parts, sender)
         end
         if historyResponseAt[senderKey] and now - historyResponseAt[senderKey] < HISTORY_RESPONSE_COOLDOWN then return true end
         historyResponseAt[senderKey] = now
-        local records = self:GetGuildLog()
+        local records = self:GetGuildLog(sender)
         -- A shared bounded worker prevents several simultaneous catch-up
         -- requests from creating hundreds of independent timer callbacks.
         for index = 1, math.min(#records, MAX_SHARED_HISTORY) do
@@ -1170,6 +1197,7 @@ function Identity:ReceiveSync(parts, sender)
     if parts[1] ~= "IDENT_EVENT" then return false end
     local id, occurredAt = cleanWireText(parts[3], 12), tonumber(parts[4])
     local eventType, name = cleanWireText(parts[5], 18), cleanWireText(parts[6], 80)
+    if not canReadGuildEvent(eventType) then return false end
     local classFile, text = cleanWireText(parts[7], 12), cleanWireText(parts[8], 100)
     local now = time()
     if id == "" or not occurredAt or occurredAt > now + 300 or occurredAt < now - 180 * 86400
@@ -1234,7 +1262,7 @@ function Identity:ReceiveSync(parts, sender)
         if iRC.MainUI then iRC.MainUI:RefreshIfShown() end
         return false
     end
-    local _, duplicateRank = findRecentRankTransition(store, eventType, name, text, occurredAt)
+    local _, duplicateRank = findDuplicateRankTransition(store, eventType, name, text, occurredAt)
     if duplicateRank then
         store.guildLogIds[id] = true
         local incomingHasOfficer = text:find(" by ", 1, true) ~= nil
@@ -1322,7 +1350,7 @@ function Identity:ReceiveSync(parts, sender)
     elseif eventType == "REJOIN" then history.rejoinedAt, history.departedAt = occurredAt, nil
     elseif eventType == "LEAVE" or eventType == "KICK" then history.departedAt = occurredAt
     elseif eventType == "PROMOTE" or eventType == "DEMOTE" then
-        local fromRank, toRank = text:match(" from (.-) to (.-)%.$")
+        local fromRank, toRank = text:gsub("%s+[Bb]y%s+.-%.$", "."):match(" from (.-) to (.-)%.$")
         if fromRank and toRank then
             history.rankHistory[#history.rankHistory + 1] = { changedAt = occurredAt, fromRank = fromRank, toRank = toRank }
             while #history.rankHistory > 30 do table.remove(history.rankHistory, 1) end
@@ -1426,15 +1454,17 @@ function Identity:ScanRoster()
                     knownGuildRankChanges[key], knownRankChange = nil, nil
                 end
                 local officerSuffix = knownRankChange and (" by " .. knownRankChange.officer) or ""
-                addGuildLog(store, promoted and "PROMOTE" or "DEMOTE", member.name,
+                local recorded = addGuildLog(store, promoted and "PROMOTE" or "DEMOTE", member.name,
                     iRC:FormatPlayerName(member.name) .. " was " .. (promoted and "promoted" or "demoted")
                         .. " from " .. oldRank .. " to " .. newRank .. officerSuffix .. ".", member.classFile)
                 if knownRankChange then knownGuildRankChanges[key] = nil end
-                history.rankHistory[#history.rankHistory + 1] = {
-                    changedAt = time(), fromRank = oldRank, toRank = newRank,
-                    fromRankIndex = previous.rankIndex, toRankIndex = member.rankIndex,
-                }
-                while #history.rankHistory > 30 do table.remove(history.rankHistory, 1) end
+                if recorded then
+                    history.rankHistory[#history.rankHistory + 1] = {
+                        changedAt = time(), fromRank = oldRank, toRank = newRank,
+                        fromRankIndex = previous.rankIndex, toRankIndex = member.rankIndex,
+                    }
+                    while #history.rankHistory > 30 do table.remove(history.rankHistory, 1) end
+                end
             end
             if tonumber(previous.level) ~= tonumber(member.level) then
                 addGuildLog(store, "LEVEL", member.name, iRC:FormatPlayerName(member.name) .. " changed from level "

@@ -272,6 +272,9 @@ assert(group.members == 6 and group.activePlayers == 3 and group.verifiedMembers
 assert(group.averageLevel == 10, "averages use the same participant population")
 local classTotal = 0; for _, count in pairs(group.classes) do classTotal = classTotal + count end
 assert(classTotal == 6, "class breakdown uses the full guild roster")
+local raceTotal = 0; for _, count in pairs(group.races) do raceTotal = raceTotal + count end
+assert(raceTotal == group.members and (group.races.UNKNOWN or 0) > 0,
+    "race counts use unique roster members and retain unavailable races as unknown")
 roster[1].level, roster[5].level = 60, 59
 iRC:InvalidateGuildRosterSnapshot()
 iRC:InvalidateGuildMemberRows()
@@ -355,7 +358,9 @@ local function widget()
     end })
 end
 function methods:CreateFontString() return widget() end
+function methods:CreateTexture() return widget() end
 function methods:SetText(value) self.text = value end
+function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
@@ -398,14 +403,14 @@ function view.scroll:SetVerticalScroll(value) offset = value end
 local connectionBefore, rowsBefore = connectionReads, rosterReads
 offset = 0
 dashboard:Refresh()
-assert(#view.rowData == 1000 and #view.rows == 9, "full verification refresh retains all data with bounded UI frames")
+assert(#view.rowData == 1000 and #view.rows == 10, "full verification refresh retains all data with bounded compact rows")
 assert(rosterReads == rowsBefore and connectionReads - connectionBefore <= 20,
     "verification refresh reuses the cached roster without per-row connection lookups")
 assert(view.rows[1].OnClick == view.rowData[1].onClick, "pooled row receives current click handler")
-assert(view.rowData[1].values and view.rowData[10].verificationMember and not view.rowData[10].values,
+assert(view.rowData[1].values and view.rowData[11].verificationMember and not view.rowData[11].values,
     "verification details are built only for rows inside the visible pool")
 local verificationCache = view.verificationCache
-offset = 499 * 48
+offset = 499 * 42
 dashboard:RenderVisibleRows()
 assert(view.rowData[500].values and not view.rowData[500].verificationMember,
     "a verification row is materialized when it scrolls into view")
@@ -413,13 +418,38 @@ offset = 0
 dashboard:Refresh()
 assert(view.verificationCache == verificationCache,
     "unchanged verification refreshes reuse the prepared member model")
+view.filters.Verification = "offline"
+dashboard:Refresh()
+assert(#view.rowData == view.verificationCache.offline,
+    "the Offline filter includes both offline and inactive members counted in its badge")
 view.filters.Verification = "attention"
 dashboard:Refresh()
 assert(#view.rowData > 0 and #view.rowData < 1000, "filters still work with pooled rows")
-local timerBefore, previousRosterReads = view.rows[1].columns[4].text, rosterReads
+local timerBefore, previousRosterReads = view.rows[1].columns[3].text, rosterReads
+local hoverText
+GameTooltip = { SetOwner = function() end, Show = function() end,
+    SetText = function(_, value) hoverText = value end }
+view.rows[1].OnEnter(view.rows[1])
+local hoverBefore = hoverText
 now = now + 60
 dashboard:RenderVisibleRows()
-assert(view.rows[1].columns[4].text ~= timerBefore and rosterReads == previousRosterReads, "attention timer advances without rebuilding the roster")
+view.rows[1].OnEnter(view.rows[1])
+assert(view.rows[1].columns[3].text == timerBefore and hoverText ~= hoverBefore and rosterReads == previousRosterReads,
+    "attention timing advances only in the hover, keeping the iRC column stable without roster rebuilds")
+
+-- The pooled frames must lose verification-only details when reused by Incidents.
+db.memberPermissions[iRC:NormalizeName(iRC:GetPlayerName())].permissions.incidents = true
+db.officerIncidents = { { reporter = "Member0002", occurredAt = now, receivedAt = now,
+    instanceName = "Test Instance", players = "Member0002", reason = "Test incident" } }
+view.tab = "Incidents"
+dashboard:Refresh()
+assert(#view.rowData == 1 and view.rows[1].height == 44
+    and not view.rows[1].memberDetail.shown and not view.rows[1].statusAccent.shown,
+    "switching to Incidents restores its row style and hides verification-only labels")
+view.tab = "Verification"
+dashboard:Refresh()
+assert(view.rows[1].height == 40 and view.rows[1].memberDetail.shown and view.rows[1].statusAccent.shown,
+    "switching back restores compact verification rows")
 
 local callbacks, refreshes = {}, 0
 -- Attention reminders have their own one-second job; count only redraw timers.

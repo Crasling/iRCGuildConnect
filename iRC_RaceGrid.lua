@@ -201,6 +201,32 @@ local function validNumber(value, minimum, maximum, preserveFraction)
     return preserveFraction and value or math.floor(value)
 end
 
+-- Optional report detail. A missing field means the sender has not reported
+-- races; UNKNOWN accounts for roster members whose race is unavailable.
+local REPORT_RACES = { "HUMAN", "DWARF", "NIGHTELF", "GNOME", "ORC", "SCOURGE", "TAUREN", "TROLL",
+    "SKYBORNE", "DRAENEI", "BLOODELF", "UNKNOWN" }
+local function serializeRaces(counts)
+    if type(counts) ~= "table" then return "" end
+    local fields = {}
+    for _, race in ipairs(REPORT_RACES) do fields[#fields + 1] = tostring(counts[race] or 0) end
+    return table.concat(fields, ",")
+end
+
+local function parseRaces(value, members)
+    if value == nil or value == "" then return nil, true end
+    if type(value) ~= "string" or #value > 100 then return nil, false end
+    local counts, total, index = {}, 0, 0
+    for field in (value .. ","):gmatch("(.-),") do
+        index = index + 1
+        local count = tonumber(field)
+        if not REPORT_RACES[index] or not count or count ~= count or count < 0
+            or count > members or count % 1 ~= 0 then return nil, false end
+        counts[REPORT_RACES[index]], total = count, total + count
+    end
+    if index ~= #REPORT_RACES or total ~= members then return nil, false end
+    return counts, true
+end
+
 local function normalizeGuildName(name)
     return string.lower((tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")))
 end
@@ -796,7 +822,7 @@ function RaceGrid:GetLocalReport()
         members = guild.members, activePlayers = guild.activePlayers,
         membersLevel60 = guild.membersLevel60, activeLevel60 = guild.activeLevel60,
         activeMembers = guild.activeMembers, averageLevel = guild.averageLevel,
-        classes = guild.classes, classBreakdownClasses = guild.classBreakdownClasses,
+        classes = guild.classes, classBreakdownClasses = guild.classBreakdownClasses, races = guild.races,
         guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
         guildContacts = guild.guildContacts,
@@ -825,6 +851,11 @@ function RaceGrid:StoreGuildReport(report, silent, received)
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.race = normalizeRaceToken(report.race)
     if not report.race then return false end
+    if report.races ~= nil then
+        local valid
+        report.races, valid = parseRaces(serializeRaces(report.races), tonumber(report.members) or 0)
+        if not valid then return false end
+    end
     if report.classBreakdownMode ~= "RANGE" and report.classBreakdownMode ~= "MAX" then
         report.classBreakdownMode = "ALL"
     end
@@ -855,6 +886,9 @@ function RaceGrid:StoreGuildReport(report, silent, received)
     end
     if old and report.guildPreferredLanguage == "" then
         report.guildPreferredLanguage = cleanGuildLanguage(old.guildPreferredLanguage)
+    end
+    if old and oldTimestamp == newTimestamp and old.members == report.members and not report.races then
+        report.races = old.races
     end
     if iRC:ContainsProfanity(report.guildDescription) then return false end
     report.activePlayers = recordGuildActivity(report.guildName, report.activePlayers)
@@ -962,7 +996,7 @@ function RaceGrid:BuildOwnGuildReports()
         race = guildRace, faction = UnitFactionGroup and UnitFactionGroup("player")
             or (ALLIANCE_RACES[guildRace] and "Alliance" or "Horde"),
         guildName = guildName, members = 0, activePlayers = 0, activeMembers = 0, totalLevel = 0,
-        classes = {}, classBreakdownClasses = {}, classTotals = {}, classAverageLevels = {},
+        classes = {}, classBreakdownClasses = {}, classTotals = {}, classAverageLevels = {}, races = {},
         membersLevel60 = 0, activeLevel60 = 0,
         verifiedMembers = 0, populationSource = "irc_guild_roster",
         guildDeaths = (connection.raceDeaths or {})[guildRace] or 0, timestamp = time(), source = "iRC",
@@ -1023,6 +1057,8 @@ function RaceGrid:BuildOwnGuildReports()
             if recentlyOnline then group.activeMembers = group.activeMembers + 1 end
             if participation == "verified" then group.verifiedMembers = group.verifiedMembers + 1 end
             group.classes[class] = (group.classes[class] or 0) + 1
+            local memberRace = normalizeRaceToken(member.race) or "UNKNOWN"
+            group.races[memberRace] = (group.races[memberRace] or 0) + 1
             group.classTotals[class] = (group.classTotals[class] or 0) + level
             if level >= classBreakdownMinLevel and level <= classBreakdownMaxLevel then
                 group.classBreakdownClasses[class] = (group.classBreakdownClasses[class] or 0) + 1
@@ -1113,6 +1149,7 @@ local function serializeGuildReport(report, includeDescription)
         fields[#fields + 1] = rules.classLock == true and "1" or "0"
         fields[#fields + 1] = iRC:NormalizeGuildClass(rules.guildClass)
         fields[#fields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
+        fields[#fields + 1] = serializeRaces(report.races)
     end
     return table.concat(fields, SEP) .. SEP .. "@" .. scope
 end
@@ -1168,6 +1205,7 @@ function RaceGrid:BroadcastReport(fromClick)
     classBreakdownFields[#classBreakdownFields + 1] = report.rules and report.rules.classLock == true and "1" or "0"
     classBreakdownFields[#classBreakdownFields + 1] = iRC:NormalizeGuildClass(report.rules and report.rules.guildClass)
     classBreakdownFields[#classBreakdownFields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
+    classBreakdownFields[#classBreakdownFields + 1] = serializeRaces(report.races)
     send(GRID_PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel60,
         report.activeMembers, report.activePlayers, report.members), 3)
@@ -1309,13 +1347,15 @@ local function parseGuildReport(parts)
         if rules.classLock and rules.raceLock then return nil end
     end
     local guildPreferredLanguage = cleanGuildLanguage(parts[descriptionStart + 18])
+    local races, validRaces = parseRaces(parts[descriptionStart + 19], members)
+    if not validRaces then return nil end
     return {
         serverRuleset = parts.serverRuleset,
         name = name, guid = guid, guildName = guildName, race = race,
         membersLevel60 = level60, activePlayers = active, members = members,
         activeLevel60 = activeLevel60, activeMembers = activeMembers,
         averageLevel = averageLevel, timestamp = timestamp, guildDeaths = deaths,
-        classes = classes, classBreakdownClasses = classBreakdownClasses,
+        classes = classes, classBreakdownClasses = classBreakdownClasses, races = races,
         rules = rules, rulesKnown = rulesKnown,
         guildContacts = guildContacts,
         guildContactsOnlineMask = guildContactsOnlineMask,
@@ -2070,10 +2110,13 @@ handleMessage = function(prefix, message, sender, distribution, queued)
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and tonumber(report.timestamp) == reportTimestamp and filteredTotal <= (tonumber(report.members) or 0)
                     and not (classLockFlag == "1" and report.rules and report.rules.raceLock == true) then
+                    local races, validRaces = parseRaces(parts[20], tonumber(report.members) or 0)
+                    if not validRaces then return end
                     report.classBreakdownMode = mode
                     report.classBreakdownMinLevel = mode == "MAX" and 60 or mode == "ALL" and 1 or minLevel
                     report.classBreakdownMaxLevel = mode == "MAX" and 60 or mode == "ALL" and 60 or maxLevel
                     report.classBreakdownClasses = filteredClasses
+                    if races then report.races = races end
                     local guildHomepageTag = tostring(parts[16] or "NORMAL")
                     report.guildHomepageTag = guildHomepageTag == "PVE" and "PVE"
                         or guildHomepageTag == "PVP" and "PVP" or guildHomepageTag == "RP" and "RP" or "NORMAL"

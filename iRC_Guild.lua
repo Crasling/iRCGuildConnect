@@ -85,6 +85,7 @@ end
 local ROSTER_MEMBER_FIELDS = {
     "rankName", "rankIndex", "level", "className", "classFile", "online",
     "guid", "publicNote", "officerNote", "lastOnlineDays",
+    "race",
 }
 
 local function sameRosterMember(left, right)
@@ -182,11 +183,19 @@ function iRC:GetGuildRosterSnapshot()
     if guildRosterSnapshotValid then return guildRosterSnapshot, false end
     local previousSnapshot = guildRosterSnapshot
     local snapshot = {}
+    local nativeMembers = self.RosterRaces and self.RosterRaces:GetNativeMembers(self:GetConnection())
     local count = GetNumGuildMembers and GetGuildRosterInfo and GetNumGuildMembers(true) or 0
     for index = 1, count do
         local name, rankName, rankIndex, level, className, _, publicNote, officerNote, online, _, classFile, _, _, _, _, _, guid = GetGuildRosterInfo(index)
         if name then
             local nameKey = self:NormalizeName(name)
+            local native = nativeMembers and not self:IsSecretValue(guid) and nativeMembers.byGuid[guid]
+            if not native and nativeMembers and not self:IsSecretValue(guid)
+                and (guid == nil or guid == "") then native = nativeMembers.byName[nameKey] end
+            if native then
+                guid = native.guid
+                className, classFile = native.className or className, native.classFile or classFile
+            end
             local confirmedRank = confirmedRankChanges[nameKey]
             if confirmedRank then
                 local confirmedAge = (GetTime and GetTime() or 0) - (tonumber(confirmedRank.confirmedAt) or 0)
@@ -218,6 +227,7 @@ function iRC:GetGuildRosterSnapshot()
                 level = level,
                 className = className,
                 classFile = classFile,
+                race = native and native.race,
                 online = online and true or false,
                 guid = guid,
                 publicNote = publicNote,
@@ -244,6 +254,7 @@ function iRC:GetGuildRosterSnapshot()
     -- An empty result during initial guild loading is not authoritative; keep
     -- retrying until WoW supplies the roster or confirms that we have no guild.
     guildRosterSnapshotValid = #snapshot > 0 or not inGuildConnection
+    if self.RosterRaces then self.RosterRaces:Reconcile(self:GetConnection(), snapshot) end
     return guildRosterSnapshot, snapshotChanged
 end
 
@@ -604,9 +615,22 @@ function iRC:CheckGuildRosterForNewMembers()
 end
 
 local function getRaceFromGuid(guid)
-    if not guid or not GetPlayerInfoByGUID then return nil end
-    local _, _, localizedRace, raceFile = GetPlayerInfoByGUID(guid)
-    return raceFile or localizedRace
+    if iRC:IsSecretValue(guid) or type(guid) ~= "string" or guid == "" or not GetPlayerInfoByGUID then return nil end
+    local ok, _, _, localizedRace, raceFile = pcall(GetPlayerInfoByGUID, guid)
+    if not ok then return nil end
+    if not iRC:IsSecretValue(raceFile) and type(raceFile) == "string" and iRC:NormalizeGuildRace(raceFile) ~= "" then return raceFile end
+    if not iRC:IsSecretValue(localizedRace) and type(localizedRace) == "string"
+        and iRC:NormalizeGuildRace(localizedRace) ~= "" then return localizedRace end
+end
+
+local function resolveMemberRace(connection, name, guid, profileRace)
+    if iRC.RosterRaces then
+        local race = iRC.RosterRaces:Resolve(connection, name, guid, profileRace)
+        return race and iRC:Text("GUILD_RACE_" .. race) or "Unknown"
+    end
+    if not iRC:IsSecretValue(profileRace) and type(profileRace) == "string"
+        and iRC:NormalizeGuildRace(profileRace) ~= "" then return profileRace end
+    return getRaceFromGuid(guid) or "Unknown"
 end
 
 function iRC:GetGuildMemberRaceCheck(race, connection)
@@ -682,19 +706,21 @@ local function buildGuildRosterRows(self, roster, connection)
                 self:DebugMsg(self:Text("ROSTER_IDENTITY_RESET", name), 2)
             end
             local syncedStatus = active and self.RaceLockedSync and self.RaceLockedSync:GetStatus(name, connection)
-            local race = profile and profile.race or getRaceFromGuid(guid) or "Unknown"
+            local raceGuid = guid and guid ~= "" and guid or profileGuid
+            local race = resolveMemberRace(connection, name, raceGuid, rosterMember.race or (profile and profile.race))
             if self:NormalizeName(name) == self:NormalizeName(selfName) then
                 profile = self:GetLocalProfile()
-                race = profile.race
                 guid = profile.guid
+                race = resolveMemberRace(connection, name, guid, profile.race)
             end
             local verification = self:GetMemberVerification(name, online and true or false, profile, context)
             local raceCheck = self:GetGuildMemberRaceCheck(race, connection)
-            local memberClass = (profile and profile.class) or classFile or className or "UNKNOWN"
+            local memberClass = classFile or (profile and profile.class) or className or "UNKNOWN"
             local classCheck = self:GetGuildMemberClassCheck(memberClass, connection)
             local attentionSince = self:GetMemberAttentionSince(name, verification, connection or false)
             rows[#rows + 1] = {
                 name = name, guid = guid or (profile and profile.guid) or "", rankIndex = rankIndex or 99,
+                rankName = rosterMember.rankName,
                 level = level or (profile and profile.level) or 1, class = memberClass,
                 race = race, online = online and true or false, profile = profile,
                 dead = profile and type(profile.deadGuid) == "string" and profile.deadGuid ~= ""
@@ -803,7 +829,12 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("GUILD_ROSTER_UPDATE")
-frame:SetScript("OnEvent", function(_, event)
+frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+for _, event in ipairs({ "CLUB_MEMBER_ADDED", "CLUB_MEMBER_REMOVED", "CLUB_MEMBER_UPDATED", "CLUB_MEMBERS_UPDATED" }) do
+    if not C_EventUtils or C_EventUtils.IsEventValid(event) then frame:RegisterEvent(event) end
+end
+frame:SetScript("OnEvent", function(_, event, clubId)
+    if event:match("^CLUB_MEMBER") and iRC.RosterRaces and not iRC.RosterRaces:IsGuildClub(clubId) then return end
     if event == "PLAYER_LOGIN" then
         C_Timer.After(3, function() iRC:RefreshGuildRoster() end)
         if C_Timer and C_Timer.NewTicker then
@@ -826,7 +857,9 @@ frame:SetScript("OnEvent", function(_, event)
                 if iRC:IsGuildConnectionActive() and iRC:HasGuildPermission("presence") then queuePresenceReview(1) end
             end)
         end
-    elseif event == "GUILD_ROSTER_UPDATE" then
+    elseif event == "GUILD_ROSTER_UPDATE" or event:match("^CLUB_MEMBER")
+        or event == "PLAYER_REGEN_ENABLED" and iRC.RosterRaces and iRC.RosterRaces:NeedsNativeRefresh() then
+        if iRC.RosterRaces then iRC.RosterRaces:InvalidateNativeMembers() end
         if rosterUpdateTicket then return end
         local ticket = {}
         rosterUpdateTicket = ticket

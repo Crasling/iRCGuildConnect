@@ -2,6 +2,14 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.7 - Guild Updates
+--------------------------------------------------------------------------------
+[ADDED] Race statistics in Guild Overview and previews
+[CHANGED] Members can view general Guild Log events
+[IMPROVED] Cleaner guild pages, lists and tooltips
+[IMPROVED] More Undead Speak words and phrases
+[FIXED] Missing race data and duplicate Guild Log entries
+
 v0.7.6 - Guild Found Improvements
 --------------------------------------------------------------------------------
 [ADDED] A notice when Guild Found protection is active

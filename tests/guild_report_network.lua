@@ -79,6 +79,10 @@ local function scenario(mode, reportCount, duration)
                 or "Shared Guild " .. (mode == "wide" and string.rep("g", 60) or "") .. index,
             guildContacts = (mode == "wide" or mode == "maximum") and string.rep("b", 140) or "",
             race = "HUMAN", faction = "Alliance", members = mode == "maximum" and 10000 or 6, averageLevel = 60,
+            races = mode == "maximum" and {
+                HUMAN = 837, DWARF = 833, NIGHTELF = 833, GNOME = 833, ORC = 833, SCOURGE = 833,
+                TAUREN = 833, TROLL = 833, SKYBORNE = 833, DRAENEI = 833, BLOODELF = 833, UNKNOWN = 833,
+            } or { HUMAN = 3, NIGHTELF = 2, UNKNOWN = 1 },
             membersLevel60 = mode == "maximum" and 10000 or 6, activeLevel60 = mode == "maximum" and 10000 or 6,
             activePlayers = mode == "maximum" and 10000 or 6, activeMembers = mode == "maximum" and 10000 or 6,
             guildDeaths = mode == "maximum" and 10000000 or 0, guildPreferredLanguage = mode == "maximum" and string.rep("l", 32) or "",
@@ -138,7 +142,12 @@ local function scenario(mode, reportCount, duration)
     end
     local store = requester.env.iRCDB.globalRaceGrid.servers["forever:" .. requester.addon:GetGuildDirectoryScope()]
     local count = 0
-    for _ in pairs(store.guildReports) do count = count + 1 end
+    for _, received in pairs(store.guildReports) do
+        count = count + 1
+        local sum = 0
+        for _, value in pairs(received.races or {}) do sum = sum + value end
+        assert(sum == received.members, "cached reports preserve every known and unknown race count")
+    end
     local first, last, packets
     packets = 0
     for _, record in ipairs(wire) do
@@ -160,7 +169,7 @@ scenario("sender-combat")
 scenario("receiver-combat")
 scenario("continuous-combat", 8, 40)
 scenario("chain-pulls", 8)
-scenario("paced-transfer")
+scenario("paced-transfer", 8, 40)
 scenario("missing-packet")
 scenario("wide", 32, 240)
 scenario("maximum", 1, 60)

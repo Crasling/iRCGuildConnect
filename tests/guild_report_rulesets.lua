@@ -110,9 +110,12 @@ end
 assert(#pvp.addon:GetGlobalRaceOverview() == 0 and pvp.env.iRCDB.globalRaceGrid.servers.forever.guildReports.old,
     "unlabelled old reports are preserved without assigning mixed data to a ruleset")
 pve.report, pvp.report = report(pve, "PvE Guild"), report(pvp, "PvP Guild")
+pvp.report.races = { HUMAN = 3, SKYBORNE = 2, UNKNOWN = 1 }
 assert(pve.grid:BroadcastReport(true)); advance(2)
 assert(#pvp.addon:GetGlobalRaceOverview() == 0, "public PvE traffic cannot enter a PvP cache")
 assert(pvp.grid:BroadcastReport(true)); advance(2)
+assert(same.addon:GetGlobalRaceOverview()[1].races.HUMAN == 3,
+    "public guild reports include race counts in the expanded preview")
 assert(#same.addon:GetGlobalRaceOverview() == 1 and same.addon:GetGlobalRaceOverview()[1].guildName == "PvP Guild",
     "matching clients still decode fragmented public reports")
 assert(#pve.addon:GetGlobalRaceOverview() == 1 and pve.addon:GetGlobalRaceOverview()[1].guildName == "PvE Guild",
@@ -123,6 +126,8 @@ assert(pvp.grid:StoreGuildReport(pvp.report, true))
 same.env.iRCDB.globalRaceGrid.servers["forever:" .. same.addon:GetGuildDirectoryScope()].guildReports = {}
 assert(same.grid:RequestGuildCache()); advance(12)
 assert(#same.addon:GetGlobalRaceOverview() == 1, "same-ruleset cached report offers and downloads still work")
+assert(same.addon:GetGlobalRaceOverview()[1].races.SKYBORNE == 2,
+    "cached guild previews retain the optional race breakdown")
 assert(#pve.addon:GetGlobalRaceOverview() == 1 and pve.addon:GetGlobalRaceOverview()[1].guildName == "PvE Guild",
     "cache broadcasts cannot leak another ruleset's guilds")
 local function upvalue(callback, wanted)
@@ -134,6 +139,22 @@ local function upvalue(callback, wanted)
     error("missing helper: " .. wanted)
 end
 local foreign = report(pve, "Foreign Cache Payload")
+local serializeReport = upvalue(pvp.grid.BroadcastReport, "serializeGuildReport")
+local parseReport = upvalue(upvalue(pvp.frame.OnEvent, "handleMessage"), "parseGuildReport")
+local function parsePayload(value)
+    local fields = {}
+    for field in (value .. "\t"):gmatch("(.-)\t") do fields[#fields + 1] = field end
+    fields.serverRuleset = fields[#fields]:sub(2)
+    fields[#fields] = nil
+    return parseReport(fields)
+end
+assert(parsePayload(serializeReport(pvp.report, true)).races.UNKNOWN == 1)
+local missingRaces = report(pvp, "Older Report")
+assert(parsePayload(serializeReport(missingRaces, true)).races == nil, "reports without the optional race field still work")
+for _, invalid in ipairs({ { HUMAN = 7 }, { HUMAN = 5 }, { HUMAN = -1, UNKNOWN = 7 }, { HUMAN = 5.5, UNKNOWN = 0.5 } }) do
+    missingRaces.races = invalid
+    assert(not parsePayload(serializeReport(missingRaces, true)), "invalid or inconsistent race populations are rejected")
+end
 local payload = upvalue(pve.grid.BroadcastReport, "serializeGuildReport")(foreign, true)
 local guard = client("Cache Payload Guard", true, false, false)
 assert(guard.grid:RequestGuildCache())
@@ -186,6 +207,23 @@ for _, value in ipairs(same.addon:GetGlobalRaceOverview()) do
     if value.guildName == large.report.guildName then largeReceived = true end
 end
 assert(largeReceived, "maximum-length public reports fit the bounded channel framing with their ruleset metadata")
+
+-- Exercise the existing base-plus-details fallback with the optional races.
+local fallback = client("Detail Reporter", true, false, false)
+fallback.report = report(fallback, "Detail Guild")
+fallback.report.races = { HUMAN = 3, SKYBORNE = 2, UNKNOWN = 1 }
+local fallbackLimit = #upvalue(fallback.grid.BroadcastReport, "serializeGuildReport")(fallback.report, true) - 1
+for index = 1, 100 do
+    local key = debug.getupvalue(fallback.grid.BroadcastReport, index)
+    if key == "MAX_CHANNEL_PAYLOAD" then debug.setupvalue(fallback.grid.BroadcastReport, index, fallbackLimit); break end
+end
+assert(fallback.grid:BroadcastReport(true)); advance(2)
+local detailReceived
+for _, value in ipairs(same.addon:GetGlobalRaceOverview()) do
+    if value.guildName == "Detail Guild" then detailReceived = value end
+end
+assert(detailReceived and detailReceived.races and detailReceived.races.SKYBORNE == 2,
+    "race data also survives the separate public detail packet")
 pvp.record = 11
 assert(pvp.addon:GetGuildDirectoryScope() ~= pvpScope and #pvp.addon:GetGlobalRaceOverview() == 0,
     "a different game-mode record cannot inherit the same category's cache")

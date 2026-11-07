@@ -210,19 +210,110 @@ local nightElfWordReplacements = {
     { "magic", "arcane power" },
 }
 
--- Restrained Forsaken flavor: bleak and formal, while remaining easy to read.
+-- Dry Forsaken humor for everyday and dungeon chat. Longer phrases go first
+-- so specific requests keep their meaning before individual words change.
 local undeadPhraseReplacements = {
-    { "thank you", "you have my thanks" },
+    { "no thanks", "I must decline" },
+    { "good to see you", "a familiar face among the living" },
+    { "nice to meet you", "another soul worth remembering" },
+    { "good morning", "another dawn to endure" },
+    { "good evening", "the shadows welcome you" },
+    { "good night", "rest while the shadows keep watch" },
+    { "welcome back", "returned from the grave, have you" },
+    { "see you later", "until our paths darken again" },
+    { "see you soon", "until we meet in the shadows" },
+    { "take care", "keep your bones intact" },
+    { "thank you", "you have my gratitude" },
+    { "thanks", "my thanks" },
+    { "no problem", "a small price to pay" },
+    { "well done", "a deed worth remembering" },
+    { "good job", "a deed worth remembering" },
+    { "congratulations", "another victory over oblivion" },
     { "good luck", "may fortune favor the forsaken" },
     { "be careful", "tread carefully" },
     { "follow me", "keep to my shadow" },
+    { "wait for me", "spare a moment for these old bones" },
+    { "wait a moment", "grant these bones a moment" },
+    { "one moment", "a moment, while these bones oblige" },
+    { "on my way", "these old bones are on the move" },
+    { "i will be back", "the grave will not keep me; I shall return" },
+    { "i'll be back", "the grave will not keep me; I shall return" },
+    { "i am back", "the grave could not keep me" },
+    { "i'm back", "the grave could not keep me" },
+    { "are you ready", "are you prepared for what awaits" },
     { "we are ready", "the Forsaken stand ready" },
     { "i am ready", "I stand ready" },
+    { "i'm ready", "I stand ready" },
+    { "i need mana", "my mana reserves run dry" },
+    { "out of mana", "my mana reserves are spent" },
+    { "i need healing", "these bones require mending" },
+    { "heal me", "mend these old bones" },
+    { "help me", "lend your strength to the Forsaken" },
+    { "do not attack", "stay your blade" },
+    { "don't attack", "stay your blade" },
+    { "stop attacking", "stay your blade" },
+    { "stay together", "let no soul stray from our ranks" },
+    { "stay here", "hold this ground" },
+    { "let's go", "onward, while these bones still hold" },
+    { "lets go", "onward, while these bones still hold" },
+    { "that was close", "the grave reached for us" },
+    { "we survived", "the grave has been denied again" },
+    { "i died", "the grave claimed me again" },
+    { "we died", "the grave claimed us again" },
+    { "i am tired", "even these old bones grow weary" },
+    { "i'm tired", "even these old bones grow weary" },
+    { "i need food", "these bones could use a meal" },
+    { "i need a break", "these old bones need a moment" },
+    { "need to repair", "need to mend this battered gear" },
     { "rest in peace", "rest in the cold earth" },
+
+    -- Everyday conversation should carry the voice too, without needing a
+    -- greeting or a dungeon callout. Keep the replacement grammar compatible.
+    { "i don't understand", "I cannot comprehend" },
+    { "i do not understand", "I cannot comprehend" },
+    { "i don't know", "I cannot say" },
+    { "i dont know", "I cannot say" },
+    { "i do not know", "I cannot say" },
+    { "i don't think", "I doubt" },
+    { "i do not think", "I doubt" },
+    { "i don't mind", "it troubles me little" },
+    { "i don't care", "it concerns me little" },
+    { "i am sure", "I am certain" },
+    { "i'm sure", "I am certain" },
+    { "are you sure", "are you certain" },
+    { "i think", "I suspect" },
+    { "i guess", "I suppose" },
+    { "i agree", "we are of one mind" },
+    { "i disagree", "I remain unconvinced" },
+    { "i am sorry", "you have my apologies" },
+    { "i'm sorry", "you have my apologies" },
+    { "that's okay", "that is acceptable" },
+    { "that's fine", "that is acceptable" },
+    { "all right", "very well" },
+    { "not really", "not quite" },
+    { "no worries", "think nothing of it" },
+    { "of course", "naturally" },
+    { "by the way", "incidentally" },
+    { "to be honest", "in truth" },
+    { "right now", "at present" },
+    { "sounds good", "sounds agreeable" },
+    { "looks good", "looks agreeable" },
+    { "looking for", "seeking" },
+    { "look for", "seek" },
+    { "want to", "wish to" },
+    { "wants to", "wishes to" },
+    { "wanted to", "wished to" },
+    { "wanting to", "wishing to" },
+    { "need to", "have to" },
+    { "needs to", "has to" },
+    { "needed to", "had to" },
+    { "needing to", "having to" },
 }
 
 local undeadWordReplacements = {
+    { "farewell", "until the shadows call" },
     { "goodbye", "farewell" },
+    { "greetings", "dark greetings" },
     { "hello", "well met" },
     { "friends", "allies" },
     { "friend", "ally" },
@@ -234,6 +325,60 @@ local undeadWordReplacements = {
     { "kill", "dispatch" },
     { "protect", "guard" },
     { "wait", "linger" },
+    { "tired", "weary" },
+    { "afraid", "unnerved" },
+    { "beautiful", "haunting" },
+    { "quiet", "silent" },
+    { "brave", "unflinching" },
+    { "revenge", "vengeance" },
+    { "hi", "well met" },
+    { "hey", "well met" },
+    { "bye", "farewell" },
+    { "okay", "very well" },
+    { "ok", "very well" },
+    { "alright", "very well" },
+    { "yes", "indeed" },
+    { "yeah", "indeed" },
+    { "yep", "indeed" },
+    { "yup", "indeed" },
+    { "nope", "not so" },
+    { "nah", "not so" },
+    { "maybe", "perhaps" },
+    { "probably", "likely" },
+    { "really", "truly" },
+    { "certainly", "assuredly" },
+    { "need", "require" },
+    { "needs", "requires" },
+    { "needed", "required" },
+    { "needing", "requiring" },
+    { "want", "wish for" },
+    { "wants", "wishes for" },
+    { "wanted", "wished for" },
+    { "wanting", "wishing for" },
+    { "help", "aid" },
+    { "helps", "aids" },
+    { "helped", "aided" },
+    { "helping", "aiding" },
+    { "understand", "comprehend" },
+    { "remember", "recall" },
+    { "remembered", "recalled" },
+    { "remembering", "recalling" },
+    { "strange", "peculiar" },
+    { "weird", "peculiar" },
+    { "happy", "content" },
+    { "sad", "sorrowful" },
+    { "quick", "swift" },
+    { "quickly", "swiftly" },
+    { "buy", "purchase" },
+    { "buys", "purchases" },
+    { "bought", "purchased" },
+    { "buying", "purchasing" },
+    { "lol", "heh" },
+    { "haha", "heh" },
+    { "hehe", "heh" },
+    { "ty", "my thanks" },
+    { "np", "a small matter" },
+    { "brb", "I shall return" },
 }
 
 -- Text transformation -------------------------------------------------------
@@ -306,27 +451,34 @@ end
 
 function Roleplay:TransformUndeadSpeak(text)
     if type(text) ~= "string" or text == "" or text:match("^%s*/") then return text end
-    return transformOutsideLinks(text, undeadPhraseReplacements, undeadWordReplacements)
+    local transformed = transformOutsideLinks(text, undeadPhraseReplacements, undeadWordReplacements)
+    -- Keep the original if the added flavor would overflow chat. Never clip
+    -- a message here, since that can cut through an item or spell hyperlink.
+    return #transformed <= 255 and transformed or text
 end
 
 local hookedEditBoxes = setmetatable({}, { __mode = "k" })
 
 -- Chat hooks ----------------------------------------------------------------
 
+function Roleplay:TransformChatText(text)
+    if type(text) ~= "string" or text == "" or text:match("^%s*/") then return text end
+    if self:IsTrollTalkEnabled() then
+        return self:TransformTrollTalk(text)
+    elseif self:IsTaurenTalkEnabled() then
+        return self:TransformTaurenTalk(text)
+    elseif self:IsNightElfTalkEnabled() then
+        return self:TransformNightElfTalk(text)
+    elseif self:IsUndeadSpeakEnabled() then
+        return self:TransformUndeadSpeak(text)
+    end
+    return text
+end
+
 local function transformEditBox(editBox)
     if not editBox or not editBox.GetText or not editBox.SetText then return end
     local text = editBox:GetText()
-    if type(text) ~= "string" or text == "" or text:match("^%s*/") then return end
-    local transformed
-    if Roleplay:IsTrollTalkEnabled() then
-        transformed = Roleplay:TransformTrollTalk(text)
-    elseif Roleplay:IsTaurenTalkEnabled() then
-        transformed = Roleplay:TransformTaurenTalk(text)
-    elseif Roleplay:IsNightElfTalkEnabled() then
-        transformed = Roleplay:TransformNightElfTalk(text)
-    elseif Roleplay:IsUndeadSpeakEnabled() then
-        transformed = Roleplay:TransformUndeadSpeak(text)
-    end
+    local transformed = Roleplay:TransformChatText(text)
     if transformed and transformed ~= text then editBox:SetText(transformed) end
 end
 

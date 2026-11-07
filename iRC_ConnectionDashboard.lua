@@ -18,8 +18,17 @@ local RED = { 1, 0.25, 0.18 }
 local LIST_ROW_HEIGHT, LIST_ROW_SPACING = 44, 48
 local COLUMN_X = { 14, 139, 254, 309, 499, 624 }
 local COLUMN_WIDTH = { 115, 105, 45, 180, 115, 75 }
+local VERIFICATION_COLUMN_X = { 12, 244, 292, 462, 610 }
+local VERIFICATION_COLUMN_WIDTH = { 220, 38, 158, 136, 100 }
+local VERIFICATION_SIMPLE_X = { 12, 310, 370 }
+local VERIFICATION_SIMPLE_WIDTH = { 286, 45, 340 }
 local OVERVIEW_COLUMN_X = { 14, 164, 324, 484 }
 local OVERVIEW_COLUMN_WIDTH = { 136, 146, 146, 224 }
+
+local function listRowMetrics(frame)
+    if frame.tab == "Verification" then return 40, 42 end
+    return LIST_ROW_HEIGHT, LIST_ROW_SPACING
+end
 
 -- Member-state presentation helpers ----------------------------------------
 
@@ -110,6 +119,15 @@ local function makeRow(parent, index)
         text:SetJustifyH(column == 1 and "LEFT" or "CENTER")
         row.columns[column] = text
     end
+    row.memberDetail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.memberDetail:SetJustifyH("LEFT")
+    row.memberDetail:SetWordWrap(false)
+    row.memberDetail:Hide()
+    row.statusAccent = row:CreateTexture(nil, "ARTWORK")
+    row.statusAccent:SetPoint("TOPLEFT", 1, -3)
+    row.statusAccent:SetPoint("BOTTOMLEFT", 1, 3)
+    row.statusAccent:SetWidth(2)
+    row.statusAccent:Hide()
     return row
 end
 
@@ -272,7 +290,6 @@ function Dashboard:Create()
     frame.verificationSearch.hint = frame.verificationSearch:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.verificationSearch.hint:SetPoint("LEFT", frame.verificationSearch, "LEFT", 7, 0)
     frame.verificationSearch.hint:SetText(iRC:Text("VERIFICATION_SEARCH_PLACEHOLDER"))
-    iRC:StyleSearchBox(frame.verificationSearch, frame.verificationSearch.hint)
     frame.verificationSearch:Hide()
 
     frame.verificationSuggestions = CreateFrame("Frame", nil, main, "BackdropTemplate")
@@ -347,8 +364,12 @@ function Dashboard:Create()
     frame.verificationSuggestions:Hide()
     frame.verificationSearch:SetScript("OnTextChanged", function(self)
         self.hint:SetShown(self:GetText() == "")
+        if self.iRCSearchClear then self.iRCSearchClear:SetShown(self:GetText() ~= "") end
         updateVerificationSuggestions()
-        if not self.settingSelection and frame.tab == "Verification" then Dashboard:Refresh() end
+        if not self.settingSelection and frame.tab == "Verification" then
+            if frame.scroll then frame.scroll:SetVerticalScroll(0) end
+            Dashboard:Refresh()
+        end
     end)
     frame.verificationSearch:SetScript("OnEditFocusGained", updateVerificationSuggestions)
     frame.verificationSearch:SetScript("OnEditFocusLost", function()
@@ -371,6 +392,20 @@ function Dashboard:Create()
     frame.verificationSearch:SetScript("OnEscapePressed", function(self)
         frame.verificationSuggestions:Hide()
         self:ClearFocus()
+    end)
+    -- Install the shared search styling after our scripts so its clear button
+    -- and focus hooks remain attached to the finished input.
+    iRC:StyleSearchBox(frame.verificationSearch, frame.verificationSearch.hint)
+    frame.verificationSearch.hint:SetWordWrap(false)
+    local clearSearch = frame.verificationSearch.iRCSearchClear
+    clearSearch.text:SetText("X")
+    clearSearch:SetScript("OnClick", function()
+        frame.verificationFirstSuggestion = nil
+        frame.verificationSuggestions:Hide()
+        if frame.scroll then frame.scroll:SetVerticalScroll(0) end
+        frame.verificationSearch:SetText("")
+        frame.verificationSearch:ClearFocus()
+        clearSearch:Hide()
     end)
     frame.summaryCards = {}
     for index = 1, 5 do
@@ -440,6 +475,11 @@ function Dashboard:Create()
     scroll:SetScrollChild(frame.content)
     frame.rows = {}
     frame.rowData = {}
+    frame.emptyText = frame.content:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    frame.emptyText:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 12, -18)
+    frame.emptyText:SetPoint("TOPRIGHT", frame.content, "TOPRIGHT", -12, -18)
+    frame.emptyText:SetText(iRC:Text("VERIFICATION_EMPTY_LIST"))
+    frame.emptyText:Hide()
     frame.memberMenu = CreateFrame("Frame", "iRCMemberManagementMenu", frame, "BackdropTemplate")
     frame.memberMenu:SetSize(336, 160)
     frame.memberMenu:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -573,6 +613,7 @@ local function setHeaders(frame, values, sortKeys, defaultKey, columnX, columnWi
         frame.content:SetWidth(722)
     end
     headerY = headerY or (frame.embedded and -172 or -156)
+    if frame.tab == "Verification" then headerY = frame.embedded and -157 or -122 end
     frame.content.columnX, frame.content.columnWidth = columnX, columnWidth
     frame.scroll:ClearAllPoints()
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 14, headerY - 20)
@@ -584,14 +625,19 @@ local function setHeaders(frame, values, sortKeys, defaultKey, columnX, columnWi
     for index = 1, #COLUMN_X do
         local header = frame.headers[index]
         header:ClearAllPoints()
-        header:SetPoint("TOPLEFT", frame.main, "TOPLEFT", (columnX[index] or COLUMN_X[index]) + 1, headerY)
+        -- Use the list's origin for both headers and cells; anchoring headers
+        -- to the main panel omitted the scroll frame's horizontal inset.
+        header:SetPoint("TOPLEFT", frame.scroll, "TOPLEFT", columnX[index] or COLUMN_X[index], 20)
         header:SetWidth(columnWidth[index] or COLUMN_WIDTH[index])
         header.text:SetJustifyH(index == 1 and "LEFT" or "CENTER")
+        header.text:SetWordWrap(false)
         for _, row in ipairs(frame.rows) do
             local columnText = row.columns[index]
             columnText:ClearAllPoints()
             columnText:SetPoint("LEFT", row, "LEFT", columnX[index] or COLUMN_X[index], 0)
             columnText:SetWidth(columnWidth[index] or COLUMN_WIDTH[index])
+            columnText:SetJustifyH(index == 1 and "LEFT" or "CENTER")
+            columnText:SetWordWrap(frame.tab ~= "Verification")
         end
         local key = sortKeys and sortKeys[index]
         header.sortKey = key
@@ -619,12 +665,17 @@ local function setFilters(frame, choices)
         local choice = choices[index]
         if choice then
             local five = #choices == 5
-            button:SetSize(five and 130 or 160, 27)
+            local verification = frame.tab == "Verification"
+            local availableWidth = (frame.main and frame.main:GetWidth() or 752) - 31
+            local width = verification and math.max(80, math.floor((availableWidth - (#choices - 1) * 6) / #choices))
+                or (five and 130 or 160)
+            button:SetSize(width, verification and 26 or 27)
             button:ClearAllPoints()
-            button:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (five and 136 or 166),
-                frame.embedded and -140 or -124)
+            button:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15 + (index - 1) * (verification and width + 6 or (five and 136 or 166)),
+                verification and (frame.embedded and -118 or -83) or (frame.embedded and -140 or -124))
             local active = choice.id == selected
-            button.text:SetText(choice.label)
+            button.text:SetText(choice.label .. (choice.count ~= nil and (" (" .. choice.count .. ")") or ""))
+            button.text:SetWordWrap(false)
             button.activeGlow:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], active and 0.18 or 0)
             button:SetBackdropColor(active and 0.18 or 0.055, active and 0.09 or 0.045, active and 0.025 or 0.035, 0.98)
             button:SetBackdropBorderColor(active and ORANGE[1] or 0.28, active and ORANGE[2] or 0.23, active and ORANGE[3] or 0.16, active and 1 or 0.9)
@@ -638,6 +689,7 @@ local function setFilters(frame, choices)
             end
             button:SetScript("OnClick", function()
                 frame.filters[frame.tab] = choice.id
+                frame.scroll:SetVerticalScroll(0)
                 Dashboard:Refresh()
             end)
             button:Show()
@@ -748,19 +800,40 @@ local materializeVerificationRow
 local function renderRow(row, data)
     if data.verificationMember then materializeVerificationRow(data) end
     local values, color, onClick, tooltip = data.values, data.color, data.onClick, data.tooltip
-    if data.attentionSince then values[4] = data.addonText .. "\n" .. formatAttentionTimer(data.attentionSince) end
     for column = 1, #COLUMN_X do
         row.columns[column]:SetText(values[column] or "")
+        row.columns[column]:SetWordWrap(not data.verificationList)
         local columnColor = data.columnColors and data.columnColors[column]
         row.columns[column]:SetTextColor(unpack(columnColor or (column == 1 and (color or ORANGE) or GRAY)))
     end
     local border = color or ORANGE
-    row:SetBackdropBorderColor(border[1], border[2], border[3], 0.62)
+    if data.verificationList then
+        local x, width = data.columnX or VERIFICATION_COLUMN_X, data.columnWidth or VERIFICATION_COLUMN_WIDTH
+        row:SetBackdropColor(0.065, 0.055, 0.040, data.stripe and 0.85 or 0.42)
+        row:SetBackdropBorderColor(0.18, 0.15, 0.10, 0.45)
+        row.statusAccent:SetColorTexture(border[1], border[2], border[3], 0.85)
+        row.statusAccent:Show()
+        row.columns[1]:ClearAllPoints()
+        row.columns[1]:SetPoint("TOPLEFT", row, "TOPLEFT", x[1], -4)
+        row.columns[1]:SetWidth(width[1])
+        row.columns[1]:SetWordWrap(false)
+        row.memberDetail:ClearAllPoints()
+        row.memberDetail:SetPoint("TOPLEFT", row, "TOPLEFT", x[1], -23)
+        row.memberDetail:SetWidth(width[1])
+        row.memberDetail:SetText(data.memberDetail)
+        row.memberDetail:Show()
+    else
+        row:SetBackdropColor(0.08, 0.07, 0.06, 0.96)
+        row:SetBackdropBorderColor(border[1], border[2], border[3], 0.62)
+        row.memberDetail:Hide()
+        row.statusAccent:Hide()
+    end
     row:SetScript("OnClick", onClick)
     row:SetScript("OnEnter", tooltip and function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(tooltip, 1, 1, 1, 1, true)
+        local hoverText = data.attentionSince and (tooltip .. "\n" .. formatAttentionTimer(data.attentionSince)) or tooltip
+        GameTooltip:SetText(hoverText, 1, 1, 1, 1, true)
         GameTooltip:Show()
     end or nil)
     row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -770,15 +843,19 @@ end
 function Dashboard:RenderVisibleRows()
     local frame = self.frame
     if not frame or not frame.rowData then return end
-    local first = math.floor(frame.scroll:GetVerticalScroll() / LIST_ROW_SPACING) + 1
-    local visible = math.max(0, math.min(#frame.rowData - first + 1, math.ceil(frame.scroll:GetHeight() / LIST_ROW_SPACING) + 1))
+    local rowHeight, rowSpacing = listRowMetrics(frame)
+    local first = math.floor(frame.scroll:GetVerticalScroll() / rowSpacing) + 1
+    local visible = math.max(0, math.min(#frame.rowData - first + 1, math.ceil(frame.scroll:GetHeight() / rowSpacing) + 1))
     for slot = 1, visible do
         local index = first + slot - 1
         local row = frame.rows[slot]
         if not row then row = makeRow(frame.content, index); frame.rows[slot] = row end
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 0, -((index - 1) * LIST_ROW_SPACING))
-        row:SetPoint("TOPRIGHT", frame.content, "TOPRIGHT", 0, -((index - 1) * LIST_ROW_SPACING))
+        row:SetHeight(rowHeight)
+        row:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 0, -((index - 1) * rowSpacing))
+        row:SetPoint("TOPRIGHT", frame.content, "TOPRIGHT", 0, -((index - 1) * rowSpacing))
+        frame.rowData[index].stripe = index % 2 == 0
+        frame.rowData[index].columnX, frame.rowData[index].columnWidth = frame.content.columnX, frame.content.columnWidth
         renderRow(row, frame.rowData[index])
     end
     for slot = visible + 1, #frame.rows do frame.rows[slot]:Hide() end
@@ -821,26 +898,20 @@ materializeVerificationRow = function(data)
     local usesSelfFound, usesGuildFound = context.usesSelfFound, context.usesGuildFound
     local verification = member.verification or { state = "missing", label = "Addon not detected" }
     local addon = member.profile and (iRC.Colors.Green .. "iRC" .. iRC.Colors.Reset
-            .. " v" .. (member.addonVersion or "?") .. " · " .. verification.label)
+            .. " v" .. (member.addonVersion or "?"))
         or verification.label
     local raceWarning, classWarning
     if member.raceMismatch and member.raceCheck then
         local actualRace = iRC:Text("GUILD_RACE_" .. member.raceCheck.actual)
         local expectedRace = iRC:Text("GUILD_RACE_" .. member.raceCheck.expected)
         raceWarning = iRC:Text("VERIFICATION_WRONG_RACE", actualRace, expectedRace)
-        addon = addon .. "\n" .. raceWarning
     end
     if member.classMismatch and member.classCheck then
         classWarning = iRC:Text("VERIFICATION_WRONG_CLASS",
             iRC:GetClassDisplayName(member.classCheck.actual), iRC:GetClassDisplayName(member.classCheck.expected))
-        addon = addon .. "\n" .. classWarning
     end
-    local addonText = addon
-    local attentionTimer = formatAttentionTimer(member.attentionSince)
-    if attentionTimer then addon = addon .. "\n" .. attentionTimer end
     local liveState = verification.state
     local hasLiveAddon = iRC:IsLiveAddonState(liveState)
-    local selfFound = not hasLiveAddon and "Unknown" or (member.selfFound and "Active" or "Inactive")
     local guildFoundStatus = memberGuildFoundStatus(member, context.connection)
     local progressText, progressColor
     local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(member.name)
@@ -891,38 +962,44 @@ materializeVerificationRow = function(data)
         cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text(guildFoundStatus.clean and "RL_CLEAN" or "RL_FLAGGED"))
     end
     if not hasLiveAddon then progressText, cleanText, progressColor = "", "", GRAY end
-    local statusTooltip = progressionRulesActive and selfFound or nil
-    local guildFoundVerificationApplies = progressionRulesActive and (personalBank or (usesGuildFound
-        and (progressionMode == "GUILD_FOUND"
-            or progressionMode == "SELF_FOUND_OR_GUILD_FOUND" and member.selfFound ~= true
-            or progressionMode == "SELF_FOUND" and (member.level or 0) >= 60)))
-    if progressionRulesActive and iRC.RaceLockedSync then
-        statusTooltip = statusTooltip .. "\n"
-            .. iRC.RaceLockedSync:DescribeStatus(member.name, false, guildFoundStatus, not guildFoundVerificationApplies)
+    -- Keep the hover aligned with the current row. Historical evidence and
+    -- review timestamps belong in the full report, even after a clean review.
+    local tooltipLines = { displayMemberName(member.name), verification.label }
+    if progressionRulesActive and progressText ~= "" then tooltipLines[#tooltipLines + 1] = progressText end
+    if progressionRulesActive and cleanText ~= "" then tooltipLines[#tooltipLines + 1] = cleanText end
+    if raceWarning then tooltipLines[#tooltipLines + 1] = raceWarning end
+    if classWarning then tooltipLines[#tooltipLines + 1] = classWarning end
+    if progressionRulesActive and frame.showMemberReport then
+        tooltipLines[#tooltipLines + 1] = "\n" .. iRC:Text("VERIFICATION_REPORT_HINT")
     end
-    if raceWarning then statusTooltip = statusTooltip and (statusTooltip .. "\n\n" .. raceWarning) or raceWarning end
-    if classWarning then statusTooltip = statusTooltip and (statusTooltip .. "\n\n" .. classWarning) or classWarning end
     if progressionRulesActive and context.canVerify then
-        statusTooltip = statusTooltip .. "\n\n" .. iRC:Text("MEMBER_MENU_HINT")
+        tooltipLines[#tooltipLines + 1] = iRC:Text("MEMBER_MENU_HINT")
     end
+    local statusTooltip = table.concat(tooltipLines, "\n")
     local effectiveState = context.verificationStates[member]
     local color = effectiveState == "attention" and RED
         or (verification.state == "verified" and GREEN
         or ((verification.state == "offline" or verification.state == "inactive" or verification.state == "optional") and GRAY or RED))
-    local rowValues = { displayMemberName(member.name), member.race .. " / " .. member.class,
-        tostring(member.level), addon }
-    if progressionRulesActive then rowValues[5], rowValues[6] = progressText, cleanText end
+    local rowValues = { displayMemberName(member.name), tostring(member.level), addon }
+    if progressionRulesActive then
+        -- The column already supplies the context. Keep only the short result
+        -- in the cell; the hover retains the full progression/monitoring label.
+        rowValues[4] = progressText:gsub("^[^:]+:%s*", "")
+        rowValues[5] = cleanText:gsub("^[^:]+:%s*", "")
+    end
     local selectedMember = member
     local rowClick = progressionRulesActive and function(_, mouseButton)
         if mouseButton == "RightButton" then openMemberManagementMenu(frame, selectedMember)
         elseif frame.showMemberReport then frame.showMemberReport(selectedMember.name) end
     end or nil
     data.values, data.color, data.onClick, data.tooltip = rowValues, color, rowClick, statusTooltip
-    data.attentionSince, data.addonText = member.attentionSince, addonText
-    data.columnColors = { [4] = (member.raceMismatch or member.classMismatch) and RED or nil }
+    data.verificationList = true
+    data.memberDetail = (member.race or "Unknown") .. " · " .. iRC:GetClassDisplayName(member.class or "UNKNOWN")
+    data.attentionSince = member.attentionSince
+    data.columnColors = { [3] = (member.raceMismatch or member.classMismatch) and RED or nil }
     if progressionRulesActive then
-        data.columnColors[5] = progressColor
-        data.columnColors[6] = (selfFoundViolation
+        data.columnColors[4] = progressColor
+        data.columnColors[5] = (selfFoundViolation
             or (liveState == "verified" and guildFoundStatus and guildFoundStatus.clean == false)) and RED
             or (not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
             or (belowMaxLevel and GREEN
@@ -1032,6 +1109,10 @@ function Dashboard:Refresh()
     end
     frame.verificationSearch:SetShown(frame.tab == "Verification")
     if frame.tab == "Verification" then
+        local searchTop = frame.embedded and -84 or -49
+        frame.verificationSearch:ClearAllPoints()
+        frame.verificationSearch:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, searchTop)
+        frame.verificationSearch:SetPoint("TOPRIGHT", frame.main, "TOPRIGHT", -16, searchTop)
         if frame.UpdateVerificationSuggestions then frame.UpdateVerificationSuggestions() end
     else
         frame.verificationSuggestions:Hide()
@@ -1150,53 +1231,36 @@ function Dashboard:Refresh()
         local function effectiveVerificationState(member)
             return verificationStates[member]
         end
-        local progressHeader = usesGuildFound and iRC:Text("VERIFICATION_PROGRESS_SF_GF_COLUMN")
-            or (usesSelfFound and iRC:Text("VERIFICATION_PROGRESS_COLUMN") or iRC:Text("VERIFICATION_ONLY_COLUMN"))
         local canVerify = iRC:HasGuildPermission("verification")
-        local cards
-        if attentionRelevant then
-            cards = { { label = "Verified", value = tostring(verified), color = GREEN } }
-            if not responseRequired then
-                cards[#cards + 1] = {
-                    label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), value = tostring(optional), color = GRAY,
-                }
-            end
-            cards[#cards + 1] = { label = "Needs attention", value = tostring(attention), color = RED }
-            cards[#cards + 1] = { label = "Offline", value = tostring(offline), color = GRAY }
-        else
-            cards = {
-                { label = "All members", value = tostring(#members), color = ORANGE },
-                { label = "Verified", value = tostring(verified), color = GREEN },
-                { label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), value = tostring(optional), color = GRAY },
-            }
-        end
-        setSummaryCards(frame, cards)
+        -- The filter counts replace the separate summary cards on this page.
+        setSummaryCards(frame, {})
         local filters
         if attentionRelevant then
-            filters = { { id = "all", label = "All members" },
-                { id = "attention", label = "Needs attention", flash = attention > 0 },
-                { id = "verified", label = "Verified" } }
+            filters = { { id = "all", label = "All members", count = #members },
+                { id = "attention", label = "Needs attention", count = attention, flash = attention > 0 },
+                { id = "verified", label = "Verified", count = verified } }
             if not responseRequired then
-                filters[#filters + 1] = { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD") }
+                filters[#filters + 1] = { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), count = optional }
             end
         else
             filters = {
-                { id = "all", label = "All members" },
-                { id = "verified", label = "Verified" },
-                { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD") },
+                { id = "all", label = "All members", count = #members },
+                { id = "verified", label = "Verified", count = verified },
+                { id = "optional", label = iRC:Text("VERIFICATION_OPTIONAL_CARD"), count = optional },
             }
         end
+        filters[#filters + 1] = { id = "offline", label = iRC:Text("VERIFICATION_OFFLINE"), count = offline }
         local filter = setFilters(frame, filters)
         frame.title:SetText("Guild verification")
-        frame.subtitle:SetText(iRC:Text(responseRequired and "VERIFICATION_RESPONSE_REQUIRED_DESC" or "VERIFICATION_RESPONSE_OPTIONAL_DESC"))
+        frame.subtitle:SetText(iRC:Text("VERIFICATION_LIST_DESC"))
         if progressionRulesActive then
             setHeaders(frame,
-                { "Member", "Race / Class", "Level", "Live status", progressHeader, iRC:Text("VERIFICATION_STATUS_COLUMN") },
-                { "name", "race", "level", "status", "progress", "clean" }, "name")
+                { "Member", "Lvl", "iRC status", "Progression", "Status" },
+                { "name", "level", "status", "progress", "clean" }, "name", VERIFICATION_COLUMN_X, VERIFICATION_COLUMN_WIDTH)
         else
             setHeaders(frame,
-                { "Member", "Race / Class", "Level", "Live status" },
-                { "name", "race", "level", "status" }, "name")
+                { "Member", "Level", "iRC status" },
+                { "name", "level", "status" }, "name", VERIFICATION_SIMPLE_X, VERIFICATION_SIMPLE_WIDTH)
         end
         local searchQuery = frame.verificationSearch:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "")
         local viewKey = table.concat({ filter, searchQuery, tostring(frame.sortKey),
@@ -1209,6 +1273,7 @@ function Dashboard:Refresh()
                 local state = effectiveVerificationState(member)
                 local matchesFilter = filter == "all" or state == filter
                     or (filter == "attention" and iRC:IsAttentionVerificationState(state))
+                    or (filter == "offline" and state == "inactive")
                 return matchesFilter and memberMatchesIdentitySearch(member, searchQuery)
             end, function(member, key)
                 if key == "name" then return member.name or "" end
@@ -1296,8 +1361,10 @@ function Dashboard:Refresh()
             }, RED, nil, incident.reason)
         end
     end
-    frame.content:SetHeight(math.max(1, count * LIST_ROW_SPACING))
-    frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll(), math.max(0, count * LIST_ROW_SPACING - frame.scroll:GetHeight())))
+    local _, rowSpacing = listRowMetrics(frame)
+    frame.content:SetHeight(math.max(1, count * rowSpacing))
+    frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll(), math.max(0, count * rowSpacing - frame.scroll:GetHeight())))
+    if frame.emptyText then frame.emptyText:SetShown(frame.tab == "Verification" and count == 0) end
     self:RenderVisibleRows()
 end
 

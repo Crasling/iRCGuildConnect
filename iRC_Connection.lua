@@ -222,6 +222,7 @@ function iRC:StoreMemberProfile(profile)
         connection.members[key] = profile
     end
     if self.InvalidateGuildMemberRow then self:InvalidateGuildMemberRow(profile.name) end
+    if self.RosterRaces then self.RosterRaces:LearnProfile(connection, profile) end
     if self.ConnectionDashboard and self.ConnectionDashboard.ScheduleAttentionReminderCheck then
         self.ConnectionDashboard:ScheduleAttentionReminderCheck()
     end

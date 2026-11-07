@@ -123,7 +123,7 @@ local source = sourceFile:read("*a")
 sourceFile:close()
 local boundary = assert(source:find("local function updateRaceOverview(frame)", 1, true))
 local render = assert(load(source:sub(1, boundary - 1)
-    .. "\nreturn { create = makeRaceCard, set = setRaceCard, height = guildCardHeight, ui = UI }",
+    .. "\nreturn { create = makeRaceCard, set = setRaceCard, height = guildCardHeight, ui = UI, overview = updateGuildOverview }",
     "@iRC_MainUI.lua"))("iRC", private)
 
 local function deepCopy(value)
@@ -442,3 +442,101 @@ render.ui:RenderMemberRows()
 assert(mainRow.profileName == "Member 1000" and not altRow:IsShown(), "the last page hides unused rows")
 assert(rosterReads == beforeRosterReads, "scrolling the compact roster does not rebuild guild data")
 print("PASS: compact member rows, full profession hover, confirmed identities, live presence, and bounded scrolling for 1,000 members")
+
+-- Race statistics follow the same confirmed main/alt scope as other totals.
+local overviewSettings = { excludeAltsFromGuildSnapshot = true }
+function addon:GetSettings() return overviewSettings end
+function addon:NormalizeGuildRace(value)
+    local token = tostring(value or ""):upper():gsub("%s+", "")
+    if token == "UNDEAD" then token = "SCOURGE" end
+    return ({ HUMAN = true, NIGHTELF = true, SKYBORNE = true, SCOURGE = true })[token] and token or ""
+end
+function addon:IsAddonResponseRequired() return false end
+function addon:HasGuildPermission() return false end
+function addon:IsTestAdminGuildMaster() return false end
+function addon:GetConnection() return { guildName = "Example Guild" } end
+addon.Identity.GetMainCharacterName = function(_, name)
+    if name == "Main Human" or name == "Alt Undead" then return "Main Human" end
+end
+roster = {
+    { name = "Main Human", race = "HUMAN", class = "MAGE", level = 60, lastOnlineDays = 20 },
+    { name = "Alt Undead", race = "SCOURGE", class = "WARLOCK", level = 20, online = true },
+    { name = "Elf Main", race = "NIGHTELF", class = "DRUID", level = 15, lastOnlineDays = 2 },
+    { name = "Sky Main", race = "SKYBORNE", class = "MAGE", level = 40, online = true },
+    { name = "Unknown Main", race = "Unknown", class = "PRIEST", level = 10 },
+}
+local overviewFrame = { raceCards = {}, factionSections = {}, memberRows = {},
+    scrollContent = widget("Frame", parent), scroll = widget("ScrollFrame", parent),
+    guildOverviewAltToggle = widget("Button", parent), contentTitle = widget("FontString", parent),
+    contentSubtitle = widget("FontString", parent) }
+overviewFrame.scroll:SetHeight(300)
+overviewFrame.scroll:SetVerticalScroll(75)
+render.overview(overviewFrame)
+local overview = overviewFrame.guildOverview
+assert(overview.exportData.total == 4 and #overview.exportData.races == 4)
+local raceTotals, raceSum = {}, 0
+for _, race in ipairs(overview.exportData.races) do
+    raceTotals[race.race], raceSum = race.total, raceSum + race.total
+    assert(race.percent == 25)
+end
+assert(raceSum == 4 and raceTotals.HUMAN == 1 and not raceTotals.SCOURGE and raceTotals.UNKNOWN == 1,
+    "a linked alt uses the main's race; unavailable races remain explicit instead of being guessed")
+assert(overviewFrame.scroll:GetVerticalScroll() == 75 and overviewFrame.scrollContent:GetHeight() > 462,
+    "the expanded overview can scroll and refreshes preserve its position")
+overviewSettings.excludeAltsFromGuildSnapshot = false
+render.overview(overviewFrame)
+assert(overview.exportData.total == 5 and #overview.exportData.races == 5)
+local raceRows = #overview.races.rows
+render.overview(overviewFrame)
+assert(#overview.races.rows == raceRows, "overview refreshes reuse race rows")
+local raceReport = deepCopy(live)
+raceReport.races = { HUMAN = 2, SKYBORNE = 1, UNKNOWN = 1 }
+render.set(card, raceReport, true)
+assert(card.racesTitle:IsVisible() and card.racesText:GetText():find("Human: 2 (50%)", 1, true)
+    and card.racesText:GetText():find("Unknown: 1 (25%)", 1, true), "guild previews show reported race totals and shares")
+render.set(card, live, true)
+assert(card.racesText:GetText() == "No race data reported yet.", "older reports do not invent race populations")
+render.set(card, raceReport, false)
+assert(not card.racesText:IsVisible(), "race details stay inside the expanded guild preview")
+print("PASS: overview race counts, main/alt scope, unknown races, reusable rows and expanded guild previews")
+
+-- Use the real shared search styling and dashboard input setup. Clearing a
+-- typed/autofilled name must reset the search, suggestions, and scroll position.
+function methods:GetRegions() end
+function methods:HasFocus() return self.focused == true end
+function methods:GetNumLetters() return #self:GetText() end
+function methods:ClearFocus() self.focused = false; self:Fire("OnEditFocusLost") end
+local previousSetText = methods.SetText
+function methods:SetText(value)
+    previousSetText(self, value)
+    if self.kind == "EditBox" then self:Fire("OnTextChanged", false) end
+end
+local coreFile = assert(io.open("iRC_Core.lua", "r"))
+local coreSource = coreFile:read("*a"); coreFile:close()
+local skinStart = assert(coreSource:find("function iRC:StyleSearchBox", 1, true))
+local skinEnd = assert(coreSource:find("-- Safe values and identity normalization", skinStart, true))
+assert(load("local iRC = ...\n" .. coreSource:sub(skinStart, skinEnd - 1), "@iRC_Core.lua"))(addon)
+local dashboardFile = assert(io.open("iRC_ConnectionDashboard.lua", "r"))
+local dashboardSource = dashboardFile:read("*a"); dashboardFile:close()
+local inputStart = assert(dashboardSource:find("    frame.verificationSearch = CreateFrame", 1, true))
+local inputEnd = assert(dashboardSource:find("    frame.summaryCards = {}", inputStart, true))
+local searchFrame = { tab = "Verification", main = widget("Frame", parent), scroll = widget("ScrollFrame", parent) }
+local searchRefreshes = 0
+local dashboard = { Refresh = function() searchRefreshes = searchRefreshes + 1 end }
+assert(load("local iRC, Dashboard, frame = ...\nlocal main = frame.main\nlocal function setBackdrop() end\n"
+    .. dashboardSource:sub(inputStart, inputEnd - 1), "@iRC_ConnectionDashboard.lua"))(addon, dashboard, searchFrame)
+local search = searchFrame.verificationSearch
+assert(not search.iRCSearchClear:IsShown(), "an empty input hides its clear button")
+search.focused = true
+search:SetText("Main H")
+assert(search.iRCSearchClear:IsShown() and searchFrame.verificationSuggestions:IsShown(),
+    "typing a name reveals the clear button and roster suggestions")
+search:Fire("OnTabPressed")
+assert(search:GetText() == "Main Human" and search.iRCSearchClear:IsShown(), "autofilled names remain clearable")
+searchFrame.scroll:SetVerticalScroll(500)
+local beforeClear = searchRefreshes
+search.iRCSearchClear:Fire("OnClick")
+assert(search:GetText() == "" and not search:HasFocus() and not search.iRCSearchClear:IsShown())
+assert(not searchFrame.verificationSuggestions:IsShown() and searchFrame.scroll:GetVerticalScroll() == 0
+    and searchRefreshes == beforeClear + 1, "one clear click restores the unsearched list without extra refreshes")
+print("PASS: real verification search styling, autocomplete, clear button, focus and scroll reset")
