@@ -30,10 +30,12 @@ iRC_Roleplay.lua
 iRC_RosterRaces.lua
 iRC_Guild.lua
 iRC_Identity.lua
+iRC_MemberNotes.lua
 iRC_GuildAnnouncements.lua
 iRC_Professions.lua
 iRC_Diagnostics.lua
 iRC_MainUI.lua
+iRC_MemberNotesUI.lua
 iRC_VerificationReport.lua
 iRC_ConnectionDashboard.lua
 iRC_AdminFeedback.lua

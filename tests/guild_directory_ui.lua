@@ -284,6 +284,24 @@ assert(not card.details:IsVisible(), "collapsing hides the detail panel")
 assert(not card.groupOutline:IsVisible() and not card.groupBackground:IsVisible(),
     "collapsing clears the selected group styling")
 
+local anotherGuild = deepCopy(live)
+anotherGuild.guildName = "Another Guild"
+local anotherCard = render.create(parent)
+anotherCard:SetWidth(651)
+render.set(card, live)
+render.set(anotherCard, anotherGuild)
+local oldRefresh = render.ui.Refresh
+render.ui.Refresh = function() render.set(card, live); render.set(anotherCard, anotherGuild) end
+card.header:Fire("OnClick")
+assert(card.expanded and not anotherCard.expanded, "opening a guild expands its details")
+anotherCard.expandButton:Fire("OnClick")
+assert(anotherCard.expanded and not card.expanded and not card.details:IsVisible(),
+    "opening another guild collapses the previously open guild")
+anotherCard.header:Fire("OnClick")
+assert(not anotherCard.expanded and not card.expanded, "clicking the open guild can still collapse all details")
+render.ui.Refresh = oldRefresh
+anotherCard:Hide()
+
 local longProfile = deepCopy(live)
 local contactNames = {}
 for index = 1, 5 do contactNames[index] = "Long Contact " .. index .. " " .. string.rep("Lastname", 6) end
@@ -498,12 +516,33 @@ assert(#overview.races.rows == raceRows, "overview refreshes reuse race rows")
 local raceReport = deepCopy(live)
 raceReport.races = { HUMAN = 2, SKYBORNE = 1, UNKNOWN = 1 }
 render.set(card, raceReport, true)
-assert(card.racesTitle:IsVisible() and card.racesText:GetText():find("Human: 2 (50%)", 1, true)
-    and card.racesText:GetText():find("Unknown: 1 (25%)", 1, true), "guild previews show reported race totals and shares")
+assert(card.racesTitle:IsVisible() and card.raceBar:IsVisible() and #card.raceSegments == 3,
+    "expanded guild previews display a segmented race bar")
+assert(card.raceSegments[1].raceName == "Human" and card.raceSegments[1].count == 2
+    and card.raceSegments[1].percent == 50 and card.raceSegments[3].raceName == "Unknown"
+    and card.raceSegments[3].percent == 25, "race segments show the reported population shares")
+tooltipLines = {}
+card.raceSegments[1]:Fire("OnEnter")
+assert(GameTooltip:GetText() == "Human" and table.concat(tooltipLines, " "):find("2 members", 1, true)
+    and table.concat(tooltipLines, " "):find("50.0%", 1, true), "hovering a race shows its full name, count and share")
+local raceSegmentCount = #card.raceSegments
+render.set(card, raceReport, true)
+assert(#card.raceSegments == raceSegmentCount, "race bars reuse their frames on refresh")
+local partialRaces = deepCopy(raceReport)
+partialRaces.races = { HUMAN = 2 }
+render.set(card, partialRaces, true)
+assert(card.raceSegments[1].percent == 50 and card.raceSegments[2].raceName == "Unknown"
+    and card.raceSegments[2].count == 2 and not partialRaces.races.UNKNOWN,
+    "partial race data keeps unreported members unknown without changing the report")
+render.set(card, raceReport, true)
+local raceWidth = 0
+for _, segment in ipairs(card.raceSegments) do if segment:IsShown() then raceWidth = raceWidth + segment:GetWidth() end end
+assert(raceWidth == card:GetWidth() - 36, "race segments fill the same bar width as classes")
 render.set(card, live, true)
 assert(card.racesText:GetText() == "No race data reported yet.", "older reports do not invent race populations")
+for _, segment in ipairs(card.raceSegments) do assert(not segment:IsShown(), "reused bars hide stale race segments") end
 render.set(card, raceReport, false)
-assert(not card.racesText:IsVisible(), "race details stay inside the expanded guild preview")
+assert(not card.raceBar:IsVisible(), "race details stay inside the expanded guild preview")
 print("PASS: overview race counts, main/alt scope, unknown races, reusable rows and expanded guild previews")
 
 -- Use the real shared search styling and dashboard input setup. Clearing a

@@ -534,6 +534,9 @@ function Dashboard:Create()
 
     local menuActions = {
         { group = "MEMBER_MENU_GROUP_DETAILS", label = "MEMBER_MENU_VIEW_REPORT", run = showGuildFoundReport },
+        { group = "MEMBER_MENU_GROUP_DETAILS", label = "MEMBER_MENU_NOTES", permission = "notesView", run = function(targetName)
+            if iRC.MemberNotes and iRC.MemberNotes.UI then iRC.MemberNotes.UI:Open(targetName) end
+        end },
         { group = "MEMBER_MENU_GROUP_CONTACT", label = "MEMBER_MENU_WHISPER_RULE_VIOLATION", violationOnly = true, run = function(targetName, member)
             local message = ruleViolationWhisper(member)
             if message and SendChatMessage then SendChatMessage(message, "WHISPER", nil, displayMemberName(targetName)) end
@@ -579,6 +582,7 @@ function Dashboard:Create()
         button.gmOnly = action.gmOnly
         button.maxLevelOnly = action.maxLevelOnly
         button.violationOnly = action.violationOnly
+        button.permission = action.permission
         button.group = action.group
         button.tone = action.tone
         button:SetScript("OnClick", function(self)
@@ -714,7 +718,8 @@ local function openMemberManagementMenu(frame, member)
     for _, groupLabel in pairs(menu.groupLabels) do groupLabel:Hide() end
     for _, button in ipairs(menu.actionButtons) do
         local hasViolationMessage = not button.violationOnly or ruleViolationWhisper(member) ~= nil
-        local shown = hasViolationMessage and (not button.gmOnly or iRC:HasGuildPermission("verification"))
+        local shown = hasViolationMessage and (not button.permission or iRC:HasGuildPermission(button.permission))
+            and (not button.gmOnly or iRC:HasGuildPermission("verification"))
             and (not button.maxLevelOnly or guildFoundDecisionAllowed or iRC:IsTestAdminGuildMaster())
         button:SetShown(shown)
         if shown then
@@ -1352,13 +1357,17 @@ function Dashboard:Refresh()
         end)
         for _, incident in ipairs(incidents) do
             count = count + 1
+            local selectedIncident = incident
+            local canNote = iRC.MemberNotes and (iRC.MemberNotes:Can("notesAdd") or iRC.MemberNotes:Can("notesManage"))
             setRow(frame, count, {
                 displayMemberName(incident.reporter),
                 date("%Y-%m-%d %H:%M", tonumber(incident.occurredAt) or 0),
                 incident.instanceName or iRC:Text("GROUP_VIOLATION_UNKNOWN_LOCATION"),
                 incident.players or iRC:Text("GROUP_VIOLATION_UNKNOWN_PLAYER"),
                 iRC:Text("INCIDENT_UPLOADED"),
-            }, RED, nil, incident.reason)
+            }, RED, canNote and function()
+                if iRC.MemberNotes.UI then iRC.MemberNotes.UI:OpenFromIncident(selectedIncident) end
+            end or nil, (incident.reason or "") .. (canNote and "\nClick to create a member note from this violation." or ""))
         end
     end
     local _, rowSpacing = listRowMetrics(frame)

@@ -6,6 +6,7 @@ if not iRC then return end
 -- so further locales can be added without changing addon logic.
 local C = iRC.Colors
 iRC.L = {
+    MEMBER_MENU_NOTES = "Member Notes",
     -- Addon, About & Debug
     ABOUT_CREATED_BY = "Created by: ",
     ABOUT_DESCRIPTION = C.iRC .. "iRC " .. C.Reset .. "connects every kind of guild and helps players discover communities. Guilds can share information, coordinate optional rules, view roster activity, and publish guild statistics.",

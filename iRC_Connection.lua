@@ -320,13 +320,13 @@ local function rankHasDelegatedPermission(rankIndex, connection, memberName)
         and connection.memberPermissions[iRC:NormalizeName(memberName)]
     if memberEntry and memberEntry.permissions then
         for permission in pairs(iRC.DefaultRankPermissions) do
-            if memberEntry.permissions[permission] == true then return true end
+            if permission:sub(1, 5) ~= "notes" and memberEntry.permissions[permission] == true then return true end
         end
     end
     for permission, defaultRank in pairs(iRC.DefaultRankPermissions) do
         local allowedRank = connection.rankPermissions and tonumber(connection.rankPermissions[permission])
         if allowedRank == nil then allowedRank = defaultRank end
-        if allowedRank ~= nil and rankIndex <= allowedRank then return true end
+        if permission:sub(1, 5) ~= "notes" and allowedRank ~= nil and rankIndex <= allowedRank then return true end
     end
     return false
 end
@@ -499,7 +499,9 @@ end
 local function memberPermissionsMask(permissions)
     local mask = 0
     for index, permission in ipairs(iRC.PermissionOrder or {}) do
-        if permissions and permissions[permission] == true then mask = mask + 2 ^ (index - 1) end
+        -- Additional note permissions use their own route; keep this mask's
+        -- original eleven bits readable by released clients.
+        if index <= 11 and permissions and permissions[permission] == true then mask = mask + 2 ^ (index - 1) end
     end
     return mask
 end
@@ -531,6 +533,7 @@ function iRC:SendMemberPermissions(memberName, targetName, force)
             if send(self.Prefix, payload, targetName and "WHISPER" or "GUILD", targetName) then sentAny = true end
         end
     end
+    if self.MemberNotes then self.MemberNotes:SendGrants(memberName, targetName) end
     return sentAny
 end
 
@@ -581,6 +584,7 @@ function iRC:SendRankPermissions(targetName, force)
         rulesBackupChecksum(recruitment .. SEP .. timestamp) }, SEP),
         targetName and "WHISPER" or "GUILD", targetName)
     self:SendMemberPermissions(nil, targetName, true)
+    if self.MemberNotes then self.MemberNotes:SendPermissions(targetName) end
     return true
 end
 
@@ -1604,12 +1608,18 @@ local function handleMessage(prefix, message, distribution, sender)
             and checksum == memberPermissionsChecksum(name, math.floor(mask), math.floor(timestamp), source)
             and timestamp >= math.floor(tonumber(current and current.timestamp) or 0) then
             local permissions = {}
+            -- The note grants have an independent timestamp and can arrive
+            -- before this older packet. Do not erase them on reordering.
+            for _, permission in ipairs({ "notesView", "notesAdd", "notesManage" }) do
+                permissions[permission] = current and current.permissions and current.permissions[permission] or nil
+            end
             for index, permission in ipairs(iRC.PermissionOrder or {}) do
-                if math.floor(mask / (2 ^ (index - 1))) % 2 == 1 then permissions[permission] = true end
+                if index <= 11 and math.floor(mask / (2 ^ (index - 1))) % 2 == 1 then permissions[permission] = true end
             end
             connection.memberPermissions[key] = {
                 name = iRC:FormatPlayerName(name), permissions = permissions,
                 timestamp = math.floor(timestamp), source = source,
+                notePermissionsTimestamp = current and current.notePermissionsTimestamp,
             }
             iRC:RecordManagementConnectionStatus("permissions", source, timestamp, sender, now)
             if key == iRC:NormalizeName(iRC:GetPlayerName()) and connection.rulesBootstrap == true

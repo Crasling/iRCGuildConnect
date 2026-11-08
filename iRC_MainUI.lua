@@ -484,7 +484,9 @@ local function makeRaceCard(parent)
     function card:ToggleExpanded()
         if self.onToggle then self.onToggle(); return end
         if not self.guildKey then return end
-        expandedGuildCards[self.guildKey] = not expandedGuildCards[self.guildKey]
+        local expand = not expandedGuildCards[self.guildKey]
+        expandedGuildCards = {}
+        if expand then expandedGuildCards[self.guildKey] = true end
         if GameTooltip then GameTooltip:Hide() end
         if UI.frame and UI.frame.scroll then UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll() end
         UI:Refresh()
@@ -587,6 +589,11 @@ local function makeRaceCard(parent)
     card.classesTitle, card.detailStats = title(), body()
     card.racesTitle, card.racesText = title(), body()
     card.racesTitle:SetText("Race Distribution (all characters)")
+    card.racesText:SetJustifyH("CENTER")
+    card.raceBar = CreateFrame("Frame", nil, card.details, "BackdropTemplate")
+    card.raceBar:SetHeight(12)
+    createBackdrop(card.raceBar, { 0.015, 0.015, 0.015, 1 }, { 0.48, 0.42, 0.30, 1 })
+    card.raceSegments, card.raceLabels = {}, {}
     card.classText = body()
     card.classText:SetJustifyH("CENTER")
     card.classBar = CreateFrame("Frame", nil, card.details, "BackdropTemplate")
@@ -2690,7 +2697,7 @@ function UI:Create()
             if item.guildMasterOnly then return iRC:IsGuildMaster() end
             if item.memberManagement then
                 return testAdminGuildMaster or iRC:HasGuildPermission("memberRemoval")
-                    or iRC:HasGuildPermission("rankManagement")
+                    or iRC:HasGuildPermission("rankManagement") or iRC:HasGuildPermission("notesView")
             end
             if item.verificationManagement then
                 return iRC:HasGuildPermission("verification") or iRC:HasGuildPermission("incidents")
@@ -3339,9 +3346,10 @@ function UI:Create()
         { key = "INACTIVE", label = "Inactive" },
         { key = "RANK", label = "Rank" },
         { key = "KICK", label = "Kick Specific" },
+        { key = "NOTES", label = "Member Notes" },
     }) do
         local button = CreateFrame("Button", nil, main, "BackdropTemplate")
-        button:SetSize(option.key == "KICK" and 132 or 110, 26)
+        button:SetSize((option.key == "KICK" or option.key == "NOTES") and 132 or 110, 26)
         button:SetPoint("TOPLEFT", main, "TOPLEFT", 18 + (index - 1) * 118, -47)
         createBackdrop(button, { 0.055, 0.045, 0.035, 0.96 }, { 0.28, 0.23, 0.16, 0.9 })
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -3361,12 +3369,15 @@ function UI:Create()
     function frame:EnsureMemberManagementView()
         local canRemove = iRC:IsTestAdminGuildMaster() or iRC:HasGuildPermission("memberRemoval")
         local canRank = iRC:IsTestAdminGuildMaster() or iRC:HasGuildPermission("rankManagement")
+        local canNotes = iRC.MemberNotes and iRC.MemberNotes:CanView()
+        if self.memberManagementView == "NOTES" and not canNotes then self.memberManagementView = canRemove and "INACTIVE" or "RANK" end
         if self.memberManagementView == "RANK" and not canRank then
             self.memberManagementView = canRemove and "INACTIVE" or "RANK"
         elseif (self.memberManagementView == "INACTIVE" or self.memberManagementView == "KICK") and not canRemove then
             self.memberManagementView = canRank and "RANK" or "INACTIVE"
         end
-        return canRemove, canRank
+        if not canRemove and not canRank and canNotes then self.memberManagementView = "NOTES" end
+        return canRemove, canRank, canNotes
     end
 
     frame.memberKickSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
@@ -3382,7 +3393,7 @@ function UI:Create()
     frame.memberKickSearch.hint:SetTextColor(0.55, 0.55, 0.55)
     frame.memberKickSearch:SetScript("OnTextChanged", function(self)
         self.hint:SetShown(self:GetText() == "")
-        if frame.category == "Member Management" and frame.memberManagementView == "KICK" then
+        if frame.category == "Member Management" and (frame.memberManagementView == "KICK" or frame.memberManagementView == "NOTES") then
             if frame.scroll then frame.scroll:SetVerticalScroll(0) end
             UI:Refresh()
         end
@@ -3390,6 +3401,11 @@ function UI:Create()
     frame.memberKickSearch:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     frame.memberKickSearch:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     iRC:StyleSearchBox(frame.memberKickSearch, frame.memberKickSearch.hint)
+    if iRC.MemberNotes and iRC.MemberNotes.UI then
+        iRC.MemberNotes.UI:AttachSearchSuggestions(frame.memberKickSearch, main, function()
+            return frame.category == "Member Management" and frame.memberManagementView == "NOTES"
+        end)
+    end
     frame.memberKickSearch:Hide()
 
     frame.inactiveThreshold = CreateFrame("Frame", nil, main)
@@ -4731,6 +4747,21 @@ function UI:Create()
     memberMenu.clearIdentity:Hide()
     memberMenu:Hide()
     frame.memberMenu = memberMenu
+    memberMenu.notes = makeIRCActionButton(memberMenu, 238, 29, "Member Notes")
+    memberMenu.notes:SetPoint("TOPLEFT", 16, -94)
+    memberMenu.notes.text:ClearAllPoints()
+    memberMenu.notes.text:SetPoint("LEFT", 12, 0)
+    memberMenu.notes.text:SetJustifyH("LEFT")
+    memberMenu.notes:SetScript("OnClick", function()
+        local profile = memberMenu.profile
+        memberMenu:Hide()
+        if profile and iRC.MemberNotes and iRC.MemberNotes.UI then iRC.MemberNotes.UI:Open(profile.name) end
+    end)
+    memberMenu.notes:Hide()
+    frame.notesOpenButton = makeIRCActionButton(main, 148, 26, "Open Member Notes")
+    frame.notesOpenButton:SetPoint("TOPRIGHT", main, "TOPRIGHT", -18, -84)
+    frame.notesOpenButton:SetScript("OnClick", function() if iRC.MemberNotes and iRC.MemberNotes.UI then iRC.MemberNotes.UI:Open() end end)
+    frame.notesOpenButton:Hide()
     function frame:CloseModalPopups()
         rankMemberMenu:Hide()
         professionReport:Hide()
@@ -5468,7 +5499,18 @@ function UI:RenderMemberRows()
                 frame.styleMemberMenuButton(menu.clearIdentity, "danger", managedAssignment ~= nil)
             end
             menu.altMenu:Hide()
-            menu:SetHeight(canManageIdentity and 260 or 214)
+            local showNotes = iRC.MemberNotes and iRC.MemberNotes:CanView()
+            menu.notes:SetShown(showNotes)
+            local shift = showNotes and 34 or 0
+            menu.altMenu:ClearAllPoints()
+            menu.altMenu:SetPoint("TOPLEFT", menu, "TOPRIGHT", 3, -149 - shift)
+            for _, anchor in ipairs({ {menu.contactLabel, 18, 96}, {menu.whisper, 16, 112},
+                {menu.characterLabel, 18, 149}, {menu.alts, 16, 165},
+                {menu.identityLabel, 18, 202}, {menu.assignAlt, 16, 218} }) do
+                anchor[1]:ClearAllPoints()
+                anchor[1]:SetPoint("TOPLEFT", menu, "TOPLEFT", anchor[2], -anchor[3] - shift)
+            end
+            menu:SetHeight((canManageIdentity and 260 or 214) + shift)
             local cursorX, cursorY = GetCursorPosition()
             menu:ClearAllPoints()
             -- Match the Verification popup: convert physical cursor pixels to
@@ -5488,7 +5530,9 @@ local function memberManagementRowClick(row, button)
     if button ~= "LeftButton" or not row.managementMember or not row.managementEnabled then return end
     local frame = UI.frame
     if not frame then return end
-    if row.managementAction == "rank" then
+    if row.managementAction == "notes" then
+        if iRC.MemberNotes and iRC.MemberNotes.UI then iRC.MemberNotes.UI:Open(row.managementMember.name, row.managementMember.noteID) end
+    elseif row.managementAction == "rank" then
         if frame.rankMemberMenu then
             frame.rankMemberMenu:Open(row.managementMember, row, row.managementCanPromote,
                 row.managementCanDemote, row.managementPreviewPromote, row.managementPreviewDemote)
@@ -5545,6 +5589,41 @@ local function setMemberManagementRows(frame, entries, renderer)
     local maximum = math.max(0, #entries * MEMBER_MANAGEMENT_ROW_SPACING - (frame.scroll:GetHeight() or 0))
     if (frame.scroll:GetVerticalScroll() or 0) > maximum then frame.scroll:SetVerticalScroll(maximum) end
     UI:RenderMemberManagementRows()
+end
+
+local function updateMemberNotesOverview(frame)
+    for _, card in ipairs(frame.raceCards) do card:Hide() end
+    for _, section in pairs(frame.factionSections) do section:Hide() end
+    local notes = iRC.MemberNotes
+    local records, query = {}, frame.memberKickSearch:GetText():lower()
+    for _, record in ipairs(notes and notes:GetRecords() or {}) do
+        if query == "" or (iRC:FormatInviteContactName(record.member) .. " " .. record.title):lower():find(query, 1, true) then records[#records + 1] = record end
+    end
+    setMemberManagementRows(frame, records, function(row, record)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("TOPLEFT", 18, -6)
+        row.name:SetWidth(270)
+        row.name:SetText(iRC:FormatInviteContactName(record.member))
+        row.name:SetTextColor(unpack(COLORS.gold))
+        row.rankAccent:SetColorTexture(unpack(record.strike and record.status == "ACTIVE" and COLORS.red or COLORS.gold))
+        row.rankIdentity:Hide()
+        row.onlineTag:Hide()
+        row.tag:ClearAllPoints()
+        row.tag:SetPoint("TOPRIGHT", -14, -6)
+        row.tag:SetText(record.strike and (record.status == "ACTIVE" and "Active strike" or record.status == "RESOLVED" and "Resolved strike" or "Revoked strike") or "Note")
+        row.tag:SetTextColor(unpack(record.strike and record.status == "ACTIVE" and COLORS.red or COLORS.gray))
+        row.tag:Show()
+        row.detail:ClearAllPoints()
+        row.detail:SetPoint("BOTTOMLEFT", 18, 7)
+        row.detail:SetPoint("RIGHT", -18, 0)
+        row.detail:SetText(record.title:gsub("|", "||") .. "  ·  " .. date("%d %b %Y", record.at))
+        row.rankActions:Hide()
+        row.managementAction, row.managementEnabled = "notes", true
+        row.managementMember = { name = record.member, noteID = record.noteID }
+        row:SetScript("OnEnter", nil); row:SetScript("OnLeave", nil)
+    end)
+    frame.contentTitle:SetText("Member Notes")
+    frame.contentSubtitle:SetText(#records .. " notes · Open a note to read its history or manage strikes.")
 end
 
 applyMemberSearch = function(frame)
@@ -7139,6 +7218,66 @@ local function updateClassBreakdown(card, classes, totalMembers)
     card.classText:SetText(#classGroups == 0 and iRC:Text("GUILD_STATS_NO_DATA") or "")
 end
 
+local function updateRaceBreakdown(card, races, totalMembers)
+    local counts, reported = {}, 0
+    for race, count in pairs(type(races) == "table" and races or {}) do
+        if type(count) == "number" and count > 0 then counts[race], reported = count, reported + count end
+    end
+    local total = math.max(reported, tonumber(totalMembers) or 0)
+    -- Unreported members stay unknown instead of inflating the known races.
+    if reported > 0 and total > reported then counts.UNKNOWN = (counts.UNKNOWN or 0) + total - reported end
+    local groups = guildRaceDistribution(counts, total)
+    local availableWidth = math.max(1, (card:GetWidth() or 651) - 36)
+    local usedWidth = 0
+    for index, group in ipairs(groups) do
+        local share = group.total / total
+        local width = index == #groups and availableWidth - usedWidth or math.floor(availableWidth * share)
+        local color = RACE_COLORS[group.race] or RACE_COLORS.Unknown
+        local segment = card.raceSegments[index]
+        if not segment then
+            segment = CreateFrame("Frame", nil, card.raceBar, "BackdropTemplate")
+            segment:SetHeight(10)
+            segment:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+                edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+            segment:EnableMouse(true)
+            segment:SetScript("OnEnter", function(self)
+                if not GameTooltip then return end
+                GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                GameTooltip:SetText(self.raceName, unpack(self.color))
+                GameTooltip:AddLine(iRC:Text("GUILD_STATS_CLASS_MEMBERS", self.count), 1, 1, 1)
+                GameTooltip:AddLine(iRC:Text("GUILD_STATS_CLASS_SHARE", self.percent), 0.75, 0.75, 0.75)
+                GameTooltip:Show()
+            end)
+            segment:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+            card.raceSegments[index] = segment
+        end
+        segment:ClearAllPoints()
+        segment:SetPoint("LEFT", card.raceBar, "LEFT", 2 + usedWidth, 0)
+        segment:SetWidth(math.max(1, width))
+        segment:SetBackdropColor(color[1], color[2], color[3], 1)
+        segment:SetBackdropBorderColor(0.02, 0.02, 0.02, 1)
+        segment.raceName, segment.count, segment.percent, segment.color = group.label, group.total, share * 100, color
+        segment:Show()
+        local label = card.raceLabels[index]
+        if not label then
+            label = card.details:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            label:SetJustifyH("CENTER")
+            label:SetWordWrap(false)
+            card.raceLabels[index] = label
+        end
+        label:ClearAllPoints()
+        label:SetPoint("BOTTOMLEFT", card.raceBar, "TOPLEFT", 2 + usedWidth, 2)
+        label:SetWidth(math.max(1, width))
+        label:SetText(group.label .. " " .. (group.percent == 0 and "<1" or group.percent) .. "%")
+        label:SetTextColor(unpack(color))
+        label:SetShown(share >= 0.10 and label:GetStringWidth() <= width - 4)
+        usedWidth = usedWidth + width
+    end
+    for index = #groups + 1, #card.raceSegments do card.raceSegments[index]:Hide() end
+    for index = #groups + 1, #card.raceLabels do card.raceLabels[index]:Hide() end
+    card.racesText:SetText(#groups == 0 and "No race data reported yet." or "")
+end
+
 local function guildCardKey(group)
     local realm = not iRC:IsForeverClient() and tostring(group.serverName or ""):lower() or ""
     return tostring(group.serverRuleset or "") .. ":" .. realm
@@ -7229,9 +7368,8 @@ local function guildCardLayout(group, expanded, width)
     layout.classBar = layout.classText + 18
     layout.racesTitle = layout.classBar + 27
     layout.racesTop = layout.racesTitle + 20
-    layout.racesText = guildRaceSummary(group.races, group.members)
-    layout.racesHeight = measureGuildText(layout.racesText, width)
-    layout.contactsTitle = layout.racesTop + layout.racesHeight + 13
+    layout.raceBar = layout.racesTop + 18
+    layout.contactsTitle = layout.raceBar + 27
     layout.contactsTop = layout.contactsTitle + 21
     layout.contacts = guildCardContacts(group)
     layout.height = layout.contactsTop + math.max(1, math.ceil(#layout.contacts / 2)) * 23 + 13
@@ -7378,8 +7516,11 @@ local function setRaceCard(card, group, forceExpanded)
         updateClassBreakdown(card, group.classBreakdownClasses or group.classes, group.members)
         place(card.racesTitle, layout.racesTitle)
         place(card.racesText, layout.racesTop, true)
-        card.racesText:SetText(layout.racesText)
-        card.racesText:SetHeight(layout.racesHeight)
+        card.racesText:SetHeight(14)
+        card.raceBar:ClearAllPoints()
+        card.raceBar:SetPoint("TOPLEFT", card, "TOPLEFT", 16, -layout.raceBar)
+        card.raceBar:SetPoint("TOPRIGHT", card, "TOPRIGHT", -16, -layout.raceBar)
+        updateRaceBreakdown(card, group.races, group.members)
         place(card.contactsLabel, layout.contactsTitle)
         place(card.noContacts, layout.contactsTop, true)
         card.noContacts:SetShown(#layout.contacts == 0)
@@ -7423,6 +7564,7 @@ local function setRaceCard(card, group, forceExpanded)
     else
         card.noContacts:Hide()
         for _, label in ipairs(card.classLabels) do label:Hide() end
+        for _, label in ipairs(card.raceLabels) do label:Hide() end
         for _, button in ipairs(card.contactButtons) do button:Hide() end
     end
     card:Show()
@@ -7783,11 +7925,12 @@ function UI:Refresh()
     frame.guildStatsSearch:SetShown(not embeddedManagement and frame.category == "Race Overview")
     frame.guildLogSearch:SetShown(not embeddedManagement and frame.category == "Guild Log")
     local memberManagement = not embeddedManagement and frame.category == "Member Management"
-    local canRemove, canRank = false, false
-    if memberManagement then canRemove, canRank = frame:EnsureMemberManagementView() end
+    local canRemove, canRank, canNotes = false, false, false
+    if memberManagement then canRemove, canRank, canNotes = frame:EnsureMemberManagementView() end
     local memberTabX = 18
     for _, button in ipairs(frame.memberManagementTabs or {}) do
-        local allowed = button.viewKey == "RANK" and canRank or button.viewKey ~= "RANK" and canRemove
+        local allowed = button.viewKey == "NOTES" and canNotes or button.viewKey == "RANK" and canRank
+            or (button.viewKey == "INACTIVE" or button.viewKey == "KICK") and canRemove
         button:SetShown(memberManagement and allowed)
         if memberManagement and allowed then
             button:ClearAllPoints()
@@ -7805,7 +7948,9 @@ function UI:Refresh()
     frame.inactiveThreshold:SetShown(showInactiveControls)
     frame.inactiveRemoveAll:SetShown(showInactiveControls)
     frame.rankManagementControls:SetShown(memberManagement and frame.memberManagementView == "RANK")
-    frame.memberKickSearch:SetShown(memberManagement and frame.memberManagementView == "KICK")
+    frame.memberKickSearch:SetShown(memberManagement and (frame.memberManagementView == "KICK" or frame.memberManagementView == "NOTES"))
+    if frame.memberKickSearch.noteSuggestions then frame.memberKickSearch.noteSuggestions:Refresh() end
+    frame.notesOpenButton:SetShown(memberManagement and frame.memberManagementView == "NOTES" and canNotes)
     if not memberManagement or frame.memberManagementView ~= "RANK" then
         if frame.rankMemberMenu then frame.rankMemberMenu:Hide() end
     end
@@ -7882,7 +8027,9 @@ function UI:Refresh()
     elseif frame.category == "Guild Log" then
         updateGuildLog(frame)
     elseif frame.category == "Member Management" then
-        if frame.memberManagementView == "RANK" then
+        if frame.memberManagementView == "NOTES" then
+            updateMemberNotesOverview(frame)
+        elseif frame.memberManagementView == "RANK" then
             updateRankManagement(frame)
         elseif frame.memberManagementView == "KICK" then
             updateSpecificMemberRemoval(frame)

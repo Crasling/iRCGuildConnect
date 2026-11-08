@@ -2860,6 +2860,9 @@ do
         memberRemoval = "Review and remove inactive members",
         rankManagement = "Promote and demote guild members",
         recruitment = "Search for and invite guild recruits",
+        notesView = "View member notes",
+        notesAdd = "Add member notes",
+        notesManage = "Edit notes and manage strikes",
     }
     local function rankValues(minimumRankIndex)
         local values = {}

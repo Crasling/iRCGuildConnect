@@ -2,9 +2,11 @@
 iRC - Changelog
 ================================================================================
 
-v0.7.8 - Guild and Mail Updates
+v0.7.8 - Guild Tools
 --------------------------------------------------------------------------------
-[ADDED] Guild Found mail option and exception list
+[ADDED] Private member notes with optional strikes
+[ADDED] Automatic note updates every 30 minutes
+[ADDED] Guild Found mail options and exception list
 [CHANGED] Guild List shows all server types with tags and filters
 [FIXED] Duplicate guilds, missing tags and repeated downloads
 [FIXED] Mail restrictions and false warnings

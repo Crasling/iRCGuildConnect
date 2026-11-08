@@ -583,6 +583,8 @@ end
 
 local lastSendFailure, lastSendFailureAt
 local function sendAddonTrafficNow(prefix, message, distribution, target)
+    if prefix == "iRCNotesV1" and not (iRC.MemberNotes
+        and iRC.MemberNotes:CanSendPacket(message, distribution, target)) then return false end
     if prefix == "iRCLayerV1" and distribution == "CHANNEL"
         and not (iRC.LayerSync and iRC.LayerSync:GetChannelTarget() and iRC.LayerSync:IsChannelTarget(target)
             and iRC:IsGuildDirectoryPacketCurrent(message)) then return false end
@@ -705,6 +707,8 @@ end
 function iRC:SendAddonTraffic(prefix, message, distribution, target)
     if self:IsSecretValue(prefix) or self:IsSecretValue(message)
         or self:IsSecretValue(distribution) or self:IsSecretValue(target) then return false end
+    if prefix == "iRCNotesV1" and not (self.MemberNotes
+        and self.MemberNotes:CanSendPacket(message, distribution, target)) then return false end
     -- Layer traffic on the existing channel uses only the addon-message API.
     -- Recheck its destination and server ruleset when queued packets are sent.
     if prefix == "iRCLayerV1" and distribution == "CHANNEL"
@@ -789,6 +793,7 @@ local INCOMING_PREFIX_POLICIES = {
     iRCLayerV1 = { distributions = { GUILD = true, PARTY = true, RAID = true, WHISPER = true, CHANNEL = true } },
     iRCAdminV1 = { distributions = { WHISPER = true, CHANNEL = true } },
     iRCIconV1 = { distributions = { WHISPER = true } },
+    iRCNotesV1 = { distributions = { GUILD = true, WHISPER = true }, guildWhispers = true },
     LayerSwap = { distributions = { GUILD = true, WHISPER = true, CHANNEL = true } },
 }
 local INCOMING_SCOPE_KINDS = {
@@ -807,6 +812,8 @@ local INCOMING_SCOPE_KINDS = {
     },
     ["guild-map"] = { MAP_LAYER = true, MAP_POS = true },
     ["chat-icons"] = { ICON_REQ = true, ICON_STATUS = true },
+    ["member-notes"] = { NOTES_HELLO = true, NOTES_PERMS = true, NOTES_GRANTS = true,
+        NOTES_LIST = true, NOTES_WANT = true, NOTES_CHUNK = true, NOTES_END = true, NOTES_PAGE = true },
     ["race-grid"] = {
         CACHE_DATA = true, CACHE_GET = true, CACHE_OFFER = true, CACHE_REQUEST = true, GUILD_CLASS_BREAKDOWN = true,
         GUILD_DESC = true, GUILD_REPORT = true,
@@ -823,6 +830,10 @@ local INCOMING_SCOPE_KINDS = {
 -- Incoming traffic filtering ------------------------------------------------
 
 local function incomingTrafficPolicy(kind)
+    if kind == "NOTES_CHUNK" then return 512, 10, 0 end
+    if kind == "NOTES_LIST" then return 128, 10, 0 end
+    if kind == "NOTES_WANT" then return 32, 10, 0 end
+    if kind == "NOTES_PAGE" or kind == "NOTES_END" then return 32, 10, 0 end
     if kind == "LAYER_BOOK" then return 240, 10, 0 end
     if kind:find("_REQUEST$", 1, false) then return 3, 10, 1 end
     if kind == "HELLO" or kind == "MAP_POS" or kind == "LAYER_STATE" then return 10, 10, 0.5 end
@@ -899,6 +910,7 @@ local trafficFrame
 local monitoredPrefixes = {
     iRCConnV1 = true, iRCGridV1 = true, iRCLayerV1 = true, iRCAdminV1 = true,
     iRCIconV1 = true, iRCGFRoster = true,
+    iRCNotesV1 = true,
 }
 
 -- Lightweight diagnostics --------------------------------------------------
@@ -1152,11 +1164,12 @@ iRC.DefaultRankPermissions = {
     verification = 1, presence = 1, incidents = 1,
     tradeExceptions = 1, notifications = 1, homepage = 1, rosterHistory = 1,
     identity = 1, memberRemoval = 1, rankManagement = 1, recruitment = 1,
+    notesView = 1, notesAdd = 1, notesManage = 1,
 }
 iRC.PermissionOrder = {
     "verification", "presence", "incidents", "tradeExceptions", "notifications",
     "homepage", "rosterHistory", "identity", "memberRemoval",
-    "rankManagement", "recruitment",
+    "rankManagement", "recruitment", "notesView", "notesAdd", "notesManage",
 }
 iRC.GuildHomepageDescriptionMaxLength = 160
 iRC.GuildHomepageIcons = {
@@ -2092,7 +2105,8 @@ function iRC:CanAutomaticallyEstablishGuildRules()
         and connection.memberPermissions[self:NormalizeName(self:GetPlayerName())]
     if ownEntry and ownEntry.permissions then
         for permission in pairs(ownEntry.permissions) do
-            if self.DefaultRankPermissions[permission] ~= nil and ownEntry.permissions[permission] == true then return true end
+            if permission:sub(1, 5) ~= "notes" and self.DefaultRankPermissions[permission] ~= nil
+                and ownEntry.permissions[permission] == true then return true end
         end
     end
     local rankIndex = self:GetPlayerGuildRankIndex()
@@ -2100,7 +2114,8 @@ function iRC:CanAutomaticallyEstablishGuildRules()
     for permission, defaultRank in pairs(self.DefaultRankPermissions) do
         local allowedRank = connection.rankPermissions and tonumber(connection.rankPermissions[permission])
         if allowedRank == nil then allowedRank = defaultRank end
-        if allowedRank ~= nil and rankIndex <= allowedRank then return true end
+        -- Private note access does not authorise creating or relaying guild rules.
+        if permission:sub(1, 5) ~= "notes" and allowedRank ~= nil and rankIndex <= allowedRank then return true end
     end
     return false
 end
