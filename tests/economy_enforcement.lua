@@ -82,7 +82,9 @@ function GetInboxHeaderInfo(index)
     if index == 6 then return 1, nil, nil, nil, 1, 0, nil, false, nil, nil, nil, true, false end
     if index == 7 then return 1, nil, "", nil, 0, 0, nil, true, nil, nil, nil, true, false end
     if index == 8 then return nil, nil, nil, nil, 0, 0, nil, 0 end
-    return 134939, nil, "Auction House", nil, 100, 0, nil, false, nil, nil, nil, false, false
+    if index == 9 then return 134939, nil, "Guildie", "Recipe", 0, 0, nil, 1, nil, nil, nil, true, false end
+    if index == 10 then return 134939, nil, "Outside", "Recipe", 0, 0, nil, 1, nil, nil, nil, true, false end
+    return 1, nil, "Auction House", nil, 100, 0, nil, false, nil, nil, nil, false, false
 end
 function GetInboxInvoiceInfo(index) if index == 4 then return "seller" end end
 
@@ -380,6 +382,60 @@ OpenMailFrame.openMailID = 2
 enforcement:UpdateInboxRestriction()
 assert(OpenMailMoneyButton.active == true and OpenMailPackageButton.active == true
     and OpenMailAttachmentButton1.active == true, "guild mail controls remain available")
+
+OpenMailFrame.openMailID = 9
+enforcement:UpdateInboxRestriction()
+assert(OpenMailAttachmentButton1.active and not enforcement:IsInboxMailRestricted(9),
+    "recipe icon 134939 does not turn verified guild mail into auction mail")
+assert(enforcement:IsInboxMailRestricted(10), "the same recipe remains blocked from an unverified sender")
+local normalInvoiceInfo = GetInboxInvoiceInfo
+for _, invoiceType in ipairs({ "", "buyer", "seller", "seller_temp_invoice" }) do
+    GetInboxInvoiceInfo = function() return invoiceType end
+    assert(enforcement:IsInboxMailRestricted(9) == (invoiceType ~= ""),
+        "only actual auction invoice types block otherwise approved guild mail")
+end
+GetInboxInvoiceInfo = normalInvoiceInfo
+local secretInvoice = {}
+local normalSecretCheck = iRC.HasSecretValues
+iRC.HasSecretValues = function(_, ...)
+    for index = 1, select("#", ...) do
+        if rawequal(select(index, ...), secretInvoice) then return true end
+    end
+    return false
+end
+GetInboxInvoiceInfo = function() return secretInvoice end
+local secretBlocked, secretSender, secretPending = enforcement:IsInboxMailRestricted(9)
+assert(secretBlocked and secretSender == nil and secretPending,
+    "restricted invoice data stays pending without being used as an auction classification")
+local beforeSecretNotices, beforeSecretAudits = #notices, #audits
+enforcement:UpdateInboxRestriction()
+assert(not OpenMailAttachmentButton1.active and #notices == beforeSecretNotices and #audits == beforeSecretAudits,
+    "pending invoice data disables collection quietly without accusing the sender")
+GetInboxInvoiceInfo, iRC.HasSecretValues = normalInvoiceInfo, normalSecretCheck
+enforcement:UpdateInboxRestriction()
+assert(OpenMailAttachmentButton1.active, "readable verified mail becomes available after pending data settles")
+
+-- A blocked pickup can be caused by either participant. Keep the exact
+-- verification failure instead of always blaming the sender's guild membership.
+local inboxTradeStatus = iRC.GetGuildFoundTradeStatus
+for _, reason in ipairs({
+    "Your Guild Found status blocks this action. Verification: Verified; Monitoring status: Flagged.",
+    "Guild Found status for Guildie blocks this action. Verification: Verified; Monitoring status: Flagged.",
+    "Guildie does not have a saved Guild Found Verified and Clean status.",
+}) do
+    eventFrame.OnEvent(nil, "MAIL_CLOSED")
+    iRC.GetGuildFoundTradeStatus = function() return false, reason end
+    local blocked, sender, pending, detail = enforcement:IsInboxMailRestricted(2)
+    assert(blocked and sender == "Guildie" and not pending and detail == reason,
+        "inbox verification preserves the actual failure reason")
+    OpenMailFrame.openMailID = 2
+    enforcement:UpdateInboxRestriction()
+    assert(not OpenMailMoneyButton.active and notices[#notices]:find(reason, 1, true),
+        "blocked mail stays disabled and explains whose status needs attention")
+end
+iRC.GetGuildFoundTradeStatus = inboxTradeStatus
+enforcement:UpdateInboxRestriction()
+assert(OpenMailMoneyButton.active, "restoring Verified and Clean status enables the pickup")
 
 assert(AcceptTrade ~= nil and SendMail ~= nil and TakeInboxItem ~= nil and TakeInboxMoney ~= nil
     and AutoLootMailItem ~= nil, "Blizzard economy APIs remain untouched")

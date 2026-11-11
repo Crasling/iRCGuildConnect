@@ -40,8 +40,16 @@ WOW_PROJECT_ID = 18
 function GetCurrentRegion() return 3 end
 function addon:ContainsProfanity() return false end
 function addon:CheckForNewVersion() end
-function addon:Text(key) return key end
-function addon:DebugMsg(message) diagnostics[#diagnostics + 1] = message end
+assert(loadfile("Localization/enUS.lua"))("iRC", private)
+function addon:Text(key, ...)
+    local value = self.L[key] or key
+    return select("#", ...) > 0 and string.format(value, ...) or value
+end
+local diagnosticLevels = {}
+function addon:DebugMsg(message, level)
+    diagnostics[#diagnostics + 1] = message
+    diagnosticLevels[#diagnostics] = level
+end
 assert(loadfile("iRC_RaceGrid.lua"))("iRC", private)
 local grid, receiver = addon.RaceGrid, frames[#frames]
 
@@ -351,4 +359,87 @@ for _, fighting in ipairs({ false, true }) do
     advance(16)
     assert(#sent == before, "no delayed receipt is left behind after processing or combat")
 end
-print("PASS: cache queues, combat-aware timeouts, public packet ordering, metadata validation, and silent public report reception")
+-- Public channel chunks have no repair handshake. Keep delayed pieces and
+-- explicitly report missing ones even when no further chat traffic arrives.
+local function publicChunks(report, messageID)
+    local hex = report.payload:gsub(".", function(char) return string.format("%02x", char:byte()) end)
+    local result, total = {}, math.ceil(#hex / 210)
+    assert(total >= 2)
+    for index = 1, total do
+        result[index] = table.concat({ "iRCGridV1", "C", messageID, index, total,
+            hex:sub((index - 1) * 210 + 1, index * 210) }, ":")
+    end
+    return result
+end
+local function receivePublic(wire, sender)
+    receiver.scripts.OnEvent(receiver, "CHAT_MSG_CHANNEL", wire, sender, nil, nil, nil, nil, nil, nil, "iRCCommsV1")
+end
+local function findDiagnostic(fragment, after)
+    for index = after or 1, #diagnostics do
+        if diagnostics[index]:find(fragment, 1, true) then return index, diagnostics[index] end
+    end
+end
+local delayed = fixture("Delayed Channel Guild", "Delayed Reporter")
+local wireParts = publicChunks(delayed, "a001")
+local publicStart, networkStart = #diagnostics + 1, #sent
+for part = 1, #wireParts - 1 do receivePublic(wireParts[part], delayed.name) end
+advance(61)
+local notice, text = findDiagnostic("Still waiting for guild report data from " .. delayed.name, publicStart)
+assert(notice and diagnosticLevels[notice] == 3 and text:find("missing " .. #wireParts, 1, true),
+    "a stalled public package reports the exact missing piece at INFO level")
+assert(not stored(delayed.guildName), "partial reports cannot overwrite the guild cache")
+receivePublic(wireParts[#wireParts], delayed.name)
+advance(2)
+assert(stored(delayed.guildName), "a final piece arriving after the old 15-second timeout still completes")
+advance(301)
+assert(not findDiagnostic("Guild report from " .. delayed.name .. " remained incomplete", publicStart),
+    "a completed late transfer cannot emit a stale failure warning")
+assert(#sent == networkStart, "incomplete public reports never trigger automatic whispers")
+
+local stalled = fixture("Unfinished Channel Guild", "Missing Reporter")
+stalled.serverRuleset = addon:GetGuildDirectoryScope()
+assert(grid:StoreGuildReport(stalled, true, true))
+local previous = stored(stalled.guildName)
+wireParts = publicChunks(stalled, "a002")
+publicStart = #diagnostics + 1
+for part = 1, #wireParts - 1 do receivePublic(wireParts[part], stalled.name) end
+advance(301)
+local expired = findDiagnostic("Guild report from " .. stalled.name .. " remained incomplete after 5 minutes", publicStart)
+assert(expired and diagnosticLevels[expired] == 2 and stored(stalled.guildName) == previous,
+    "an unfinished report expires visibly without losing the previous cached report")
+advance(301)
+assert(not findDiagnostic("Guild report from " .. stalled.name .. " remained incomplete", expired + 1),
+    "a timed-out report only warns once")
+
+local progressing = fixture("Slow Channel Guild", "Progress Reporter")
+wireParts = publicChunks(progressing, "a003")
+publicStart = #diagnostics + 1
+receivePublic(wireParts[1], progressing.name)
+advance(45)
+receivePublic(wireParts[2], progressing.name)
+advance(20)
+assert(not findDiagnostic("Still waiting for guild report data from " .. progressing.name, publicStart),
+    "fresh progress postpones the waiting notice")
+receivePublic(wireParts[2], progressing.name)
+advance(41)
+notice = assert(findDiagnostic("Still waiting for guild report data from " .. progressing.name, publicStart),
+    "duplicate pieces do not postpone the notice forever")
+for part = 3, #wireParts do receivePublic(wireParts[part], progressing.name) end
+advance(2)
+assert(stored(progressing.guildName), "slow, progressing reports retain all their unique pieces")
+
+-- Full buffers must not evict an existing package while its next piece arrives.
+local interleavedPublic = {}
+for index = 1, 32 do
+    local report = fixture("Channel Crowd " .. index, "Crowd Reporter " .. index)
+    interleavedPublic[index] = { report = report, wires = publicChunks(report, string.format("b%03x", index)) }
+    receivePublic(interleavedPublic[index].wires[1], report.name)
+end
+for _, package in ipairs(interleavedPublic) do
+    for part = 2, #package.wires do receivePublic(package.wires[part], package.report.name) end
+end
+advance(10)
+for _, package in ipairs(interleavedPublic) do
+    assert(stored(package.report.guildName), "all 32 pending channel reports complete without evicting each other")
+end
+print("PASS: cache queues, combat timeouts, public ordering, delayed chunks, missing-piece notices, timed expiry, bounded buffers and no automatic public-receipt whispers")

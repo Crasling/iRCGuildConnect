@@ -80,13 +80,21 @@ function Report:BuildModel(name, member, status, progression)
                 .. money(math.abs(evidence.moneyAfter - evidence.moneyBefore)))
     end
     if hasIssue then
-        section("GF_REPORT_ISSUE_MONEY")
+        local playedIssue = status.discrepancyReason == "PLAYED_GAP" or status.discrepancyReason == "PLAYED_ROLLBACK"
+        if playedIssue and status.playedBefore and status.playedAfter then
+            section("GF_REPORT_PLAYED_SECTION")
+            local playedDelta = status.playedAfter - status.playedBefore
+            lines[#lines + 1] = iRC:Text(playedDelta < 0 and "GF_REPORT_PLAYED_DECREASE" or "GF_REPORT_PLAYED_INCREASE",
+                duration(math.abs(playedDelta)))
+            local beforeAt, afterAt = tonumber(status.playedBeforeAt), tonumber(status.playedAfterAt)
+            if beforeAt and afterAt and beforeAt > 0 and afterAt >= beforeAt then
+                lines[#lines + 1] = GRAY .. iRC:Text("GF_REPORT_PLAYED_SAMPLES", stamp(beforeAt), stamp(afterAt)) .. RESET
+            end
+        end
+        section(playedIssue and "GF_REPORT_MONEY_CONTEXT" or "GF_REPORT_ISSUE_MONEY")
         if not hasMixedEvidence(status) and status.moneyBefore ~= nil and status.moneyAfter ~= nil then
             lines[#lines + 1] = WHITE .. moneyLine(status) .. RESET
             lines[#lines + 1] = GRAY .. iRC:Text("GF_REPORT_SAMPLES", stamp(status.moneyBeforeAt), stamp(status.moneyAfterAt)) .. RESET
-            if status.playedBefore and status.playedAfter and status.playedAfter >= status.playedBefore then
-                lines[#lines + 1] = iRC:Text("GF_REPORT_PLAYED_INCREASE", duration(status.playedAfter - status.playedBefore))
-            end
         else
             lines[#lines + 1] = GRAY .. iRC:Text("GF_REPORT_ISSUE_MONEY_UNAVAILABLE") .. RESET
         end

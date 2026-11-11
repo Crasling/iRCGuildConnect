@@ -129,6 +129,7 @@ sourceFile:close()
 local boundary = assert(source:find("-- Page refresh and window lifecycle", 1, true))
 local render = assert(load(source:sub(1, boundary - 1)
     .. "\nreturn { create = makeRaceCard, set = setRaceCard, height = guildCardHeight, ui = UI, overview = updateGuildOverview,"
+    .. " memberSearch = applyMemberSearch, memberSort = createMemberSortDropdown,"
     .. " directory = function(frame, view, filter) guildStatsView, guildStatsFilter = view, filter; return updateRaceOverview(frame) end }",
     "@iRC_MainUI.lua"))("iRC", private)
 
@@ -466,6 +467,93 @@ render.ui:RenderMemberRows()
 assert(mainRow.profileName == "Member 1000" and not altRow:IsShown(), "the last page hides unused rows")
 assert(rosterReads == beforeRosterReads, "scrolling the compact roster does not rebuild guild data")
 print("PASS: compact member rows, full profession hover, confirmed identities, live presence, and bounded scrolling for 1,000 members")
+
+-- Sort only the filtered references. Missing values stay last, alphabetical
+-- ties are stable, and selecting a sort never rewrites the shared roster.
+local largeMemberRoster = memberView.memberData
+memberView.allMemberData = {
+    { name = "Zora", level = 10, class = "MAGE", rankIndex = 2, online = false, lastOnlineDays = 5 },
+    { name = "Able", level = 10, class = "WARRIOR", rankIndex = 0, online = true },
+    { name = "Cora", level = 60, class = "PRIEST", rankIndex = 1, online = false, lastOnlineDays = 1.9 },
+    { name = "Bera", level = 60, class = "MAGE", rankIndex = 1, online = false, lastOnlineDays = 1.2 },
+    { name = "Dora", online = false },
+}
+memberView.memberProfessionSearch = { edit = widget("EditBox", parent) }
+local function memberNames(profiles)
+    local result = {}
+    for _, profile in ipairs(profiles) do result[#result + 1] = profile.name end
+    return table.concat(result, ",")
+end
+local originalOrder = memberNames(memberView.allMemberData)
+for _, option in ipairs({
+    { "NAME", "Able,Bera,Cora,Dora,Zora" },
+    { "LEVEL_HIGH", "Bera,Cora,Able,Zora,Dora" },
+    { "LEVEL_LOW", "Able,Zora,Bera,Cora,Dora" },
+    { "CLASS", "Bera,Zora,Cora,Able,Dora" },
+    { "RANK", "Able,Bera,Cora,Zora,Dora" },
+    { "LAST_ONLINE", "Able,Bera,Cora,Zora,Dora" },
+    { "invalid", "Able,Bera,Cora,Dora,Zora" },
+}) do
+    memberView.memberSortKey = option[1]
+    render.memberSearch(memberView)
+    assert(memberNames(memberView.memberData) == option[2], "member sort: " .. option[1])
+    assert(memberNames(memberView.allMemberData) == originalOrder, "sorting leaves the shared roster in place")
+end
+memberView.memberSortKey, memberView.memberOnlineFilter = "LEVEL_HIGH", "OFFLINE"
+render.memberSearch(memberView)
+assert(memberNames(memberView.memberData) == "Bera,Cora,Zora,Dora", "offline filtering retains the selected level sort")
+memberView.memberOnlineFilter = "ONLINE"
+render.memberSearch(memberView)
+assert(memberNames(memberView.memberData) == "Able", "online filtering retains the selected sort")
+memberView.memberOnlineFilter = "ALL"
+memberView.memberProfessionSearch.edit:SetText("alchemy")
+memberView.memberSearchIndex = { { lower = "alchemy", members = {
+    [memberView.allMemberData[1]] = true, [memberView.allMemberData[4]] = true,
+} } }
+render.memberSearch(memberView)
+assert(memberNames(memberView.memberData) == "Bera,Zora", "profession and recipe search results use the selected sort")
+local originalMainLookup = addon.Identity.GetMainCharacterName
+addon.Identity.GetMainCharacterName = function() return "Zora" end
+memberView.allMemberData[1].level = 60
+memberView.memberProfessionSearch.edit:SetText("Able")
+memberView.memberSearchSelection = { kind = "name", label = "Able", members = {
+    [memberView.allMemberData[1]] = true, [memberView.allMemberData[2]] = true,
+} }
+memberView.memberSortKey = "NAME"
+render.memberSearch(memberView)
+assert(memberNames(memberView.memberData) == "Zora,Able", "default name search keeps the linked main first")
+memberView.memberSortKey = "LEVEL_LOW"
+render.memberSearch(memberView)
+assert(memberNames(memberView.memberData) == "Able,Zora", "explicit level sort takes precedence over linked-main ordering")
+addon.Identity.GetMainCharacterName = originalMainLookup
+
+local memberSettings, originalSettings = {}, addon.GetSettings
+function addon:GetSettings() return memberSettings end
+local memberSort = render.memberSort(parent, memberView)
+memberSort:Show()
+memberSort:Fire("OnClick")
+assert(memberSort.menu:IsShown() and #memberSort.menu.buttons == 6, "sort dropdown exposes all standard choices")
+memberSort.menu.buttons[2]:Fire("OnClick")
+assert(memberView.memberSortKey == "LEVEL_HIGH" and memberSettings.memberListSort == "LEVEL_HIGH",
+    "selecting a sort saves the personal preference")
+assert(not memberSort.menu:IsShown() and memberView.scroll:GetVerticalScroll() == 0,
+    "selecting a sort dismisses the menu and returns to the first result")
+memberSort:Fire("OnClick")
+memberSort:Fire("OnHide")
+assert(not memberSort.menu:IsShown(), "hiding the sort control closes its menu")
+addon.GetSettings = originalSettings
+memberView.allMemberData, memberView.memberSearchSelection = largeMemberRoster, nil
+memberView.memberProfessionSearch.edit:SetText("")
+render.memberSearch(memberView)
+assert(#memberView.memberData == 1000, "the sort covers the full large-guild result set")
+local sortedLargeRoster = memberView.memberData
+memberView.scroll:SetVerticalScroll(500 * 39)
+render.ui:RenderMemberRows()
+assert(memberView.memberData == sortedLargeRoster and mainRow.profileName == sortedLargeRoster[501].name,
+    "scrolling a sorted large guild reuses the sorted data and binds the correct member")
+assert(#memberView.memberRows == 7 and rosterReads == beforeRosterReads,
+    "sorting and filtering reuse the visible row pool without requesting the roster")
+print("PASS: member sorting, filters, linked-name search, personal preference, and visible-row reuse")
 
 -- Race statistics follow the same confirmed main/alt scope as other totals.
 local overviewSettings = { excludeAltsFromGuildSnapshot = true }

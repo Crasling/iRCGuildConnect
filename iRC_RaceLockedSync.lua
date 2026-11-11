@@ -19,6 +19,8 @@ local moneyWatchdog
 local playedTicker, playedRequestToken
 local playedSampleGetTime
 local playedContinuityEligible = false
+local PLAYED_CHECK_INTERVAL = 5 * 60
+local PLAYED_GAP_TOLERANCE = 2 * 60
 local resumedMonitoring = false
 local monitoringNoticeShown = false
 local playedSuppressedChatFrames = {}
@@ -443,7 +445,7 @@ function Sync:ValidateMoney()
     moneyReady = true
     self:ObserveSelfFound()
     if not playedTicker and C_Timer.NewTicker then
-        playedTicker = C_Timer.NewTicker(1800, function() Sync:RequestHiddenTimePlayed() end)
+        playedTicker = C_Timer.NewTicker(PLAYED_CHECK_INTERVAL, function() Sync:RequestHiddenTimePlayed() end)
     end
     C_Timer.After(1, function() Sync:RequestHiddenTimePlayed() end)
     return true
@@ -980,11 +982,14 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local expectedAtExit = tonumber(history.playedExpectedAtExit)
         local previousPlayed = tonumber(history.playedTotal)
         local continuityFlagged = false
-        if playedContinuityEligible and expectedAtExit and currentPlayed > expectedAtExit + 120 then
+        local playedBefore, playedBeforeAt
+        if playedContinuityEligible and expectedAtExit and currentPlayed > expectedAtExit + PLAYED_GAP_TOLERANCE then
+            playedBefore, playedBeforeAt = expectedAtExit, tonumber(history.playedExpectedAtExitAt)
             local currentMoney = GetMoney and GetMoney() or nil
             markDiscrepancy(history, "PLAYED_GAP", currentMoney, currentMoney, history.playedExpectedAtExitAt)
             continuityFlagged = true
         elseif playedContinuityEligible and previousPlayed and currentPlayed + 5 < previousPlayed then
+            playedBefore, playedBeforeAt = previousPlayed, tonumber(history.playedRecordedAt)
             local currentMoney = GetMoney and GetMoney() or nil
             markDiscrepancy(history, "PLAYED_ROLLBACK", currentMoney, currentMoney, history.playedRecordedAt)
             continuityFlagged = true
@@ -994,16 +999,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
         history.playedTotal = currentPlayed
         history.playedLevel = math.max(0, math.floor(tonumber(levelPlayed) or 0))
         history.playedRecordedAt = now
-        if playedContinuityEligible and tonumber(history.moneyDiscrepancyAt) and history.moneyDiscrepancyAt > 0
-            and tonumber(history.playedDiscrepancyAt) ~= history.moneyDiscrepancyAt then
-            history.playedBeforeDiscrepancy = tonumber(history.playedPreviousTotal)
-            history.playedAfterDiscrepancy = history.playedTotal
-            history.playedBeforeDiscrepancyAt = tonumber(history.playedPreviousRecordedAt)
+        if continuityFlagged then
+            history.playedBeforeDiscrepancy = playedBefore
+            history.playedAfterDiscrepancy = currentPlayed
+            history.playedBeforeDiscrepancyAt = playedBeforeAt
             history.playedAfterDiscrepancyAt = now
             history.playedDiscrepancyAt = history.moneyDiscrepancyAt
         end
-        history.playedPreviousTotal = history.playedTotal
-        history.playedPreviousRecordedAt = now
         history.moneyMonitoringPausedAt = nil
         playedSampleGetTime = GetTime and GetTime() or nil
         playedContinuityEligible = true

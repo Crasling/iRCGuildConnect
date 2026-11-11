@@ -1,5 +1,5 @@
 -- Exercise the real money checkpoint handler across independent login sessions.
-local now, wallet, frame, timers, tickers, secret, moneyReads, playedRequests, cancelledTickers
+local now, wallet, frame, timers, tickers, tickerIntervals, secret, moneyReads, playedRequests, cancelledTickers
 local monitoringActive, characterName
 local logs, notices = {}, {}
 local addon = {
@@ -28,11 +28,12 @@ function CreateFrame()
 end
 C_Timer = {
     After = function(delay, callback) timers[#timers + 1] = { at = now + delay, callback = callback } end,
-    NewTicker = function(_, callback)
+    NewTicker = function(interval, callback)
         local ticker = { Cancel = function(self)
             if not self.cancelled then cancelledTickers = cancelledTickers + 1 end
             self.cancelled = true
         end }
+        tickerIntervals[#tickerIntervals + 1] = interval
         tickers[#tickers + 1] = function() if not ticker.cancelled then callback() end end
         return ticker
     end,
@@ -53,7 +54,7 @@ local function advance(seconds)
 end
 local function fire(event, ...) frame.OnEvent(frame, event, ...) end
 local function session(money, saved, active, name)
-    now, wallet, timers, tickers, secret, moneyReads = 0, money, {}, {}, nil, 0
+    now, wallet, timers, tickers, tickerIntervals, secret, moneyReads = 0, money, {}, {}, {}, nil, 0
     playedRequests, cancelledTickers = 0, 0
     notices = {}
     monitoringActive, characterName = active ~= false, name or "Checkpoint Tester"
@@ -65,6 +66,7 @@ end
 session(0)
 fire("PLAYER_LOGIN")
 advance(5)
+assert(tickerIntervals[2] == 300, "played-time checkpoints run every five minutes")
 wallet = 4
 fire("PLAYER_MONEY")
 assert(iRCCharDB.guildFoundHistory.money == 4, "a vendor sale saves on PLAYER_MONEY")
@@ -309,12 +311,42 @@ for index = logStart + 1, #logs do
 end
 
 -- Actual gaps while monitoring is enabled must still be detected.
+local lastMonitoredLogoutAt = time() - 300
 sync = session(10, { guildFoundHistory = { money = 10, moneyMonitoringActive = true,
-    playedTotal = 100, playedExpectedAtExit = 100, playedExpectedAtExitAt = time() - 300 } })
+    playedTotal = 100, playedExpectedAtExit = 100, playedExpectedAtExitAt = lastMonitoredLogoutAt } })
 fire("PLAYER_LOGIN"); advance(6)
 fire("TIME_PLAYED_MSG", 500, 100)
 assert(iRCCharDB.guildFoundHistory.discrepancyReason == "PLAYED_GAP",
     "enabled Guild Found monitoring still detects an unexplained played-time gap")
+assert(iRCCharDB.guildFoundHistory.playedBeforeDiscrepancy == 100
+    and iRCCharDB.guildFoundHistory.playedAfterDiscrepancy == 500
+    and iRCCharDB.guildFoundHistory.playedBeforeDiscrepancyAt == lastMonitoredLogoutAt,
+    "played-gap evidence starts at the last monitored logout, not a thirty-minute-old periodic check")
+
+-- Small differences in the server's played-time count do not create an alert.
+sync = session(10, { guildFoundHistory = { money = 10, moneyMonitoringActive = true,
+    playedTotal = 100, playedExpectedAtExit = 100, playedExpectedAtExitAt = time() - 300 } })
+fire("PLAYER_LOGIN"); advance(6)
+fire("TIME_PLAYED_MSG", 220, 100)
+assert(not iRCCharDB.guildFoundHistory.moneyDiscrepancyAt,
+    "a two-minute played-time difference is tolerated")
+sync = session(10, { guildFoundHistory = { money = 10, moneyMonitoringActive = true,
+    playedTotal = 100, playedExpectedAtExit = 100, playedExpectedAtExitAt = time() - 300 } })
+fire("PLAYER_LOGIN"); advance(6)
+fire("TIME_PLAYED_MSG", 221, 100)
+assert(iRCCharDB.guildFoundHistory.discrepancyReason == "PLAYED_GAP",
+    "a played-time difference beyond the tolerance is still reported")
+
+-- A routine /played reply cannot make an unrelated money mismatch look like a
+-- thirty-minute played-time discrepancy.
+sync = session(12, { guildFoundHistory = { money = 10, moneyMonitoringActive = true,
+    playedTotal = 100, playedPreviousTotal = 100, playedPreviousRecordedAt = time() - 1800 } })
+fire("PLAYER_LOGIN"); advance(6)
+history = iRCCharDB.guildFoundHistory
+assert(history.discrepancyReason == "MONEY_MISMATCH")
+fire("TIME_PLAYED_MSG", 1900, 100)
+assert(history.playedBeforeDiscrepancy == nil and history.playedAfterDiscrepancy == nil,
+    "a money incident does not borrow a normal periodic played-time sample")
 
 sync = session(0, nil, false)
 fire("PLAYER_LOGIN"); advance(2)

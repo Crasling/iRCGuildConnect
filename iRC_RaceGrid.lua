@@ -73,6 +73,8 @@ local MAX_CHANNEL_PAYLOAD = 1024
 local MAX_CACHE_PARTS = 32
 local MAX_CACHE_PACKAGES = 32
 local CHANNEL_PACKAGE_DEDUP_WINDOW = 60
+local CHANNEL_PACKAGE_WAIT_NOTICE = 60
+local CHANNEL_PACKAGE_LIFETIME = 300
 local cacheUpdatingUntil = 0
 local lastCacheOpenRequestAt
 local channelJoinReady = false
@@ -392,17 +394,47 @@ local incomingChunks = {}
 local completedChannelPackages = {}
 local MAX_PENDING_PACKAGES = 32
 
-local function cleanIncomingChunks(now)
-    local count, oldestKey, oldestAt = 0, nil, nil
-    for key, entry in pairs(incomingChunks) do
-        if type(entry) ~= "table" or not entry.startedAt or now - entry.startedAt > 15 then
-            incomingChunks[key] = nil
+local function reportIncompletePackage(entry, key, level)
+    if entry.prefix ~= GRID_PREFIX then return end
+    local missing = {}
+    for index = 1, entry.total do if not entry.parts[index] then missing[#missing + 1] = tostring(index) end end
+    iRC:DebugMsg(iRC:Text(key, entry.sender, entry.received or 0, entry.total, table.concat(missing, ", ")), level)
+end
+
+local function expireIncomingPackage(key, entry)
+    if incomingChunks[key] ~= entry then return end
+    incomingChunks[key] = nil
+    reportIncompletePackage(entry, "RACEGRID_PACKAGE_EXPIRED", 2)
+    entry.parts = nil
+end
+
+local function watchIncomingPackage(key, entry)
+    if not (C_Timer and C_Timer.After) then return end
+    if entry.prefix ~= GRID_PREFIX then
+        C_Timer.After(15, function() expireIncomingPackage(key, entry) end)
+        return
+    end
+    local function waitingNotice()
+        if incomingChunks[key] ~= entry or GetTime() - entry.startedAt >= CHANNEL_PACKAGE_LIFETIME then return end
+        local remaining = CHANNEL_PACKAGE_WAIT_NOTICE - (GetTime() - entry.lastProgressAt)
+        if remaining > 0 then
+            C_Timer.After(remaining, waitingNotice)
         else
-            count = count + 1
-            if not oldestAt or entry.startedAt < oldestAt then oldestKey, oldestAt = key, entry.startedAt end
+            reportIncompletePackage(entry, "RACEGRID_PACKAGE_WAITING", 3)
         end
     end
-    if count >= MAX_PENDING_PACKAGES and oldestKey then incomingChunks[oldestKey] = nil end
+    C_Timer.After(CHANNEL_PACKAGE_WAIT_NOTICE, waitingNotice)
+    C_Timer.After(CHANNEL_PACKAGE_LIFETIME, function() expireIncomingPackage(key, entry) end)
+end
+
+local function cleanIncomingChunks(now)
+    for key, entry in pairs(incomingChunks) do
+        if type(entry) ~= "table" or not entry.startedAt then
+            incomingChunks[key] = nil
+        elseif now - entry.startedAt >= (entry.prefix == GRID_PREFIX and CHANNEL_PACKAGE_LIFETIME or 15) then
+            expireIncomingPackage(key, entry)
+        end
+    end
     for key, completedAt in pairs(completedChannelPackages) do
         if type(completedAt) ~= "number" or now - completedAt > CHANNEL_PACKAGE_DEDUP_WINDOW then
             completedChannelPackages[key] = nil
@@ -434,16 +466,39 @@ local function decodeChannelWire(prefix, message, sender)
     local key = prefix .. ":" .. fullNameKey(sender) .. ":" .. messageId
     if completedChannelPackages[key] then return nil end
     local entry = incomingChunks[key]
-    if not entry or entry.total ~= total or GetTime() - entry.startedAt > 15 then
-        entry = { total = total, startedAt = GetTime(), parts = {} }
+    if entry and entry.total ~= total then return nil end
+    if not entry then
+        -- Existing transfers keep their slot when another piece arrives.
+        -- Only a new package can require evicting the oldest pending one.
+        local count, oldestKey, oldestAt = 0, nil, math.huge
+        for pendingKey, pending in pairs(incomingChunks) do
+            count = count + 1
+            if pending.startedAt < oldestAt then oldestKey, oldestAt = pendingKey, pending.startedAt end
+        end
+        if count >= MAX_PENDING_PACKAGES and oldestKey then
+            local evicted = incomingChunks[oldestKey]
+            incomingChunks[oldestKey] = nil
+            reportIncompletePackage(evicted, "RACEGRID_PACKAGE_EVICTED", 2)
+            evicted.parts = nil
+        end
+        entry = { total = total, startedAt = GetTime(), lastProgressAt = GetTime(), parts = {},
+            received = 0, prefix = prefix, sender = sender }
         incomingChunks[key] = entry
+        watchIncomingPackage(key, entry)
     end
+    if entry.parts[part] then return nil end
     entry.parts[part] = chunk
+    entry.received = entry.received + 1
+    entry.lastProgressAt = GetTime()
     iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_RECEIVING", part, total, sender), 3)
-    for index = 1, total do if not entry.parts[index] then return nil end end
+    if entry.received < total then return nil end
     incomingChunks[key] = nil
     local decoded = hexToBytes(table.concat(entry.parts))
-    if not decoded or #decoded > MAX_CHANNEL_PAYLOAD then return nil end
+    entry.parts = nil
+    if not decoded or #decoded > MAX_CHANNEL_PAYLOAD then
+        if prefix == GRID_PREFIX then iRC:DebugMsg(iRC:Text("RACEGRID_PACKAGE_INVALID", sender), 2) end
+        return nil
+    end
     local now = GetTime()
     local payloadKey = prefix .. ":" .. fullNameKey(sender) .. ":payload:" .. payloadChecksum(decoded)
     completedChannelPackages[key] = now

@@ -539,8 +539,8 @@ end
 
 local function getInboxRestriction(index, statusCache)
     if not isGuildFoundEconomyActive() or not GetInboxHeaderInfo then return false end
-    local packageIcon, _, sender, _, money, codAmount, _, hasItem, _, _, _, canReply, isGameMaster = GetInboxHeaderInfo(index)
-    if iRC.HasSecretValues and iRC:HasSecretValues(packageIcon, sender, money, codAmount, hasItem, canReply, isGameMaster) then return true, nil, true end
+    local _, _, sender, _, money, codAmount, _, hasItem, _, _, _, canReply, isGameMaster = GetInboxHeaderInfo(index)
+    if iRC.HasSecretValues and iRC:HasSecretValues(sender, money, codAmount, hasItem, canReply, isGameMaster) then return true, nil, true end
     local containsValue = (tonumber(money) or 0) > 0 or (tonumber(codAmount) or 0) > 0
         or hasItem == true or type(hasItem) == "number" and hasItem > 0
     -- Blizzard briefly clears the header after the final attachment is
@@ -548,17 +548,21 @@ local function getInboxRestriction(index, statusCache)
     -- empty transition as a new forbidden delivery.
     if not sender or sender == "" then return true, nil, not containsValue end
 
-    -- Auction House proceeds and purchases are external economy even though
-    -- their sender is a system entity rather than a player character.
-    if packageIcon == 134939 then return true, sender end
+    -- Auction House proceeds and purchases are external economy. Identify
+    -- them by their invoice, since the package icon can also be a recipe.
     if GetInboxInvoiceInfo then
         local invoiceType = GetInboxInvoiceInfo(index)
-        if invoiceType then return true, sender end
+        if iRC.HasSecretValues and iRC:HasSecretValues(invoiceType) then return true, nil, true end
+        if invoiceType == "buyer" or invoiceType == "seller" or invoiceType == "seller_temp_invoice" then
+            return true, sender, false, iRC:Text("GUILD_FOUND_AUCTION_MAIL_REASON")
+        end
     end
 
     local allowed = statusCache and statusCache[sender]
+    local reason
     if allowed == nil then
-        allowed = iRC:GetGuildFoundTradeStatus(sender, true) == true
+        allowed, reason = iRC:GetGuildFoundTradeStatus(sender, true)
+        allowed = allowed == true
         if statusCache then statusCache[sender] = allowed end
     end
     if allowed then return false end
@@ -567,7 +571,7 @@ local function getInboxRestriction(index, statusCache)
     -- Quest rewards and other game-generated deliveries remain usable. They
     -- cannot be replied to; ordinary player mail can.
     if canReply == false or isGameMaster then return false end
-    return true, sender
+    return true, sender, false, reason
 end
 
 local function currentInboxIndex(index)
@@ -637,9 +641,10 @@ function Enforcement:IsInboxMailRestricted(index)
     return getInboxRestriction(index)
 end
 
-function Enforcement:ShowInboxRestriction(index, sender)
+function Enforcement:ShowInboxRestriction(index, sender, reason)
     iRC:RecordGuildFoundAudit("INBOX_BLOCKED", sender)
-    self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_INBOX_BLOCKED", sender and iRC:FormatPlayerName(sender) or iRC:Text("GUILD_FOUND_UNKNOWN_SENDER")))
+    self:ShowGuildFoundRestriction(iRC:Text("GUILD_FOUND_INBOX_BLOCKED", sender and iRC:FormatPlayerName(sender) or iRC:Text("GUILD_FOUND_UNKNOWN_SENDER"))
+        .. (reason and " " .. reason or ""))
 end
 
 local function setControlRestricted(control, restricted)
@@ -671,8 +676,8 @@ end
 function Enforcement:UpdateInboxRestriction()
     local index = (_G.OpenMailFrame and (_G.OpenMailFrame.openMailID or _G.OpenMailFrame.mailIndex))
         or (_G.InboxFrame and _G.InboxFrame.openMailID)
-    local blocked, sender, pending = false, nil, false
-    if index then blocked, sender, pending = getInboxRestriction(index) end
+    local blocked, sender, pending, reason = false, nil, false, nil
+    if index then blocked, sender, pending, reason = getInboxRestriction(index) end
     setControlRestricted(_G.OpenMailMoneyButton, blocked)
     setControlRestricted(_G.OpenMailPackageButton, blocked)
     setControlRestricted(_G.OpenMailLetterButton, blocked)
@@ -697,7 +702,7 @@ function Enforcement:UpdateInboxRestriction()
     end
     if not pending then
         if restrictionKey and restrictionKey ~= lastInboxRestrictionKey then
-            self:ShowInboxRestriction(index, sender)
+            self:ShowInboxRestriction(index, sender, reason)
         end
         lastInboxRestrictionKey = restrictionKey
     end

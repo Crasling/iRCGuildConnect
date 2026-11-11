@@ -60,6 +60,8 @@ local function ruleViolationWhisper(member)
     local level = tonumber(member.level) or 0
     local personalBank = iRC.Identity and iRC.Identity:IsPersonalBank(member.name)
     local guildFoundStatus = memberGuildFoundStatus(member, connection)
+    local guildFoundApplies = progressionMode ~= "NONE" and (personalBank
+        or iRC:IsGuildFoundProgressionApplicable(level, member.selfFound, rules))
     if member.raceMismatch and member.raceCheck then
         reasons[#reasons + 1] = iRC:Text("MEMBER_WHISPER_VIOLATION_RACE",
             iRC:Text("GUILD_RACE_" .. member.raceCheck.expected))
@@ -70,14 +72,14 @@ local function ruleViolationWhisper(member)
     end
     if hasLiveAddon and not personalBank then
         local selfFoundRequired = progressionMode == "SELF_FOUND" and level < 60
-        local needsSelfFoundOrGuildFound = progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND"
-            and member.selfFound ~= true and not (guildFoundStatus and guildFoundStatus.verified == true)
+        local needsSelfFoundOrGuildFound = iRC:IsGuildFoundProgressionApplicable(level, member.selfFound, rules)
+            and not (guildFoundStatus and guildFoundStatus.verified == true)
         if (selfFoundRequired and member.selfFound ~= true) or needsSelfFoundOrGuildFound then
             reasons[#reasons + 1] = iRC:Text(needsSelfFoundOrGuildFound
                 and "MEMBER_WHISPER_VIOLATION_PROGRESSION" or "MEMBER_WHISPER_VIOLATION_SELF_FOUND")
         end
     end
-    if hasLiveAddon and guildFoundStatus and guildFoundStatus.clean == false then
+    if hasLiveAddon and guildFoundApplies and guildFoundStatus and guildFoundStatus.clean == false then
         reasons[#reasons + 1] = iRC:Text("MEMBER_WHISPER_VIOLATION_GOLD")
     end
     if #reasons == 0 then return nil end
@@ -886,12 +888,13 @@ local function getEffectiveVerificationState(member, progressionMode, usesGuildF
     if state == "verified" and guildFoundApplies and guildFoundStatus and guildFoundStatus.clean == false then
         return "attention"
     end
-    if hasLiveAddon and personalBank then return state end
-    if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 and hasLiveAddon and member.selfFound ~= true then
+    if not personalBank and progressionMode == "SELF_FOUND" and (member.level or 0) < 60
+        and hasLiveAddon and member.selfFound ~= true then
         return "attention"
     end
     local needsGuildFoundVerification = hasLiveAddon and guildFoundApplies
-    if needsGuildFoundVerification and not (guildFoundStatus and guildFoundStatus.verified == true) then
+    if needsGuildFoundVerification
+        and not (guildFoundStatus and guildFoundStatus.verified == true and guildFoundStatus.clean == true) then
         return "attention"
     end
     return state
@@ -928,7 +931,7 @@ materializeVerificationRow = function(data)
     elseif progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
         if member.selfFound then
             progressText, progressColor = iRC:Text("VERIFICATION_SELF_FOUND", iRC:Text("SELF_FOUND_ACTIVE")), GREEN
-        elseif liveState == "verified" or (guildFoundStatus and guildFoundStatus.verified == true) then
+        elseif guildFoundStatus and guildFoundStatus.verified == true then
             progressText, progressColor = iRC:Text("VERIFICATION_GUILD_FOUND", iRC:Text("RL_VERIFIED")), GREEN
         else
             progressText, progressColor = iRC:Text("VERIFICATION_GUILD_FOUND", iRC:Text("RL_UNVERIFIED")), RED
@@ -955,14 +958,20 @@ materializeVerificationRow = function(data)
     local lowerLevelOffline = liveState == "offline" or liveState == "inactive"
     local selfFoundViolation = not personalBank and progressionMode == "SELF_FOUND" and belowMaxLevel
         and lowerLevelStatusOK and member.selfFound ~= true
+    local guildFoundApplies = progressionRulesActive and (personalBank or usesGuildFound
+        and iRC:IsGuildFoundProgressionApplicable(member.level, member.selfFound, context.connection and context.connection.rules))
+    local monitoringUnknown = guildFoundApplies
+        and not (guildFoundStatus and guildFoundStatus.clean ~= nil)
     local cleanText = selfFoundViolation and iRC:Text("VERIFICATION_SELF_FOUND_INACTIVE_STATUS")
         or (belowMaxLevel and iRC:Text(lowerLevelStatusOK and "VERIFICATION_OK"
         or (lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")) or iRC:Text("RL_STATUS_UNKNOWN"))
     if not lowerLevelStatusOK then
         cleanText = iRC:Text(lowerLevelOffline and "VERIFICATION_OFFLINE" or "RL_UNVERIFIED")
-    elseif liveState == "verified" and guildFoundStatus and guildFoundStatus.clean == false then
+    elseif monitoringUnknown then
+        cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text("RL_STATUS_UNKNOWN"))
+    elseif guildFoundApplies and guildFoundStatus and guildFoundStatus.clean == false then
         cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text("RL_FLAGGED"))
-    elseif ((member.level or 0) >= 60 or progressionMode == "SELF_FOUND_OR_GUILD_FOUND" or progressionMode == "GUILD_FOUND")
+    elseif guildFoundApplies
         and guildFoundStatus and guildFoundStatus.clean ~= nil then
         cleanText = iRC:Text("VERIFICATION_GOLD", iRC:Text(guildFoundStatus.clean and "RL_CLEAN" or "RL_FLAGGED"))
     end
@@ -1005,10 +1014,11 @@ materializeVerificationRow = function(data)
     if progressionRulesActive then
         data.columnColors[4] = progressColor
         data.columnColors[5] = (selfFoundViolation
-            or (liveState == "verified" and guildFoundStatus and guildFoundStatus.clean == false)) and RED
+            or (hasLiveAddon and guildFoundApplies and guildFoundStatus and guildFoundStatus.clean == false)) and RED
+            or (monitoringUnknown and GRAY)
             or (not lowerLevelStatusOK and (lowerLevelOffline and GRAY or RED)
             or (belowMaxLevel and GREEN
-            or (guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY)))
+            or (guildFoundApplies and guildFoundStatus and guildFoundStatus.clean ~= nil and (guildFoundStatus.clean and GREEN or RED) or GRAY)))
     end
     data.verificationMember, data.verificationContext, data.frame = nil, nil, nil
 end
@@ -1287,12 +1297,10 @@ function Dashboard:Refresh()
                 local guildFoundStatus = memberGuildFoundStatus(member, connection)
                 if key == "progress" then
                     if progressionMode == "GUILD_FOUND" then
-                        return ((member.verification and member.verification.state == "verified")
-                            or (guildFoundStatus and guildFoundStatus.verified == true)) and 1 or 0
+                        return guildFoundStatus and guildFoundStatus.verified == true and 1 or 0
                     elseif progressionMode == "SELF_FOUND_OR_GUILD_FOUND" then
                         if member.selfFound then return 2 end
-                        return ((member.verification and member.verification.state == "verified")
-                            or (guildFoundStatus and guildFoundStatus.verified == true)) and 1 or 0
+                        return guildFoundStatus and guildFoundStatus.verified == true and 1 or 0
                     end
                     if progressionMode == "SELF_FOUND" and (member.level or 0) < 60 then return member.selfFound and 1 or 0 end
                     if usesGuildFound and (member.level or 0) >= 60 then

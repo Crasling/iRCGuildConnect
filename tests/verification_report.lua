@@ -50,11 +50,30 @@ status.moneyBeforeAt = status.moneyAfterAt - (1148 * 60 + 43)
 status.playedBefore, status.playedAfter = 1000, 1000 + 196 * 60 + 36
 model = report:BuildModel("Drim Lumenrot", member, status, "GUILD_FOUND")
 assert(model.details:find("Before: 0g 55s 85c    |    After: 1g 11s 88c    |    Change: +0g 56s 3c", 1, true))
-assert(model.details:find("3h 16m 36s", 1, true), "reports retain the actual played-time increase")
+assert(not model.details:find("Played-time check", 1, true),
+    "a trade incident must not present an unrelated periodic played-time sample as its own evidence")
+status.discrepancyReason = "PLAYED_GAP"
+model = report:BuildModel("Drim Lumenrot", member, status, "GUILD_FOUND")
+assert(model.details:find("3h 16m 36s", 1, true), "played-time incidents retain their actual played-time change")
+assert(model.details:find("Played-time check", 1, true) < model.details:find("Wallet at detection (not the cause)", 1, true),
+    "played-time evidence comes first and the unchanged wallet is labeled as context")
 assert(not model.details:find("Difference in time:", 1, true) and not model.details:find("19h 8m 43s", 1, true),
     "elapsed clock time, which includes time logged out, is not presented as audit activity")
 assert(model.details:find(os.date("%Y-%m-%d %H:%M:%S", status.moneyBeforeAt), 1, true),
     "the original checkpoint timestamps remain available")
+status.moneyBeforeAt = status.moneyAfterAt - 9
+status.playedBeforeAt, status.playedAfterAt = status.moneyAfterAt - 30 * 60, status.moneyAfterAt
+status.playedAfter = status.playedBefore + 29 * 60 + 59
+model = report:BuildModel("Drim Lumenrot", member, status, "GUILD_FOUND")
+assert(model.details:find("Played time gained since the earlier check: 0h 29m 59s", 1, true))
+assert(model.details:find(os.date("%Y-%m-%d %H:%M:%S", status.playedBeforeAt), 1, true)
+    and model.details:find(os.date("%Y-%m-%d %H:%M:%S", status.playedAfterAt), 1, true),
+    "played-time evidence shows its own dates instead of implying it spans the nine-second money check")
+status.discrepancyReason, status.playedAfter = "PLAYED_ROLLBACK", status.playedBefore - 5
+model = report:BuildModel("Drim Lumenrot", member, status, "GUILD_FOUND")
+assert(model.details:find("Played time dropped since the earlier check: 0h 0m 5s", 1, true),
+    "a backwards played-time sample remains visible")
+status.discrepancyReason = "TRADE_BLOCK_BYPASS"
 model = report:BuildModel("Crasling Vaelanar", member, nil, "GUILD_FOUND")
 assert(model.tone == "neutral" and model.issue:find("No verification report", 1, true))
 model = report:BuildModel("Crasling Vaelanar", member, status, "SELF_FOUND")

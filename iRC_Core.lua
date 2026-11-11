@@ -1089,6 +1089,7 @@ end
 local DEFAULT_SETTINGS = {
     mainWindowScale = 1,
     mainPanelDefaultTab = "__LAST__",
+    memberListSort = "NAME",
     shareGlobalRaceGrid = true,
     debugMode = false,
     testGuildMasterOverride = false,

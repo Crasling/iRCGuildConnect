@@ -17,6 +17,14 @@ local collapsedFactionSections = {}
 local MEMBER_SEARCH_PRIORITY = { name = 1, profession = 2, recipe = 3 }
 local GUILD_MEMBER_ROW_HEIGHT = 36
 local GUILD_MEMBER_ROW_SPACING = 39
+local MEMBER_SORT_OPTIONS = {
+    { key = "NAME", label = "GUILD_MEMBERS_SORT_NAME" },
+    { key = "LEVEL_HIGH", label = "GUILD_MEMBERS_SORT_LEVEL_HIGH" },
+    { key = "LEVEL_LOW", label = "GUILD_MEMBERS_SORT_LEVEL_LOW" },
+    { key = "CLASS", label = "GUILD_MEMBERS_SORT_CLASS" },
+    { key = "RANK", label = "GUILD_MEMBERS_SORT_RANK" },
+    { key = "LAST_ONLINE", label = "GUILD_MEMBERS_SORT_LAST_ONLINE" },
+}
 local MEMBER_MANAGEMENT_ROW_HEIGHT = 44
 local MEMBER_MANAGEMENT_ROW_SPACING = 48
 local GUILD_DIRECTORY_ROW_HEIGHT = 40
@@ -923,6 +931,108 @@ local function getNavigationUnavailableReason(item)
 end
 
 local applyMemberSearch
+
+local function memberSortOption(key)
+    for _, option in ipairs(MEMBER_SORT_OPTIONS) do
+        if option.key == key then return option end
+    end
+    return MEMBER_SORT_OPTIONS[1]
+end
+
+local function sortMemberProfiles(profiles, key, mainKey, searchedKey)
+    key = memberSortOption(key).key
+    -- Calculate keys once per filtered roster, not while comparing rows or
+    -- scrolling. Never reorder the cached roster shared by other pages.
+    local sorted = {}
+    for _, profile in ipairs(profiles) do
+        local name = iRC:NormalizeName(profile.name)
+        local value
+        if key == "LEVEL_HIGH" or key == "LEVEL_LOW" then value = tonumber(profile.level)
+        elseif key == "CLASS" then
+            local class = profile.classFile or profile.class
+            if class and class ~= "UNKNOWN" then value = iRC:GetClassDisplayName(class):lower() end
+        elseif key == "RANK" then value = tonumber(profile.rankIndex)
+        elseif key == "LAST_ONLINE" then
+            value = profile.online and -1 or tonumber(profile.lastOnlineDays)
+            if value and value >= 0 then value = math.floor(value) end
+        else value = name end
+        local priority = key == "NAME" and mainKey
+            and (name == mainKey and 1 or (name == searchedKey and 2 or 3)) or 1
+        sorted[#sorted + 1] = { profile = profile, name = name, value = value, priority = priority }
+    end
+    table.sort(sorted, function(a, b)
+        if a.priority ~= b.priority then return a.priority < b.priority end
+        if (a.value == nil) ~= (b.value == nil) then return b.value == nil end
+        if a.value ~= b.value then
+            if key == "LEVEL_HIGH" then return a.value > b.value end
+            return a.value < b.value
+        end
+        return a.name < b.name
+    end)
+    for index, entry in ipairs(sorted) do profiles[index] = entry.profile end
+end
+
+local function createMemberSortDropdown(parent, frame)
+    local dropdown = makeIRCActionButton(parent, 190, 25, "", false)
+    dropdown.text:ClearAllPoints()
+    dropdown.text:SetPoint("LEFT", 9, 0)
+    dropdown.text:SetPoint("RIGHT", -22, 0)
+    dropdown.text:SetFontObject(GameFontHighlightSmall)
+    dropdown.text:SetJustifyH("LEFT")
+    dropdown.arrow = dropdown:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    dropdown.arrow:SetPoint("RIGHT", -9, 0)
+    dropdown.arrow:SetText("v")
+    local menu = CreateFrame("Frame", nil, dropdown, "BackdropTemplate")
+    dropdown.menu = menu
+    menu:SetPoint("TOPLEFT", dropdown, "BOTTOMLEFT", 0, -2)
+    menu:SetPoint("TOPRIGHT", dropdown, "BOTTOMRIGHT", 0, -2)
+    menu:SetHeight(#MEMBER_SORT_OPTIONS * 26 + 8)
+    menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    menu:SetFrameLevel(parent:GetFrameLevel() + 30)
+    menu:SetClampedToScreen(true)
+    menu:EnableMouse(true)
+    menu:SetScript("OnMouseDown", function() end)
+    createBackdrop(menu, { 0.025, 0.022, 0.018, 0.995 }, { 0.72, 0.45, 0.16, 1 })
+    menu.buttons = {}
+    for index, option in ipairs(MEMBER_SORT_OPTIONS) do
+        local button = makeIRCActionButton(menu, 180, 24, iRC:Text(option.label), false)
+        button:SetPoint("TOPLEFT", menu, "TOPLEFT", 4, -4 - (index - 1) * 26)
+        button:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -4, -4 - (index - 1) * 26)
+        button.text:ClearAllPoints()
+        button.text:SetPoint("LEFT", 8, 0)
+        button.text:SetJustifyH("LEFT")
+        button.text:SetFontObject(GameFontHighlightSmall)
+        button.sortKey = option.key
+        button:SetScript("OnClick", function(self)
+            frame.memberSortKey = self.sortKey
+            iRC:GetSettings().memberListSort = self.sortKey
+            menu:Hide()
+            dropdown:Refresh()
+            applyMemberSearch(frame)
+        end)
+        menu.buttons[index] = button
+    end
+    function dropdown:Refresh()
+        local option = memberSortOption(frame.memberSortKey)
+        frame.memberSortKey = option.key
+        self.text:SetText(iRC:Text("GUILD_MEMBERS_SORT", iRC:Text(option.label)))
+        for _, button in ipairs(menu.buttons) do
+            local selected = button.sortKey == option.key
+            button:SetBackdropColor(selected and 0.18 or 0.08, selected and 0.09 or 0.06, 0.035, 0.98)
+            button:SetBackdropBorderColor(unpack(selected and COLORS.gold or { 0.52, 0.38, 0.17, 1 }))
+        end
+    end
+    dropdown:SetScript("OnClick", function(self)
+        self:Refresh()
+        menu:SetShown(not menu:IsShown())
+        if menu:IsShown() then menu:Raise() end
+    end)
+    dropdown:SetScript("OnHide", function() menu:Hide() end)
+    menu:Hide()
+    dropdown:Refresh()
+    dropdown:Hide()
+    return dropdown
+end
 
 local function updateMemberSuggestions(frame)
     local search = frame.memberProfessionSearch
@@ -3138,6 +3248,9 @@ function UI:Create()
     frame.memberExport = makeIRCActionButton(main, 126, 25, "Export CSV", false)
     frame.memberExport:SetPoint("TOPRIGHT", main, "TOPRIGHT", -18, -47)
     frame.memberExport:Hide()
+    frame.memberSortKey = memberSortOption(settings.memberListSort).key
+    frame.memberSort = createMemberSortDropdown(main, frame)
+    frame.memberSort:SetPoint("LEFT", frame.memberOnlineFilters[3], "RIGHT", 12, 0)
 
     frame.guildStatsFilters = {}
     for index, view in ipairs({ { "ALL", "All" }, { "CHALLENGES", "Challenges" } }) do
@@ -4788,6 +4901,8 @@ function UI:Create()
     local outsideClickWatcher = CreateFrame("Frame")
     outsideClickWatcher:RegisterEvent("GLOBAL_MOUSE_DOWN")
     outsideClickWatcher:SetScript("OnEvent", function()
+        if frame.memberSort.menu:IsShown() and not iRC:IsMouseOverFrame(frame.memberSort)
+            and not iRC:IsMouseOverFrame(frame.memberSort.menu) then frame.memberSort.menu:Hide() end
         local professionSearch = frame.memberProfessionSearch
         if frame:IsShown() and frame.category == "Guild Members" and professionSearch.edit:HasFocus()
             and not iRC:IsMouseOverFrame(professionSearch.edit) and not iRC:IsMouseOverFrame(professionSearch.suggestions) then
@@ -5628,6 +5743,7 @@ end
 
 applyMemberSearch = function(frame)
     local profiles = {}
+    local searchedKey, mainKey
     local onlineFilter = frame.memberOnlineFilter or "ALL"
     for _, profile in ipairs(frame.allMemberData or {}) do
         if onlineFilter == "ALL" or (onlineFilter == "ONLINE" and profile.online)
@@ -5654,7 +5770,6 @@ applyMemberSearch = function(frame)
         end
         profiles = filtered
         local searchedLabel = selection and selection.kind == "name" and selection.label or query
-        local searchedKey, mainKey
         if searchedLabel and searchedLabel ~= "" and iRC.Identity then
             for _, profile in ipairs(profiles) do
                 local display = iRC:FormatPlayerName(profile.name)
@@ -5667,16 +5782,8 @@ applyMemberSearch = function(frame)
                 end
             end
         end
-        if mainKey then
-            table.sort(profiles, function(a, b)
-                local aKey, bKey = iRC:NormalizeName(a.name), iRC:NormalizeName(b.name)
-                local aPriority = aKey == mainKey and 1 or (aKey == searchedKey and 2 or 3)
-                local bPriority = bKey == mainKey and 1 or (bKey == searchedKey and 2 or 3)
-                if aPriority ~= bPriority then return aPriority < bPriority end
-                return aKey < bKey
-            end)
-        end
     end
+    sortMemberProfiles(profiles, frame.memberSortKey, mainKey, searchedKey)
     frame.memberData = profiles
     frame.scrollContent:SetHeight(math.max(1, #profiles * GUILD_MEMBER_ROW_SPACING))
     frame.scroll:SetVerticalScroll(0)
@@ -7529,21 +7636,26 @@ local function setRaceCard(card, group, forceExpanded)
             if not button then
                 button = CreateFrame("Button", nil, card.details)
                 button:SetHeight(21)
-                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                button.text:SetAllPoints()
+                button.onlineIcon = button:CreateTexture(nil, "OVERLAY")
+                button.onlineIcon:SetTexture("Interface\\FriendsFrame\\StatusIcon-Online")
+                button.onlineIcon:SetSize(10, 10)
+                button.onlineIcon:SetPoint("LEFT", button, "LEFT", 0, 0)
+                button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                button.text:SetPoint("LEFT", button, "LEFT", 17, 0)
+                button.text:SetPoint("RIGHT", button, "RIGHT", -4, 0)
                 button.text:SetJustifyH("LEFT")
                 button.text:SetWordWrap(false)
                 button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
                 card.contactButtons[index] = button
             end
             local name = contact.name
-            local displayName = iRC:FormatPlayerName(name)
+            local displayName = iRC:FormatInviteContactName(name)
             button:ClearAllPoints()
             button:SetPoint("TOPLEFT", card, "TOPLEFT", 20 + ((index - 1) % 2) * (width - 40) / 2,
                 -layout.contactsTop - math.floor((index - 1) / 2) * 23)
             button:SetWidth((width - 52) / 2)
-            button.text:SetText(contact.online
-                and ("|TInterface\\FriendsFrame\\StatusIcon-Online:10:10:0:0|t " .. displayName) or displayName)
+            button.text:SetText(displayName)
+            button.onlineIcon:SetShown(contact.online)
             button:SetScript("OnClick", function()
                 local faction = UnitFactionGroup and UnitFactionGroup("player")
                 if faction and group.faction and faction ~= group.faction then
@@ -7909,6 +8021,8 @@ function UI:Refresh()
     end
     frame.memberProfessionSearch:SetShown(not embeddedManagement and frame.category == "Guild Members")
     frame.memberExport:SetShown(not embeddedManagement and frame.category == "Guild Members")
+    frame.memberSort:SetShown(not embeddedManagement and frame.category == "Guild Members")
+    frame.memberSort:Refresh()
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     for _, button in ipairs(frame.memberOnlineFilters or {}) do
         local shown = not embeddedManagement and frame.category == "Guild Members"

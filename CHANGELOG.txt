@@ -2,6 +2,16 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.9 - Guild Improvements
+--------------------------------------------------------------------------------
+[ADDED] Sort guild members by name, level, class, rank or last online
+[IMPROVED] Guild Found status stays more up to date
+[FIXED] Guild List reports wait longer for missing parts
+[FIXED] Collect recipes mailed by verified guild members
+[FIXED] Blocked mail explains the reason
+[FIXED] Guild Verification shows the correct member status
+[FIXED] Guild Found reports show played time more clearly
+
 v0.7.8 - Guild Tools
 --------------------------------------------------------------------------------
 [ADDED] Private member notes with optional strikes
