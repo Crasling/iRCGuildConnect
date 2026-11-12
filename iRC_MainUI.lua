@@ -215,6 +215,51 @@ local FALLBACK_CLASS_COLORS = {
     PRIEST = { 0.95, 0.95, 0.95 }, SHAMAN = { 0, 0.44, 0.87 }, MAGE = { 0.25, 0.78, 0.92 }, WARLOCK = { 0.53, 0.53, 0.93 }, DRUID = { 1, 0.49, 0.04 },
 }
 
+local MEMBER_PROFESSION_COLORS = {
+    [171] = { 0.75, 0.56, 0.91 }, -- Alchemy
+    [164] = { 0.69, 0.74, 0.79 }, -- Blacksmithing
+    [333] = { 0.76, 0.63, 0.96 }, -- Enchanting
+    [202] = { 0.91, 0.68, 0.33 }, -- Engineering
+    [182] = { 0.48, 0.84, 0.48 }, -- Herbalism
+    [165] = { 0.79, 0.59, 0.40 }, -- Leatherworking
+    [186] = { 0.58, 0.77, 0.86 }, -- Mining
+    [393] = { 0.84, 0.67, 0.48 }, -- Skinning
+    [197] = { 0.76, 0.79, 0.93 }, -- Tailoring
+    [185] = { 0.96, 0.64, 0.37 }, -- Cooking
+    [356] = { 0.43, 0.75, 0.93 }, -- Fishing
+    [129] = { 0.91, 0.58, 0.59 }, -- First Aid
+}
+
+local function memberColoredText(value, color)
+    color = color or RACE_COLORS.Unknown
+    local function channel(number)
+        return math.max(0, math.min(255, math.floor((tonumber(number) or 1) * 255 + 0.5)))
+    end
+    return string.format("|cff%02x%02x%02x%s|r", channel(color.r or color[1]),
+        channel(color.g or color[2]), channel(color.b or color[3]), tostring(value))
+end
+
+local function memberProgressColor(value, maximum)
+    value = math.max(1, math.min(maximum, tonumber(value) or 1))
+    if value >= maximum then return COLORS.gold end
+    local progress = (value - 1) / (maximum - 1)
+    return { 0.66 + 0.13 * progress, 0.69 + 0.20 * progress, 0.72 - 0.13 * progress }
+end
+
+local function rosterProfessionHints(member, skills)
+    -- Only fill gaps left by iRC reports or imported profession links.
+    local first, second = member.rosterProfession1ID, member.rosterProfession2ID
+    if not first and not second then return {} end
+    local hints = {}
+    for _, option in ipairs(iRC.Professions:GetOptions()) do
+        local id = option[1]
+        if (id == first or id == second) and not (skills and tonumber(skills[id]) and tonumber(skills[id]) > 0) then
+            hints[#hints + 1] = option
+        end
+    end
+    return hints
+end
+
 local function createBackdrop(frame, color, border)
     frame:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
@@ -4091,12 +4136,12 @@ function UI:Create()
     end
     local function professionExportFields(member, professionMembers)
         local data = professionMembers and professionMembers[iRC:NormalizeName(member.name)]
-        if not data or (member.guid and member.guid ~= "" and data.guid and data.guid ~= ""
-            and data.guid ~= member.guid) then return "", "" end
+        if data and member.guid and member.guid ~= "" and data.guid and data.guid ~= ""
+            and data.guid ~= member.guid then data = nil end
         local professions, recipeGroups = {}, {}
         for _, option in ipairs(iRC.Professions:GetOptions()) do
             local professionID, professionName = option[1], option[2]
-            local rank = type(data.skills) == "table" and tonumber(data.skills[professionID])
+            local rank = data and type(data.skills) == "table" and tonumber(data.skills[professionID])
             if rank then
                 professions[#professions + 1] = professionName .. " " .. tostring(math.floor(rank))
                 local recipeNames, seen = {}, {}
@@ -4125,6 +4170,9 @@ function UI:Create()
                     recipeGroups[#recipeGroups + 1] = professionName .. ": " .. table.concat(recipeNames, " | ")
                 end
             end
+        end
+        for _, option in ipairs(rosterProfessionHints(member, data and data.skills)) do
+            professions[#professions + 1] = option[2] .. " (skill unavailable)"
         end
         return table.concat(professions, "; "), table.concat(recipeGroups, "; ")
     end
@@ -4290,6 +4338,8 @@ function UI:Create()
                 and profile.professionData.skills[option[1]]
             if rank then professionLines[#professionLines + 1] = option[2] .. " (" .. tostring(rank) .. ")" end
         end
+        local professionHints = rosterProfessionHints(profile,
+            profile.professionData and profile.professionData.skills)
         if #professionLines > 0 then
             for _, profession in ipairs(professionLines) do lines[#lines + 1] = "• " .. profession end
             if profile.professionData and type(profile.professionData.linkSources) == "table"
@@ -4302,7 +4352,13 @@ function UI:Create()
                     .. (latest and latest > 0 and (" · " .. date("%Y-%m-%d %H:%M", latest)) or "")
                     .. iRC.Colors.Reset
             end
-        else
+        end
+        if #professionHints > 0 then
+            for _, option in ipairs(professionHints) do
+                lines[#lines + 1] = "• " .. option[2] .. " (skill unavailable from guild roster)"
+            end
+        end
+        if #professionLines == 0 and #professionHints == 0 then
             lines[#lines + 1] = iRC.Colors.Gray .. "No profession data received." .. iRC.Colors.Reset
         end
         if iRC:IsInGuildConnection() then
@@ -5511,13 +5567,28 @@ function UI:RenderMemberRows()
         local nameWidth = row.name.GetUnboundedStringWidth and row.name:GetUnboundedStringWidth() or row.name:GetStringWidth()
         row.name:SetWidth(math.max(40, math.min(300, nameWidth + 3,
             (row:GetWidth() or 600) - 166 - (memberTag and row.tag:GetStringWidth() + 8 or 0))))
-        row.name:SetTextColor(unpack(iRC:NormalizeName(profile.name) == iRC:NormalizeName(iRC:GetPlayerName()) and COLORS.green or COLORS.gold))
+        local classFile = tostring(profile.classFile or profile.class or "UNKNOWN"):upper()
+        local classColor = (RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]) or FALLBACK_CLASS_COLORS[classFile]
+        if classColor then
+            row.name:SetTextColor(classColor.r or classColor[1], classColor.g or classColor[2], classColor.b or classColor[3])
+        else
+            row.name:SetTextColor(unpack(COLORS.gold))
+        end
         row.detail:ClearAllPoints()
         row.detail:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -20)
         row.detail:SetWordWrap(false)
-        local characterDetail = "Level " .. (profile.level or 1) .. " · " .. (profile.race or "Unknown")
-            .. " " .. iRC:GetClassDisplayName(profile.classFile or profile.class or "Unknown")
-        row.detail:SetText(characterDetail)
+        local level = tonumber(profile.level) or 1
+        local race = tostring(profile.race or "Unknown")
+        local raceKey = race:upper():gsub("[^A-Z]", "")
+        if raceKey == "UNDEAD" then raceKey = "SCOURGE" end
+        local raceLabel = RACE_LABELS[raceKey] or race
+        local classLabel = iRC:GetClassDisplayName(classFile)
+        local rankName = type(profile.rankName) == "string" and profile.rankName ~= "" and profile.rankName or nil
+        local characterDetail = "Level " .. level .. " · " .. raceLabel .. " " .. classLabel
+            .. (rankName and " · " .. rankName or "")
+        local coloredDetail = "Level " .. memberColoredText(level, memberProgressColor(level, 60))
+            .. (rankName and " · " .. memberColoredText(rankName, COLORS.parchment) or "")
+        row.detail:SetText(coloredDetail)
         row.identityDetail:ClearAllPoints()
         row.identityDetail:SetPoint("TOPRIGHT", row, "TOPRIGHT", -12, -20)
         row.identityDetail:SetWidth(180)
@@ -5534,17 +5605,27 @@ function UI:RenderMemberRows()
         end
         row.profileName = profile.name
         local professionData = profile.professionData
-        local professionNames, knownRecipes = {}, 0
+        local professionNames, coloredProfessions, knownRecipes = {}, {}, 0
+        local professionHints = rosterProfessionHints(profile, professionData and professionData.skills)
+        local hintIDs = {}
+        for _, option in ipairs(professionHints) do hintIDs[option[1]] = true end
         for _, option in ipairs(iRC.Professions:GetOptions()) do
             local rank = professionData and professionData.skills and professionData.skills[option[1]]
             if rank then
                 professionNames[#professionNames + 1] = option[2] .. " " .. rank
+                coloredProfessions[#coloredProfessions + 1] = memberColoredText(option[2],
+                    MEMBER_PROFESSION_COLORS[option[1]]) .. " "
+                    .. memberColoredText(rank, memberProgressColor(rank, 300))
                 local recipes = professionData.recipes and professionData.recipes[option[1]]
                 if type(recipes) == "table" then knownRecipes = knownRecipes + #recipes end
+            elseif hintIDs[option[1]] then
+                professionNames[#professionNames + 1] = option[2] .. " (skill unavailable)"
+                coloredProfessions[#coloredProfessions + 1] = memberColoredText(option[2],
+                    MEMBER_PROFESSION_COLORS[option[1]]) .. " |cff999999?|r"
             end
         end
         if #professionNames > 0 then
-            row.detail:SetText(row.detail:GetText() .. " | " .. table.concat(professionNames, ", "))
+            row.detail:SetText(coloredDetail .. " | " .. table.concat(coloredProfessions, ", "))
         end
         row:SetScript("OnClick", nil)
         row:SetScript("OnEnter", function(self)
@@ -5574,6 +5655,10 @@ function UI:RenderMemberRows()
             if #professionNames > 0 then
                 GameTooltip:AddLine(table.concat(professionNames, ", "), 0.85, 0.85, 0.85, true)
                 if knownRecipes > 0 then GameTooltip:AddLine("Known recipes: " .. knownRecipes, 0.65, 0.65, 0.65) end
+                if #professionHints > 0 then
+                    GameTooltip:AddLine("Guild roster confirms the profession, but its reported skill is unreliable.",
+                        0.65, 0.65, 0.65, true)
+                end
             else
                 GameTooltip:AddLine("No profession data available.", 0.65, 0.65, 0.65)
             end
@@ -5839,6 +5924,9 @@ local function updateMemberRows(frame)
                     end
                 end
             end
+        end
+        for _, option in ipairs(rosterProfessionHints(profile, data and data.skills)) do
+            add("profession", option[2], profile)
         end
     end
     frame.allMemberData, frame.memberSearchIndex = profiles, entries

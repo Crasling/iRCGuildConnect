@@ -39,7 +39,9 @@ local function fixture(count, nativeReady)
         GetMemberInfo = function(_, id)
             state.nativeReads = state.nativeReads + 1
             return { guid = roster[id].guid, name = roster[id].name,
-                race = state.secretRace and state.secret or (id == 2 and 5 or 1), classID = 8 }
+                race = state.secretRace and state.secret or (id == 2 and 5 or 1), classID = 8,
+                profession1ID = state.secretProfession and state.secret or (id == 2 and 171 or nil),
+                profession1Rank = id == 2 and 1 or nil }
         end,
     }
     env.C_CreatureInfo = {
@@ -103,6 +105,9 @@ local test = fixture(1000, true)
 local rows = test.addon:GetGuildRosterRows()
 assert(#rows == 1000 and test:row("Member 2").race == "Undead" and test:row("Member 2").class == "MAGE",
     "native guild member records supply race and class for offline non-iRC members")
+assert(test:row("Member 2").rosterProfession1ID == 171
+    and test:row("Member 2").professionData == nil,
+    "the roster exposes a profession ID without treating its unreliable rank as iRC skill data")
 assert(test.nativeReads == 1000 and test.reads == 0)
 test.addon:GetGuildRosterRows()
 assert(test.nativeReads == 1000 and #test.timers == 0, "cached pages do not rescan 1,000 club members or start fallback work")
@@ -173,10 +178,11 @@ test = fixture(2, true)
 test.secretMembers = true
 assert(test:row("Member 2").race == "Unknown" and test.nativeReads == 0,
     "a secret native member list is never enumerated")
-test.secretMembers, test.secretRace = false, true
+test.secretMembers, test.secretRace, test.secretProfession = false, true, true
 test.addon.RosterRaces:InvalidateNativeMembers()
 test.addon:InvalidateGuildRosterSnapshot()
-assert(test:row("Member 2").race == "Unknown", "secret native race IDs are not passed to other APIs")
+assert(test:row("Member 2").race == "Unknown" and test:row("Member 2").rosterProfession1ID == nil,
+    "secret native race and profession IDs are not used as roster data")
 
 test = fixture(1000, false)
 test.addon:GetGuildRosterRows()

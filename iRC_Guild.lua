@@ -85,7 +85,7 @@ end
 local ROSTER_MEMBER_FIELDS = {
     "rankName", "rankIndex", "level", "className", "classFile", "online",
     "guid", "publicNote", "officerNote", "lastOnlineDays",
-    "race",
+    "race", "rosterProfession1ID", "rosterProfession2ID",
 }
 
 local function sameRosterMember(left, right)
@@ -228,6 +228,8 @@ function iRC:GetGuildRosterSnapshot()
                 className = className,
                 classFile = classFile,
                 race = native and native.race,
+                rosterProfession1ID = native and native.profession1ID,
+                rosterProfession2ID = native and native.profession2ID,
                 online = online and true or false,
                 guid = guid,
                 publicNote = publicNote,
@@ -723,6 +725,8 @@ local function buildGuildRosterRows(self, roster, connection)
                 rankName = rosterMember.rankName,
                 level = level or (profile and profile.level) or 1, class = memberClass,
                 race = race, online = online and true or false, profile = profile,
+                rosterProfession1ID = rosterMember.rosterProfession1ID,
+                rosterProfession2ID = rosterMember.rosterProfession2ID,
                 dead = profile and type(profile.deadGuid) == "string" and profile.deadGuid ~= ""
                     and profile.deadGuid == (guid and guid ~= "" and guid or profile.guid) or false,
                 lastOnlineDays = lastOnlineDays,

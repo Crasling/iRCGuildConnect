@@ -26,6 +26,7 @@ function methods:ClearAllPoints() self.points = {} end
 function methods:SetText(value)
     if self.fontString then self.fontString:SetText(value) else self.label = value end
 end
+function methods:SetTextColor(red, green, blue) self.textColor = { red, green, blue } end
 function methods:GetText() return self.label or "" end
 function methods:SetFormattedText(format, ...) self:SetText(string.format(format, ...)) end
 function methods:SetFontString(fontString) self.fontString = fontString end
@@ -430,10 +431,14 @@ memberView.scroll:SetHeight(234)
 memberView.scrollContent:SetWidth(675)
 for index = 1, 1000 do
     memberView.memberData[index] = { name = index == 1 and "First Main" or index == 2 and "Second Alt" or "Member " .. index,
-        race = "Human", class = "MAGE", level = 60, online = index % 2 == 1,
+        race = "Human", class = "MAGE", level = 60, rankName = index == 1 and "Guild Master" or "Member",
+        online = index % 2 == 1,
         verification = { state = "verified" }, lastOnlineDays = 1,
         professionData = { skills = { [171] = 300, [182] = 300, [185] = 150, [129] = 225 } } }
 end
+memberView.memberData[1].rosterProfession1ID = 171
+memberView.memberData[3].professionData = nil
+memberView.memberData[3].rosterProfession1ID = 171
 local openedMember
 memberView.showMemberProfile = function(value) openedMember = value end
 render.ui.frame = memberView
@@ -448,7 +453,17 @@ assert(mainRow.tag:GetText() == "[Main]" and not mainRow.identityDetail:IsShown(
 assert(altRow.tag:GetText() == "[Alt]" and altRow.identityDetail:GetText() == "Main: First Main",
     "alts keep their confirmed main visible")
 assert(mainRow.onlineTag:GetText() == "ONLINE  |  iRC", "live iRC presence remains prominent")
-assert(mainRow.detail:GetText():find("Alchemy 300", 1, true), "professions remain in the compact summary")
+assert(mainRow.name.textColor[1] == 0.25 and mainRow.name.textColor[2] == 0.78
+    and mainRow.name.textColor[3] == 0.92, "the member name uses its class color")
+assert(not plainText(mainRow.detail:GetText()):find("Human", 1, true)
+    and not plainText(mainRow.detail:GetText()):find("MAGE", 1, true),
+    "the visible row leaves race and class details to the member tooltip")
+assert(plainText(mainRow.detail:GetText()):find("Guild Master | Alchemy 300", 1, true),
+    "the visible summary includes guild rank before professions")
+assert(not plainText(mainRow.detail:GetText()):find("skill unavailable", 1, true)
+    and plainText(memberView.memberRows[3].detail:GetText()):find("Alchemy ?", 1, true),
+    "iRC skill values take priority while roster-only professions remain visible without a false rank")
+assert(mainRow.detail:GetText():find("|cff", 1, true), "the summary applies member colors")
 assert(mainRow.detail.points[2][1] == "TOPRIGHT" and mainRow.detail.points[2][5] == -20
     and altRow.detail.points[2][1] == "TOPRIGHT" and altRow.detail.points[2][5] == 0,
     "both ends of the detail line align at the same height without compressing or clipping text")

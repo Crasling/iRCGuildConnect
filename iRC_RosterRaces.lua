@@ -103,8 +103,12 @@ function Races:GetNativeMembers(current)
                 end
                 class = classes[info.classID] or nil
             end
+            -- Profession IDs identify what a member has; skill ranks from this API
+            -- are not reliable on Forever, so iRC never copies them into skills.
             local member = { guid = info.guid, race = race,
-                classFile = class and class.classFile, className = class and class.className }
+                classFile = class and class.classFile, className = class and class.className,
+                profession1ID = numericId(info.profession1ID) and info.profession1ID or nil,
+                profession2ID = numericId(info.profession2ID) and info.profession2ID or nil }
             result.byGuid[info.guid] = member
             if not iRC:IsSecretValue(info.name) and type(info.name) == "string" then
                 result.byName[iRC:NormalizeName(info.name)] = member
