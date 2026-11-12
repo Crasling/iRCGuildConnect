@@ -1793,9 +1793,14 @@ function iRC:GetConnection()
     -- Dropdown initialization can read rules before ADDON_LOADED restores the DB.
     -- Let callers use defaults until then, without creating early saved state.
     if not savedVariablesReady or not iRCDB then return nil end
-    if currentConnectionCache and currentConnectionRoot == iRCDB then return currentConnectionCache end
     local key = self:GetGuildKey()
-    if not key then return nil end
+    if not key then
+        self:InvalidateConnectionCache()
+        return nil
+    end
+    -- The guild can change before PLAYER_GUILD_UPDATE clears the cache.
+    if currentConnectionCache and currentConnectionRoot == iRCDB
+        and currentConnectionCache.key == key then return currentConnectionCache end
     local connections = ensureAccountConnectionStore()
     local guildName = GetGuildInfo("player")
     local connection = findStoredGuildConnection(connections, key, guildName, connections[key])

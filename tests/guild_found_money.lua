@@ -6,6 +6,7 @@ local addon = {
     Name = "iRC",
     NormalizeName = function(_, name) return name:lower() end,
     GetPlayerName = function() return characterName end,
+    IsTestAdmin = function() return characterName == "Crasling Mordaine" end,
     IsGuildFoundEconomyActive = function() return monitoringActive end,
     IsGuildConnectionActive = function() return false end,
     IsLowTrafficMode = function() return false end,
@@ -368,4 +369,104 @@ sync:RefreshMoneyMonitoring(); advance(2)
 assert(iRCCharDB.guildFoundHistory.discrepancyReason == "MONEY_MISMATCH",
     "late guild resolution still compares a protected character against its real saved checkpoint")
 assert(#logs > 0, "checkpoint diagnostics explain the event and validation result")
+
+-- A delayed /played reply must stay hidden in both normal and temporary chat windows.
+local oldChatFrames, oldChat1, oldChat11, oldNumChatWindows = CHAT_FRAMES, ChatFrame1, ChatFrame11, NUM_CHAT_WINDOWS
+local function chatFrameStub()
+    local chat = { playedRegistered = true }
+    function chat:IsEventRegistered(event)
+        return event == "TIME_PLAYED_MSG" and self.playedRegistered
+    end
+    function chat:UnregisterEvent(event)
+        if event == "TIME_PLAYED_MSG" then self.playedRegistered = false end
+    end
+    function chat:RegisterEvent(event)
+        if event == "TIME_PLAYED_MSG" then self.playedRegistered = true end
+    end
+    return chat
+end
+ChatFrame1, ChatFrame11 = chatFrameStub(), chatFrameStub()
+CHAT_FRAMES, NUM_CHAT_WINDOWS = { "ChatFrame1", "ChatFrame11" }, 10
+sync = session(10)
+fire("PLAYER_LOGIN"); advance(6)
+assert(playedRequests == 1 and not ChatFrame1.playedRegistered and not ChatFrame11.playedRegistered,
+    "automatic played requests suppress regular and temporary chat windows")
+assert(logs[#logs]:find("iRC /played request #1 sent", 1, true),
+    "debug output identifies an iRC played-time request")
+advance(5)
+ChatFrame11.playedRegistered = true
+advance(5)
+assert(not ChatFrame11.playedRegistered,
+    "a chat window re-registered by another addon is suppressed again")
+advance(10)
+assert(not ChatFrame1.playedRegistered and not ChatFrame11.playedRegistered,
+    "chat windows remain suppressed while a delayed reply is pending")
+fire("TIME_PLAYED_MSG", 100, 10); advance(0)
+assert(ChatFrame1.playedRegistered and ChatFrame11.playedRegistered,
+    "chat event registration returns after iRC receives the played reply")
+assert(logs[#logs]:find("while iRC request #1 was pending", 1, true),
+    "debug output shows that a reply arrived during an iRC request")
+assert(sync:RequestHiddenTimePlayed() and not ChatFrame1.playedRegistered)
+advance(120)
+assert(ChatFrame1.playedRegistered and ChatFrame11.playedRegistered,
+    "a lost played reply cannot leave chat windows suppressed indefinitely")
+sync = session(10)
+fire("PLAYER_LOGIN"); advance(6)
+monitoringActive = false
+fire("PLAYER_GUILD_UPDATE", "player"); advance(0)
+assert(not ChatFrame1.playedRegistered and not ChatFrame11.playedRegistered,
+    "leaving Guild Found keeps an in-flight played reply hidden")
+fire("TIME_PLAYED_MSG", 100, 10); advance(0)
+assert(ChatFrame1.playedRegistered and ChatFrame11.playedRegistered,
+    "chat windows resume after a late played reply is discarded")
+assert(not iRCCharDB.guildFoundHistory.playedTotal,
+    "a late played reply cannot update a character outside Guild Found")
+sync = session(10)
+fire("PLAYER_LOGIN"); advance(6)
+monitoringActive = false
+fire("PLAYER_GUILD_UPDATE", "player"); advance(120)
+assert(ChatFrame1.playedRegistered and ChatFrame11.playedRegistered,
+    "chat windows resume on timeout after leaving Guild Found without a reply")
+sync = session(10)
+fire("PLAYER_LOGIN"); advance(6)
+monitoringActive = false
+fire("PLAYER_GUILD_UPDATE", "player"); advance(0)
+monitoringActive = true
+sync:RefreshMoneyMonitoring()
+fire("TIME_PLAYED_MSG", 100, 10); advance(0)
+assert(playedRequests == 2 and not iRCCharDB.guildFoundHistory.playedTotal,
+    "reactivation discards the old reply and immediately starts a fresh played check")
+fire("TIME_PLAYED_MSG", 101, 10); advance(0)
+assert(iRCCharDB.guildFoundHistory.playedTotal == 101,
+    "the fresh reply updates the reactivated character's played checkpoint")
+sync = session(10)
+fire("PLAYER_LOGIN"); advance(6)
+monitoringActive = false
+fire("PLAYER_GUILD_UPDATE", "player"); advance(0)
+monitoringActive = true
+sync:RefreshMoneyMonitoring()
+advance(120)
+assert(playedRequests == 2,
+    "reactivation retries promptly when the earlier request times out")
+sync = session(10, nil, false)
+fire("PLAYER_LOGIN"); advance(6)
+fire("TIME_PLAYED_MSG", 100, 10)
+assert(logs[#logs]:find("without a pending iRC request", 1, true),
+    "debug output distinguishes replies when iRC has not requested played time")
+sync = session(10, nil, true, "Crasling Mordaine")
+fire("PLAYER_LOGIN"); advance(6)
+assert(notices[#notices]:find("Playtime check #1 started by iRC", 1, true),
+    "a configured admin sees iRC's playtime request without Debug Mode")
+fire("TIME_PLAYED_MSG", 100, 10)
+assert(notices[#notices]:find("Playtime reply during iRC check #1", 1, true),
+    "a configured admin can match the playtime reply to the pending check")
+sync = session(10, nil, false, "Crasling Mordaine")
+fire("PLAYER_LOGIN"); advance(6)
+fire("TIME_PLAYED_MSG", 100, 10)
+assert(#notices == 0,
+    "iRC does not print admin notices for playtime replies it did not request")
+sync = session(10, nil, true, "Checkpoint Tester")
+fire("PLAYER_LOGIN"); advance(6)
+assert(#notices == 1, "ordinary members see no playtime diagnostic notices")
+CHAT_FRAMES, ChatFrame1, ChatFrame11, NUM_CHAT_WINDOWS = oldChatFrames, oldChat1, oldChat11, oldNumChatWindows
 print("Guild Found money tests passed: per-character isolation, inactive guards, timer cancellation, late replies, activation, money/played discrepancies, and checkpoint lifecycle.")

@@ -215,21 +215,6 @@ local FALLBACK_CLASS_COLORS = {
     PRIEST = { 0.95, 0.95, 0.95 }, SHAMAN = { 0, 0.44, 0.87 }, MAGE = { 0.25, 0.78, 0.92 }, WARLOCK = { 0.53, 0.53, 0.93 }, DRUID = { 1, 0.49, 0.04 },
 }
 
-local MEMBER_PROFESSION_COLORS = {
-    [171] = { 0.75, 0.56, 0.91 }, -- Alchemy
-    [164] = { 0.69, 0.74, 0.79 }, -- Blacksmithing
-    [333] = { 0.76, 0.63, 0.96 }, -- Enchanting
-    [202] = { 0.91, 0.68, 0.33 }, -- Engineering
-    [182] = { 0.48, 0.84, 0.48 }, -- Herbalism
-    [165] = { 0.79, 0.59, 0.40 }, -- Leatherworking
-    [186] = { 0.58, 0.77, 0.86 }, -- Mining
-    [393] = { 0.84, 0.67, 0.48 }, -- Skinning
-    [197] = { 0.76, 0.79, 0.93 }, -- Tailoring
-    [185] = { 0.96, 0.64, 0.37 }, -- Cooking
-    [356] = { 0.43, 0.75, 0.93 }, -- Fishing
-    [129] = { 0.91, 0.58, 0.59 }, -- First Aid
-}
-
 local function memberColoredText(value, color)
     color = color or RACE_COLORS.Unknown
     local function channel(number)
@@ -5613,15 +5598,13 @@ function UI:RenderMemberRows()
             local rank = professionData and professionData.skills and professionData.skills[option[1]]
             if rank then
                 professionNames[#professionNames + 1] = option[2] .. " " .. rank
-                coloredProfessions[#coloredProfessions + 1] = memberColoredText(option[2],
-                    MEMBER_PROFESSION_COLORS[option[1]]) .. " "
+                coloredProfessions[#coloredProfessions + 1] = option[2] .. " "
                     .. memberColoredText(rank, memberProgressColor(rank, 300))
                 local recipes = professionData.recipes and professionData.recipes[option[1]]
                 if type(recipes) == "table" then knownRecipes = knownRecipes + #recipes end
             elseif hintIDs[option[1]] then
                 professionNames[#professionNames + 1] = option[2] .. " (skill unavailable)"
-                coloredProfessions[#coloredProfessions + 1] = memberColoredText(option[2],
-                    MEMBER_PROFESSION_COLORS[option[1]]) .. " |cff999999?|r"
+                coloredProfessions[#coloredProfessions + 1] = option[2]
             end
         end
         if #professionNames > 0 then

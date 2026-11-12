@@ -460,9 +460,12 @@ assert(not plainText(mainRow.detail:GetText()):find("Human", 1, true)
     "the visible row leaves race and class details to the member tooltip")
 assert(plainText(mainRow.detail:GetText()):find("Guild Master | Alchemy 300", 1, true),
     "the visible summary includes guild rank before professions")
+assert(mainRow.detail:GetText():find("Alchemy |cff", 1, true),
+    "profession names stay neutral while known skill numbers keep their progress color")
 assert(not plainText(mainRow.detail:GetText()):find("skill unavailable", 1, true)
-    and plainText(memberView.memberRows[3].detail:GetText()):find("Alchemy ?", 1, true),
-    "iRC skill values take priority while roster-only professions remain visible without a false rank")
+    and plainText(memberView.memberRows[3].detail:GetText()):find("Alchemy", 1, true)
+    and not plainText(memberView.memberRows[3].detail:GetText()):find("Alchemy ?", 1, true),
+    "roster-only professions show their names without a false rank or question mark")
 assert(mainRow.detail:GetText():find("|cff", 1, true), "the summary applies member colors")
 assert(mainRow.detail.points[2][1] == "TOPRIGHT" and mainRow.detail.points[2][5] == -20
     and altRow.detail.points[2][1] == "TOPRIGHT" and altRow.detail.points[2][5] == 0,
@@ -472,6 +475,10 @@ GameTooltip = widget("Tooltip", UIParent)
 function GameTooltip:AddLine(value) tooltipLines[#tooltipLines + 1] = value end
 mainRow:Fire("OnEnter")
 assert(table.concat(tooltipLines, "\n"):find("First Aid 225", 1, true), "hover keeps full profession details available")
+tooltipLines = {}
+memberView.memberRows[3]:Fire("OnEnter")
+assert(table.concat(tooltipLines, "\n"):find("Alchemy (skill unavailable)", 1, true),
+    "the tooltip still explains why a roster-only profession has no skill number")
 memberView.scroll:SetVerticalScroll(500 * 39)
 render.ui:RenderMemberRows()
 assert(#memberView.memberRows == 7 and mainRow.profileName == "Member 501", "scrolling reuses compact row frames")

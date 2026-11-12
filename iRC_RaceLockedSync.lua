@@ -17,9 +17,11 @@ local moneyLeavingWorld = false
 local moneyValidationAllowedAt
 local moneyWatchdog
 local playedTicker, playedRequestToken
+local playedRequestSequence, playedLastRequestAt = 0, nil
 local playedSampleGetTime
 local playedContinuityEligible = false
 local PLAYED_CHECK_INTERVAL = 5 * 60
+local PLAYED_RESPONSE_TIMEOUT = 2 * 60
 local PLAYED_GAP_TOLERANCE = 2 * 60
 local resumedMonitoring = false
 local monitoringNoticeShown = false
@@ -43,8 +45,8 @@ end
 
 -- Hidden /played capture ----------------------------------------------------
 
-local function hideAutomaticTimePlayed(_, event)
-    if event == "TIME_PLAYED_MSG" and playedRequestToken then return true end
+local function printAdminPlaytime(message)
+    if iRC.IsTestAdmin and iRC:IsTestAdmin() then iRC:Print(message) end
 end
 
 local function restorePlayedChatFrames()
@@ -55,27 +57,54 @@ local function restorePlayedChatFrames()
 end
 
 local function suppressPlayedChatFrames()
-    restorePlayedChatFrames()
-    for index = 1, tonumber(NUM_CHAT_WINDOWS) or 10 do
-        local chatFrame = _G["ChatFrame" .. index]
+    local function suppress(chatFrame)
         if chatFrame and chatFrame.IsEventRegistered and chatFrame:IsEventRegistered("TIME_PLAYED_MSG") then
             playedSuppressedChatFrames[chatFrame] = true
             chatFrame:UnregisterEvent("TIME_PLAYED_MSG")
         end
     end
+    -- CHAT_FRAMES includes temporary windows beyond NUM_CHAT_WINDOWS.
+    if type(CHAT_FRAMES) == "table" then
+        for _, name in pairs(CHAT_FRAMES) do suppress(_G[name]) end
+    end
+    for index = 1, tonumber(NUM_CHAT_WINDOWS) or 10 do
+        suppress(_G["ChatFrame" .. index])
+    end
+end
+
+local function keepPlayedChatFramesSuppressed(token)
+    if playedRequestToken ~= token then return end
+    suppressPlayedChatFrames()
+    C_Timer.After(5, function() keepPlayedChatFramesSuppressed(token) end)
+end
+
+local function playedRequestAge(token)
+    if not token or not token.sentAt or not GetTime then return "unknown" end
+    return tostring(math.max(0, math.floor(GetTime() - token.sentAt)))
 end
 
 function Sync:RequestHiddenTimePlayed()
     if not self:IsMoneyMonitoringActive() or not moneyReady or moneyLeavingWorld
         or playedRequestToken or not RequestTimePlayed then return false end
-    local token = {}
+    playedRequestSequence = playedRequestSequence + 1
+    local token = { id = playedRequestSequence, sentAt = GetTime and GetTime() or nil }
     playedRequestToken = token
+    playedLastRequestAt = token.sentAt
     suppressPlayedChatFrames()
+    iRC:DebugMsg("iRC /played request #" .. token.id .. " sent for active Guild Found monitoring.", 3)
+    printAdminPlaytime("Playtime check #" .. token.id .. " started by iRC.")
     RequestTimePlayed()
-    C_Timer.After(10, function()
+    C_Timer.After(5, function() keepPlayedChatFramesSuppressed(token) end)
+    C_Timer.After(PLAYED_RESPONSE_TIMEOUT, function()
         if playedRequestToken ~= token then return end
+        iRC:DebugMsg("iRC /played request #" .. token.id .. " timed out after "
+            .. playedRequestAge(token) .. " seconds; chat display restored.", 3)
+        printAdminPlaytime("Playtime check #" .. token.id .. " timed out.")
         playedRequestToken = nil
         restorePlayedChatFrames()
+        if token.stopped then
+            C_Timer.After(0, function() Sync:RequestHiddenTimePlayed() end)
+        end
     end)
     return true
 end
@@ -329,8 +358,18 @@ end
 function Sync:StopMoneyMonitoring()
     if moneyWatchdog and moneyWatchdog.Cancel then moneyWatchdog:Cancel() end
     if playedTicker and playedTicker.Cancel then playedTicker:Cancel() end
-    moneyWatchdog, playedTicker, playedRequestToken = nil, nil, nil
-    restorePlayedChatFrames()
+    moneyWatchdog, playedTicker = nil, nil
+    -- A /played reply already in flight can arrive after Guild Found ends.
+    -- Keep it hidden until that reply arrives or the request times out.
+    if playedRequestToken then
+        if not playedRequestToken.stopped then
+            iRC:DebugMsg("Guild Found stopped while iRC /played request #"
+                .. playedRequestToken.id .. " was pending; waiting to hide its reply.", 3)
+        end
+        playedRequestToken.stopped = true
+    else
+        restorePlayedChatFrames()
+    end
     -- Pause collection without discarding the last protected snapshot. It is
     -- evidence if this same character enters the Guild Found economy again.
     local history = iRCCharDB and iRCCharDB.guildFoundHistory
@@ -914,9 +953,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
             C_ChatInfo.RegisterAddonMessagePrefix(IRC_ROSTER)
         end
-        if ChatFrame_AddMessageEventFilter then
-            ChatFrame_AddMessageEventFilter("TIME_PLAYED_MSG", hideAutomaticTimePlayed)
-        end
     elseif event == "PLAYER_LOGIN" then
         -- GetMoney can briefly expose an incomplete value while the character
         -- enters the world. Comparing at PLAYER_LOGIN produced a false gold
@@ -969,12 +1005,32 @@ frame:SetScript("OnEvent", function(_, event, ...)
         Sync:SaveCurrentMoney(event)
         C_Timer.After(1, function() Sync:SaveCurrentMoney("QUEST_TURNED_IN_SETTLED") end)
     elseif event == "TIME_PLAYED_MSG" then
-        if not playedRequestToken then return end
-        if not Sync:IsMoneyMonitoringActive() or not moneyReady then Sync:StopMoneyMonitoring(); return end
+        if not playedRequestToken then
+            local age = playedLastRequestAt and GetTime and math.max(0, math.floor(GetTime() - playedLastRequestAt))
+            iRC:DebugMsg("/played reply arrived without a pending iRC request; last iRC request: "
+                .. (age and (age .. " seconds ago") or "none this session") .. ".", 3)
+            return
+        end
+        local token = playedRequestToken
+        local monitoringActive = Sync:IsMoneyMonitoringActive()
+        iRC:DebugMsg("/played reply arrived while iRC request #" .. token.id .. " was pending ("
+            .. playedRequestAge(token) .. " seconds; monitoring "
+            .. (monitoringActive and "active" or "inactive") .. ").", 3)
+        printAdminPlaytime("Playtime reply during iRC check #" .. token.id .. ".")
+        if token.stopped or not monitoringActive or not moneyReady then
+            local retryAfterStoppedRequest = token.stopped and monitoringActive and moneyReady
+            if not monitoringActive then Sync:StopMoneyMonitoring() end
+            playedRequestToken = nil
+            C_Timer.After(0, function()
+                if not playedRequestToken then restorePlayedChatFrames() end
+                if retryAfterStoppedRequest then Sync:RequestHiddenTimePlayed() end
+            end)
+            return
+        end
         local totalPlayed, levelPlayed = ...
         if iRC:HasSecretValues(totalPlayed, levelPlayed) then
             playedRequestToken = nil
-            C_Timer.After(0, restorePlayedChatFrames)
+            C_Timer.After(0, function() if not playedRequestToken then restorePlayedChatFrames() end end)
             return
         end
         local history, now = localHistory(), time()
@@ -1011,7 +1067,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         playedContinuityEligible = true
         resumedMonitoring = false
         playedRequestToken = nil
-        C_Timer.After(0, restorePlayedChatFrames)
+        C_Timer.After(0, function() if not playedRequestToken then restorePlayedChatFrames() end end)
         if continuityFlagged then
             Sync:Broadcast()
             C_Timer.After(6, function() Sync:Broadcast() end)

@@ -2,6 +2,12 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.11 - Guild Improvements
+--------------------------------------------------------------------------------
+[IMPROVED] Guild member professions are easier to read
+[FIXED] Guild Found checks stop when you leave or change guilds
+[FIXED] Delayed Guild Found playtime replies stay out of chat
+
 v0.7.10 - Guild Members
 --------------------------------------------------------------------------------
 [IMPROVED] Guild member rows show rank and class-colored names

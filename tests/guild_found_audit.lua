@@ -91,8 +91,11 @@ assert(not iRC:UploadGuildFoundAudit("Ordinary Member") and #sent == 0,
     "members without incident permission never receive audit history")
 
 GetGuildInfo = function() return nil end
-iRC:InvalidateConnectionCache()
 assert(not iRC:IsGuildConnectionActive() and not iRC:IsGuildFoundEconomyActive(),
-    "an unguilded character does not inherit active Guild Found rules from the account's saved guild")
+    "leaving a guild immediately stops Guild Found protection, even before the cache update event")
+
+GetGuildInfo = function() return "Other Guild", "Rank", 5 end
+assert(not iRC:IsGuildConnectionActive() and not iRC:IsGuildFoundEconomyActive(),
+    "joining a different guild cannot reuse the previous guild's active rules")
 
 print("Guild Found audit tests passed: shared applicability, delegated review, filtering, and replay cap.")
