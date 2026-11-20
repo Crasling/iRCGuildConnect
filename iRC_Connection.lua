@@ -1348,6 +1348,12 @@ local function handleMessage(prefix, message, distribution, sender)
         if iRC.Recruitment and iRC:IsGuildMemberName(sender) then iRC.Recruitment:ReceiveSync(parts, sender) end
         return
     end
+    if kind == "PROGRESS" then
+        if iRC.Progress and iRC:IsGuildConnectionActive() then
+            iRC.Progress:Receive(parts, sender, distribution)
+        end
+        return
+    end
     if kind == "IDENT_EVENT" or kind == "IDENT_REQUEST" or kind == "IDENT_MEMBER" or kind == "IDENT_ADMIN_MEMBER"
         or kind == "IDENT_LINK_REQUEST" or kind == "IDENT_LINK_DECLINE" then
         if iRC.Identity and iRC:IsGuildMemberName(sender) then iRC.Identity:ReceiveSync(parts, sender) end

@@ -927,6 +927,7 @@ function RaceGrid:GetLocalReport()
         membersLevel60 = guild.membersLevel60, activeLevel60 = guild.activeLevel60,
         activeMembers = guild.activeMembers, averageLevel = guild.averageLevel,
         classes = guild.classes, classBreakdownClasses = guild.classBreakdownClasses, races = guild.races,
+        progress = guild.progress,
         guildDeaths = guild.guildDeaths,
         rules = guild.rules, rulesKnown = guild.rulesKnown,
         guildContacts = guild.guildContacts,
@@ -1175,7 +1176,8 @@ function RaceGrid:BuildOwnGuildReports()
         end
     end
     group.guildContactsOnlineMask = 0
-    for _, member in ipairs(iRC:GetGuildRosterRows()) do
+    local roster = iRC:GetGuildRosterRows()
+    for _, member in ipairs(roster) do
         local participation = self:GetRosterParticipation(member)
         local key = iRC:NormalizeName(member.name)
         if key ~= "" and not counted[key] then
@@ -1207,6 +1209,7 @@ function RaceGrid:BuildOwnGuildReports()
         end
     end
     if group.members == 0 then return {} end
+    group.progress = iRC.Progress and iRC.Progress:GetGuildSummary(roster) or nil
     group.activePlayers = recordGuildActivity(guildName, group.activePlayers, scope, group.serverName)
     group.averageLevel = group.totalLevel / group.members
     for class, count in pairs(group.classes) do group.classAverageLevels[class] = group.classTotals[class] / count end
@@ -1227,6 +1230,14 @@ function RaceGrid:IsExternalBroadcaster()
 end
 
 -- Report serialization and publication ------------------------------------
+
+local function serializeRaidProgress(progress)
+    local fields = {}
+    for _, raid in ipairs(progress and progress.PVE and progress.PVE.raids or {}) do
+        fields[#fields + 1] = tostring(raid.id) .. ":" .. tostring(raid.count)
+    end
+    return table.concat(fields, ",")
+end
 
 local function serializeGuildReport(report, includeDescription)
     local scope = report.serverRuleset or iRC:GetGuildDirectoryScope()
@@ -1291,6 +1302,15 @@ local function serializeGuildReport(report, includeDescription)
         fields[#fields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
         fields[#fields + 1] = serializeRaces(report.races)
         fields[#fields + 1] = tostring(report.serverName or ""):gsub("[%c|]", ""):sub(1, 80)
+        for _, bucket in ipairs({ "PVE", "PVP" }) do
+            local progress = report.progress and report.progress[bucket]
+            fields[#fields + 1] = progress and tostring(progress.completed) or ""
+            fields[#fields + 1] = progress and tostring(progress.total) or ""
+        end
+        fields[#fields + 1] = serializeRaidProgress(report.progress)
+        local pvp = report.progress and report.progress.PVP
+        fields[#fields + 1] = pvp and pvp.highestRank ~= nil and tostring(pvp.highestRank) or ""
+        fields[#fields + 1] = pvp and pvp.score ~= nil and tostring(pvp.score) or ""
     end
     return table.concat(fields, SEP) .. SEP .. "@" .. scope
 end
@@ -1348,6 +1368,15 @@ function RaceGrid:BroadcastReport(fromClick)
     classBreakdownFields[#classBreakdownFields + 1] = cleanGuildLanguage(report.guildPreferredLanguage)
     classBreakdownFields[#classBreakdownFields + 1] = serializeRaces(report.races)
     classBreakdownFields[#classBreakdownFields + 1] = tostring(report.serverName or ""):gsub("[%c|]", ""):sub(1, 80)
+    for _, bucket in ipairs({ "PVE", "PVP" }) do
+        local progress = report.progress and report.progress[bucket]
+        classBreakdownFields[#classBreakdownFields + 1] = progress and tostring(progress.completed) or ""
+        classBreakdownFields[#classBreakdownFields + 1] = progress and tostring(progress.total) or ""
+    end
+    classBreakdownFields[#classBreakdownFields + 1] = serializeRaidProgress(report.progress)
+    local pvp = report.progress and report.progress.PVP
+    classBreakdownFields[#classBreakdownFields + 1] = pvp and pvp.highestRank ~= nil and tostring(pvp.highestRank) or ""
+    classBreakdownFields[#classBreakdownFields + 1] = pvp and pvp.score ~= nil and tostring(pvp.score) or ""
     send(GRID_PREFIX, table.concat(classBreakdownFields, SEP), "CHANNEL", CHANNEL_NAME)
     iRC:DebugMsg(iRC:Text("RACEGRID_GUILD_REPORT_SENT", report.guildName, report.activeLevel60,
         report.activeMembers, report.activePlayers, report.members), 3)
@@ -1387,6 +1416,48 @@ function RaceGrid:Refresh()
 end
 
 -- Incoming report parsing and deferred work --------------------------------
+
+local function parseProgressSummary(parts, first, members)
+    local progress = {}
+    for index, bucket in ipairs({ "PVE", "PVP" }) do
+        local completedValue, totalValue = parts[first + (index - 1) * 2], parts[first + (index - 1) * 2 + 1]
+        if completedValue ~= nil and completedValue ~= "" or totalValue ~= nil and totalValue ~= "" then
+            local completed = validNumber(completedValue, 0, 32)
+            local total = validNumber(totalValue, bucket == "PVP" and 0 or 1, 32)
+            if not completed or not total or completed > total then return nil, false end
+            progress[bucket] = { completed = completed, total = total }
+        end
+    end
+    local raidCounts = tostring(parts[first + 4] or "")
+    if #raidCounts > 80 then return nil, false end
+    if raidCounts ~= "" then
+        if not progress.PVE or not iRC.Progress then return nil, false end
+        local raids, seen, completed, partial = {}, {}, 0, 0
+        for token in raidCounts:gmatch("[^,]+") do
+            local idText, countText = token:match("^(%d+):(%d+)$")
+            local id, count = tonumber(idText), tonumber(countText)
+            local size = iRC.Progress:GetRaidSize(id)
+            if not size or not count or count > members or seen[id] then return nil, false end
+            seen[id] = true
+            local state = count >= size and "CLEARED" or count >= size / 2 and "YELLOW" or "NONE"
+            if state == "CLEARED" then completed = completed + 1
+            elseif state == "YELLOW" then partial = partial + 1 end
+            raids[#raids + 1] = { id = id, count = count, size = size, state = state }
+        end
+        if #raids ~= progress.PVE.total or completed ~= progress.PVE.completed then return nil, false end
+        table.sort(raids, function(a, b) return a.id < b.id end)
+        progress.PVE.raids, progress.PVE.partial = raids, partial
+    end
+    local rankValue, scoreValue = parts[first + 5], parts[first + 6]
+    if rankValue ~= nil and rankValue ~= "" or scoreValue ~= nil and scoreValue ~= "" then
+        local rank = validNumber(rankValue, 0, 14)
+        local score = validNumber(scoreValue, 0, members * 14)
+        if not progress.PVP or not rank or not score or score < rank
+            or (rank == 0 and score ~= 0) then return nil, false end
+        progress.PVP.highestRank, progress.PVP.score = rank, score
+    end
+    return progress, true
+end
 
 local function parseGuildReport(parts)
     if parts[1] ~= "GUILD_REPORT" or parts[2] ~= WIRE_VERSION then return nil end
@@ -1493,6 +1564,8 @@ local function parseGuildReport(parts)
     if not validRaces then return nil end
     local serverName = tostring(parts[descriptionStart + 20] or "")
     if #serverName > 80 or serverName:find("[%c|]") then return nil end
+    local progress, validProgress = parseProgressSummary(parts, descriptionStart + 21, members)
+    if not validProgress then return nil end
     return {
         serverRuleset = parts.serverRuleset, serverName = serverName,
         name = name, guid = guid, guildName = guildName, race = race,
@@ -1511,6 +1584,7 @@ local function parseGuildReport(parts)
         classBreakdownMode = classBreakdownMode,
         classBreakdownMinLevel = classBreakdownMinLevel,
         classBreakdownMaxLevel = classBreakdownMaxLevel,
+        progress = progress,
         faction = faction,
         addonVersion = addonVersion,
         source = "iRC guild report",
@@ -2295,13 +2369,14 @@ handleMessage = function(prefix, message, sender, distribution, queued, channelT
         local classLockFlag = tostring(parts[17] or "0")
         local guildClass = iRC:NormalizeGuildClass(parts[18])
         local guildPreferredLanguage = cleanGuildLanguage(parts[19])
+        local progress, validProgress = parseProgressSummary(parts, 22, 10000)
         local validClassLock = (classLockFlag == "0" or classLockFlag == "1")
             and (classLockFlag ~= "1" or guildClass ~= "")
         if reportTimestamp and reportTimestamp > 0 and reportTimestamp <= time() + 300
             and (mode == "ALL" or mode == "RANGE" or mode == "MAX")
             and minLevel and minLevel == math.floor(minLevel) and minLevel >= 1 and minLevel <= 60
             and maxLevel and maxLevel == math.floor(maxLevel) and maxLevel >= minLevel and maxLevel <= 60
-            and validClasses and validClassLock then
+            and validClasses and validClassLock and validProgress then
             local needsBase = true
             for key, report in pairs(getServerStore(parts.serverRuleset).guildReports) do
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
@@ -2309,12 +2384,16 @@ handleMessage = function(prefix, message, sender, distribution, queued, channelT
                 if iRC:NormalizeName(report.name) == iRC:NormalizeName(sender)
                     and tonumber(report.timestamp) == reportTimestamp and filteredTotal <= (tonumber(report.members) or 0)
                     and not (classLockFlag == "1" and report.rules and report.rules.raceLock == true) then
+                    for _, raid in ipairs(progress.PVE and progress.PVE.raids or {}) do
+                        if raid.count > (tonumber(report.members) or 0) then return end
+                    end
                     local races, validRaces = parseRaces(parts[20], tonumber(report.members) or 0)
                     if not validRaces then return end
                     report.classBreakdownMode = mode
                     report.classBreakdownMinLevel = mode == "MAX" and 60 or mode == "ALL" and 1 or minLevel
                     report.classBreakdownMaxLevel = mode == "MAX" and 60 or mode == "ALL" and 60 or maxLevel
                     report.classBreakdownClasses = filteredClasses
+                    if next(progress) then report.progress = progress end
                     if races then report.races = races end
                     local serverName = tostring(parts[21] or "")
                     if #serverName > 80 or serverName:find("[%c|]") then return end
@@ -2383,15 +2462,40 @@ function iRC:GetGlobalRaceOverview()
 end
 
 local DIRECTORY_SORT_FIELDS = {
-    ACTIVITY = { "activeMembers", "activePlayers" },
     MEMBERS = { "members" },
     NAME = {},
 }
 
 local function guildDirectoryOrder(a, b, sortKey)
-    -- Sort the directory by the selected information, never by a guild score.
+    -- PvP uses the sum of reported lifetime ranks; PvE uses raid clears.
     -- Max-level counts remain report statistics and do not affect ordering.
-    for _, field in ipairs(DIRECTORY_SORT_FIELDS[sortKey]) do
+    if sortKey == "PVE" or sortKey == "PVP" then
+        local first = a.progress and a.progress[sortKey]
+        local second = b.progress and b.progress[sortKey]
+        if sortKey == "PVP" then
+            local firstScore, secondScore = first and tonumber(first.score), second and tonumber(second.score)
+            if (firstScore ~= nil) ~= (secondScore ~= nil) then return firstScore ~= nil end
+            if firstScore ~= nil then
+                if firstScore ~= secondScore then return firstScore > secondScore end
+                local firstRank, secondRank = tonumber(first.highestRank) or 0, tonumber(second.highestRank) or 0
+                if firstRank ~= secondRank then return firstRank > secondRank end
+            end
+        else
+        local firstTotal, secondTotal = first and tonumber(first.total), second and tonumber(second.total)
+        local firstKnown = firstTotal ~= nil and firstTotal > 0
+        local secondKnown = secondTotal ~= nil and secondTotal > 0
+        if firstKnown ~= secondKnown then return firstKnown end
+        if firstKnown then
+            local firstCount, secondCount = tonumber(first.completed) or 0, tonumber(second.completed) or 0
+            local proportion = firstCount * secondTotal - secondCount * firstTotal
+            if proportion ~= 0 then return proportion > 0 end
+            if firstCount ~= secondCount then return firstCount > secondCount end
+            local firstPartial, secondPartial = tonumber(first.partial) or 0, tonumber(second.partial) or 0
+            if firstPartial ~= secondPartial then return firstPartial > secondPartial end
+        end
+        end
+    end
+    for _, field in ipairs(DIRECTORY_SORT_FIELDS[sortKey] or {}) do
         -- Older reports can lack activity fields; unknown follows known zero.
         local first, second = tonumber(a[field]) or -1, tonumber(b[field]) or -1
         if first ~= second then return first > second end
@@ -2402,7 +2506,7 @@ local function guildDirectoryOrder(a, b, sortKey)
 end
 
 function iRC:GetGuildDirectoryOverview(sortKey)
-    if sortKey ~= "MEMBERS" and sortKey ~= "NAME" then sortKey = "ACTIVITY" end
+    if sortKey ~= "MEMBERS" and sortKey ~= "NAME" and sortKey ~= "PVP" then sortKey = "PVE" end
     local groups = {}
     if RaceGrid:IsEnabled() then
         for _, report in ipairs(self:GetGlobalRaceOverview()) do groups[RaceGrid:GetReportIdentity(report)] = report end

@@ -11,6 +11,7 @@ if not iRC then return end
 local UI = {}
 iRC.MainUI = UI
 local expandedGuildCards = {}
+local pendingGuildScrollKey
 local guildStatsFilter = "ALL"
 local guildStatsView = "ALL"
 local collapsedFactionSections = {}
@@ -444,16 +445,18 @@ local function makeGuildRuleRow(parent, index)
     return row
 end
 
-local function guildDirectoryRowColumns(width)
+local function guildDirectoryRowColumns(width, sortKey)
     width = tonumber(width) or 0
     if width <= 0 then width = 651 end
     local right = width - 44
     local updated = width >= 630 and { left = right - 76, width = 76 } or nil
     if updated then right = updated.left - 12 end
-    local firstStat = right - 3 * 54
+    local statCount, statStep = sortKey == "PVE" and 2 or 3, sortKey == "PVE" and 70 or 54
+    local firstStat = right - statCount * statStep
     local tagRight = firstStat - 12
     return { width = width, nameLeft = 46, nameWidth = math.max(60, tagRight - 112 - 12 - 46),
-        tagLeft = tagRight - 112, tagWidth = 112, firstStat = firstStat, statWidth = 48,
+        tagLeft = tagRight - 112, tagWidth = 112, firstStat = firstStat,
+        statStep = statStep, statWidth = sortKey == "PVE" and 64 or 48,
         updated = updated }
 end
 
@@ -525,6 +528,7 @@ local function makeRaceCard(parent)
         local expand = not expandedGuildCards[self.guildKey]
         expandedGuildCards = {}
         if expand then expandedGuildCards[self.guildKey] = true end
+        pendingGuildScrollKey = expand and self.guildKey or nil
         if GameTooltip then GameTooltip:Hide() end
         if UI.frame and UI.frame.scroll then UI.preservedRaceScroll = UI.frame.scroll:GetVerticalScroll() end
         UI:Refresh()
@@ -563,7 +567,7 @@ local function makeRaceCard(parent)
             if not GameTooltip then return end
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
             GameTooltip:SetText(self.label:GetText())
-            GameTooltip:AddLine(self.value:GetText(), 1, 1, 1)
+            GameTooltip:AddLine(self.tooltipValue or self.value:GetText(), 1, 1, 1)
             GameTooltip:Show()
         end)
         stat:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -622,6 +626,8 @@ local function makeRaceCard(parent)
     card.detailsGuildName:SetTextColor(unpack(COLORS.gold))
     card.descriptionTitle, card.description = title(), body()
     card.rulesTitle, card.rulesText = title(), body()
+    card.progressTitle, card.progressText = title(), body()
+    card.progressTitle:SetText("Progress PvE / PvP")
     card.descriptionTitle:SetText(iRC:Text("GUILD_DIRECTORY_DESCRIPTION"))
     card.rulesTitle:SetText(iRC:Text("GUILD_STATS_ACTIVE_RULES"))
     card.classesTitle, card.detailStats = title(), body()
@@ -689,6 +695,7 @@ local MAIN_NAVIGATION = {
     { id = "Guild Overview", label = "Guild Overview", child = true },
     { id = "Guild Rules", label = "Guild Rules", child = true },
     { id = "Guild Members", label = "Guild Members", child = true },
+    { id = "Progress", label = "Progress", child = true, requiresGuild = true },
     { id = "Guild Log", label = "Guild Log", child = true, requiresGuild = true },
     { id = "Personal", header = true },
     { id = "Personal Settings", label = "Personal Settings", child = true },
@@ -3282,6 +3289,29 @@ function UI:Create()
     frame.memberSort = createMemberSortDropdown(main, frame)
     frame.memberSort:SetPoint("LEFT", frame.memberOnlineFilters[3], "RIGHT", 12, 0)
 
+    frame.progressBucket = "PVE"
+    frame.progressTabs = {}
+    for index, bucket in ipairs({ "PVE", "PVP" }) do
+        local button = makeIRCActionButton(main, 112, 25, bucket == "PVE" and "PvE" or "PvP", false)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 15 + (index - 1) * 120, -48)
+        button:SetScript("OnClick", function()
+            frame.progressBucket = bucket
+            frame.scroll:SetVerticalScroll(0)
+            UI:Refresh()
+        end)
+        frame.progressTabs[index] = button
+        button:Hide()
+    end
+    frame.progressBack = makeIRCActionButton(main, 116, 25, "All members", false)
+    frame.progressBack:SetPoint("TOPRIGHT", main, "TOPRIGHT", -15, -48)
+    frame.progressBack:SetScript("OnClick", function()
+        frame.progressSelectedName = nil
+        frame.scroll:SetVerticalScroll(0)
+        UI:Refresh()
+    end)
+    frame.progressBack:Hide()
+    frame.progressRows = {}
+
     frame.guildStatsFilters = {}
     for index, view in ipairs({ { "ALL", "All" }, { "CHALLENGES", "Challenges" } }) do
         local key = view[1]
@@ -3334,7 +3364,7 @@ function UI:Create()
     end
 
     frame.guildStatsSearch = CreateFrame("EditBox", nil, main, "InputBoxTemplate")
-    frame.guildStatsSearch:SetSize(300, 22)
+    frame.guildStatsSearch:SetSize(255, 22)
     frame.guildStatsSearch:SetPoint("TOPLEFT", main, "TOPLEFT", 20, -118)
     frame.guildStatsSearch:SetAutoFocus(false)
     frame.guildStatsSearch:SetMaxLetters(80)
@@ -3352,11 +3382,12 @@ function UI:Create()
     frame.guildStatsSearch.hint:SetPoint("LEFT", 7, 0)
     frame.guildStatsSearch.hint:SetText(iRC:Text("GUILD_STATS_SEARCH_HINT"))
     frame.guildDirectorySortButtons = {}
-    for index, sort in ipairs({ { "ACTIVITY", "GUILD_DIRECTORY_SORT_ACTIVITY" },
+    for index, sort in ipairs({ { "PVE", "GUILD_DIRECTORY_SORT_PVE" },
+        { "PVP", "GUILD_DIRECTORY_SORT_PVP" },
         { "MEMBERS", "GUILD_DIRECTORY_SORT_MEMBERS" }, { "NAME", "GUILD_DIRECTORY_SORT_NAME" } }) do
         local key, label = sort[1], iRC:Text(sort[2])
-        local button = makeIRCActionButton(main, 100, 24, label, false)
-        button:SetPoint("TOPLEFT", main, "TOPLEFT", 366 + (index - 1) * 105, -117)
+        local button = makeIRCActionButton(main, 98, 24, label, false)
+        button:SetPoint("TOPLEFT", main, "TOPLEFT", 285 + (index - 1) * 103, -117)
         button.sortKey = key
         button:SetScript("OnClick", function()
             frame.guildDirectorySort = key
@@ -3963,6 +3994,8 @@ function UI:Create()
     scroll:HookScript("OnVerticalScroll", function()
         if frame.category == "Guild Members" then
             UI:RenderMemberRows()
+        elseif frame.category == "Progress" then
+            UI:RenderProgressRows()
         elseif frame.category == "Member Management" then
             UI:RenderMemberManagementRows()
         elseif frame.category == "Guild Log" and UI.RenderGuildLogRows then
@@ -5924,6 +5957,143 @@ local function updateMemberRows(frame)
     frame.contentSubtitle:SetText(tostring(#profiles) .. " members · Search names, linked alts, professions and recipes.")
 end
 
+-- Character progress from the Legacy challenge categories -----------------
+
+function UI:RenderProgressRows()
+    local frame = self.frame
+    if not frame or frame.category ~= "Progress" then return end
+    local entries = frame.progressEntries or {}
+    local spacing = 41
+    local first = math.floor((frame.scroll:GetVerticalScroll() or 0) / spacing) + 1
+    local height = frame.scroll:GetHeight() or 480
+    local visible = math.max(0, math.min(#entries - first + 1, math.ceil(height / spacing) + 1))
+    for slot = 1, visible do
+        local index = first + slot - 1
+        local entry = entries[index]
+        local row = frame.progressRows[slot]
+        if not row then
+            row = CreateFrame("Button", nil, frame.scrollContent, "BackdropTemplate")
+            createBackdrop(row, { 0.06, 0.05, 0.035, 0.65 }, { 0.24, 0.20, 0.15, 0.75 })
+            row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row.name:SetPoint("LEFT", 12, 0)
+            row.name:SetPoint("RIGHT", row, "CENTER", 115, 0)
+            row.name:SetJustifyH("LEFT")
+            row.name:SetWordWrap(false)
+            row.status = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.status:SetPoint("RIGHT", -12, 0)
+            row.status:SetWidth(200)
+            row.status:SetJustifyH("RIGHT")
+            row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+            row:SetScript("OnClick", function(self)
+                if self.entry and self.entry.kind == "member" then
+                    frame.progressSelectedName = self.entry.name
+                    frame.scroll:SetVerticalScroll(0)
+                    UI:Refresh()
+                end
+            end)
+            row:SetScript("OnEnter", function(self)
+                if not GameTooltip or not self.entry then return end
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText(self.entry.name or "Progress")
+                if self.entry.kind == "member" then
+                    GameTooltip:AddLine(self.entry.detail or "Choose a member to see their challenges.", 1, 1, 1, true)
+                else
+                    GameTooltip:AddLine("Legacy challenge earned on this character: "
+                        .. (self.entry.earned and "Yes" or "No"), 1, 1, 1, true)
+                end
+                GameTooltip:Show()
+            end)
+            row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+            frame.progressRows[slot] = row
+        end
+        row.entry = entry
+        row:SetHeight(36)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -((index - 1) * spacing))
+        row:SetPoint("TOPRIGHT", frame.scrollContent, "TOPRIGHT", 0, -((index - 1) * spacing))
+        row:SetBackdropColor(0.06, 0.05, 0.035, index % 2 == 0 and 0.65 or 0.38)
+        row.name:SetText(entry.name)
+        row.name:SetTextColor(unpack(entry.earned and COLORS.green or COLORS.parchment))
+        row.status:SetText(entry.status or "")
+        row.status:SetTextColor(unpack(entry.earned and COLORS.green or COLORS.muted))
+        row:SetEnabled(entry.kind == "member")
+        row:Show()
+    end
+    for slot = visible + 1, #frame.progressRows do frame.progressRows[slot]:Hide() end
+end
+
+local function updateProgress(frame)
+    local bucket = frame.progressBucket or "PVE"
+    local categoryName = bucket == "PVP" and "PvP" or "PvE"
+    local entries = {}
+    local selected = frame.progressSelectedName
+    local reports = iRC.Progress and iRC.Progress:GetReports() or {}
+    for _, row in ipairs(frame.memberRows or {}) do row:Hide() end
+    for _, row in ipairs(frame.guildLogRows or {}) do row:Hide() end
+    for _, card in ipairs(frame.raceCards or {}) do card:Hide() end
+    for _, section in pairs(frame.factionSections or {}) do section:Hide() end
+    if selected then
+        local report = reports[iRC:NormalizeName(selected)]
+        local challenges = report and report[bucket]
+        for _, challenge in ipairs(challenges or {}) do
+            local _, name = GetAchievementInfo and GetAchievementInfo(challenge.id)
+            entries[#entries + 1] = {
+                kind = "challenge", name = name or ("Challenge #" .. challenge.id),
+                earned = challenge.earned,
+                status = challenge.earned and "Earned here" or "Not earned here",
+            }
+        end
+        table.sort(entries, function(a, b)
+            if a.earned ~= b.earned then return a.earned end
+            return a.name < b.name
+        end)
+        frame.contentTitle:SetText(iRC:FormatPlayerName(selected) .. "  -  " .. categoryName)
+        local rankTitle = bucket == "PVP" and report and report.pvpRank ~= nil
+            and (iRC.Progress:GetPVPRankTitle(report.pvpRank, UnitFactionGroup("player")) or "No title")
+        frame.contentSubtitle:SetText(rankTitle
+            and ("Highest PvP title: " .. rankTitle .. ". Select a challenge to see this character's credit.")
+            or (#entries > 0
+                and "Legacy challenges earned on this character. Account-wide credit from alts is excluded."
+                or "No character progress report has been received for this category."))
+    else
+        local catalog = iRC.Progress and iRC.Progress:ReadLocal() or {}
+        if GetNumGuildMembers and GetGuildRosterInfo then
+            for index = 1, GetNumGuildMembers(true) do
+                local name = GetGuildRosterInfo(index)
+                if type(name) == "string" and name ~= "" then
+                    local report = reports[iRC:NormalizeName(name)]
+                    local challenges = report and report[bucket]
+                    local earned = 0
+                    for _, challenge in ipairs(challenges or {}) do
+                        if challenge.earned then earned = earned + 1 end
+                    end
+                    local rank = bucket == "PVP" and report and report.pvpRank or nil
+                    local known = challenges and #challenges > 0 or rank ~= nil
+                    local rankTitle = rank and iRC.Progress:GetPVPRankTitle(rank, UnitFactionGroup("player"))
+                    entries[#entries + 1] = {
+                        kind = "member", name = name, earned = earned > 0,
+                        status = rank ~= nil and (rankTitle or "No title")
+                            or known and (earned .. "/" .. #challenges .. " earned") or "No report",
+                        detail = known and (earned .. " of " .. #(challenges or {}) .. " " .. categoryName
+                            .. " Legacy challenges earned on this character.")
+                            or "This character has not reported Legacy progress to iRC.",
+                    }
+                end
+            end
+        end
+        table.sort(entries, function(a, b) return a.name < b.name end)
+        frame.contentTitle:SetText("Guild Progress  -  " .. categoryName)
+        frame.contentSubtitle:SetText(#(catalog[bucket] or {}) > 0
+            and "Select a character to see which Legacy challenges they earned. No report means unknown."
+            or "Legacy challenge data is not available yet on this client.")
+    end
+    frame.progressEntries = entries
+    frame.scrollContent:SetHeight(math.max(1, #entries * 41))
+    frame.scroll:SetVerticalScroll(math.min(frame.scroll:GetVerticalScroll() or 0,
+        math.max(0, frame.scrollContent:GetHeight() - frame.scroll:GetHeight())))
+    UI:RenderProgressRows()
+end
+
 local GUILD_LOG_COLORS = {
     JOIN = COLORS.green, REJOIN = COLORS.green, PROMOTE = COLORS.gold,
     DEMOTE = { 1.00, 0.55, 0.20 }, LEAVE = { 1.00, 0.50, 0.50 }, KICK = { 1.00, 0.25, 0.20 }, NAME = COLORS.gold,
@@ -7524,33 +7694,83 @@ local function measureGuildText(text, width, fontObject)
     return math.max(14, measure:GetStringHeight())
 end
 
+local RAID_PROGRESS_NAMES = { [62035] = "Barrow Deeps", [62034] = "Hyjal Summit", [684] = "Onyxia's Lair" }
+
+local function guildProgressText(group)
+    local lines = {}
+    local pve = group.progress and group.progress.PVE
+    if pve and pve.raids and #pve.raids > 0 then
+        for _, raid in ipairs(pve.raids) do
+            local color = raid.state == "CLEARED" and iRC.Colors.Green
+                or raid.state == "YELLOW" and iRC.Colors.Yellow or iRC.Colors.Gray
+            local state = raid.state == "NONE" and "Not cleared" or "Cleared"
+            lines[#lines + 1] = (RAID_PROGRESS_NAMES[raid.id] or "Raid") .. ": "
+                .. color .. state .. iRC.Colors.Reset .. "  (" .. raid.count .. "/" .. raid.size .. ")"
+        end
+    else
+        lines[#lines + 1] = iRC.Colors.Gray .. "PvE: No raid progress reported." .. iRC.Colors.Reset
+    end
+    local pvp = group.progress and group.progress.PVP
+    if pvp and pvp.score ~= nil then
+        local title = pvp.highestRank > 0 and iRC.Progress
+            and iRC.Progress:GetPVPRankTitle(pvp.highestRank, group.faction) or nil
+        lines[#lines + 1] = "PvP: " .. (title or "No title")
+            .. (pvp.highestRank > 0 and " (Rank " .. pvp.highestRank .. ")" or "")
+            .. "  |  Guild score: " .. pvp.score
+        lines[#lines + 1] = "Score adds each member's highest rank once."
+        if pvp.total > 0 then
+            lines[#lines + 1] = "Legacy challenges: " .. pvp.completed .. "/" .. pvp.total
+        end
+    else
+        lines[#lines + 1] = iRC.Colors.Gray .. "PvP: No rank reported." .. iRC.Colors.Reset
+    end
+    return table.concat(lines, "\n")
+end
+
 local function guildCardLayout(group, expanded, width)
     if not expanded then return { height = GUILD_DIRECTORY_ROW_HEIGHT } end
     width = tonumber(width) or 0
-    width = (width > 0 and width or 651) - 40
+    width = width > 0 and width or 651
+    local innerWidth = width - 40
+    local columnGap = 20
+    local columnWidth = math.max(1, (innerWidth - columnGap) / 2)
     local description = tostring(group.guildDescription or ""):match("^%s*(.-)%s*$")
     if description == "" then description = iRC:Text("GUILD_STATS_NO_DESCRIPTION") end
     local rules = table.concat(getActiveRuleLines(group), "\n")
-    local layout = { description = description, rules = rules, guildNameTop = GUILD_DIRECTORY_ROW_HEIGHT + 12 }
-    layout.guildNameHeight = measureGuildText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"), width, "GameFontNormalLarge")
+    local layout = { description = description, rules = rules, guildNameTop = GUILD_DIRECTORY_ROW_HEIGHT + 12,
+        columnWidth = columnWidth, rightX = 20 + columnWidth + columnGap }
+    layout.guildNameHeight = measureGuildText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"), innerWidth, "GameFontNormalLarge")
     layout.metadataTop = layout.guildNameTop + layout.guildNameHeight + 6
-    layout.descriptionTitle = layout.metadataTop + 33
-    layout.descriptionTop = layout.descriptionTitle + 20
-    layout.descriptionHeight = measureGuildText(description, width)
-    layout.rulesTitle = layout.descriptionTop + layout.descriptionHeight + 13
-    layout.rulesTop = layout.rulesTitle + 20
-    layout.rulesHeight = measureGuildText(rules, width)
-    layout.classesTitle = layout.rulesTop + layout.rulesHeight + 15
-    layout.statsTop = layout.classesTitle + 20
-    layout.classText = layout.statsTop + 21
-    layout.classBar = layout.classText + 18
-    layout.racesTitle = layout.classBar + 27
-    layout.racesTop = layout.racesTitle + 20
-    layout.raceBar = layout.racesTop + 18
-    layout.contactsTitle = layout.raceBar + 27
-    layout.contactsTop = layout.contactsTitle + 21
+    local columnsTop = layout.metadataTop + 27
+    layout.descriptionTitle = columnsTop
+    layout.descriptionTop = layout.descriptionTitle + 19
+    layout.descriptionHeight = measureGuildText(description, columnWidth)
+    layout.rulesTitle = columnsTop
+    layout.rulesTop = layout.rulesTitle + 19
+    layout.rulesHeight = measureGuildText(rules, columnWidth)
+    layout.progress = guildProgressText(group)
+    layout.progressTitle = layout.descriptionTop + layout.descriptionHeight + 12
+    layout.progressTop = layout.progressTitle + 19
+    layout.progressHeight = measureGuildText(layout.progress, columnWidth)
     layout.contacts = guildCardContacts(group)
-    layout.height = layout.contactsTop + math.max(1, math.ceil(#layout.contacts / 2)) * 23 + 13
+    layout.contactsTitle = layout.rulesTop + layout.rulesHeight + 12
+    layout.contactsTop = layout.contactsTitle + 19
+    layout.contactsHeight = #layout.contacts > 0 and #layout.contacts * 23
+        or measureGuildText(iRC:Text("GUILD_STATS_NO_CONTACTS"), columnWidth)
+    local columnsBottom = math.max(layout.progressTop + layout.progressHeight,
+        layout.contactsTop + layout.contactsHeight)
+    layout.classesTitle = columnsBottom + 17
+    layout.statsTop = layout.classesTitle + 20
+    layout.stats = iRC:Text("GUILD_DIRECTORY_LEVEL_STATS", formatNumber(group.membersLevel60 or 0),
+        group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "?",
+        string.format("%.1f", tonumber(group.averageLevel) or 0))
+    layout.statsHeight = measureGuildText(layout.stats, innerWidth)
+    layout.classText = layout.statsTop + layout.statsHeight + 5
+    layout.classBar = layout.classText + 18
+    layout.racesTitle = layout.classBar + 26
+    layout.racesTop = layout.racesTitle + 19
+    layout.raceBar = layout.racesTop + 18
+    layout.height = layout.raceBar + 27
     return layout
 end
 
@@ -7584,7 +7804,31 @@ local function guildRowReportAge(group)
     return iRC:Text("GUILD_DIRECTORY_AGE_DAYS", math.floor(elapsed / 86400))
 end
 
-local function setRaceCard(card, group, forceExpanded)
+local function guildDirectoryStatLabels(sortKey)
+    if sortKey == "PVE" then
+        return { { "Cleared", "Green: full clear. Yellow: at least half the required team." },
+            { "Raids", "Tracked raids" } }
+    elseif sortKey == "PVP" then
+        return { { "Rank", "Highest PvP title reached" }, { "Score", "Sum of members' highest PvP ranks" },
+            { "Legacy", "PvP Legacy challenges earned" } }
+    end
+    return { { iRC:Text("GUILD_DIRECTORY_COLUMN_ACTIVE"), iRC:Text("GUILD_DIRECTORY_ACTIVE") },
+        { iRC:Text("GUILD_DIRECTORY_COLUMN_PEAK"), iRC:Text("GUILD_DIRECTORY_PEAK") },
+        { iRC:Text("GUILD_DIRECTORY_COLUMN_MEMBERS"), iRC:Text("GUILD_DIRECTORY_MEMBERS") } }
+end
+
+local function guildDirectoryStatValues(group, sortKey)
+    if sortKey == "PVE" then
+        local progress = group.progress and group.progress.PVE
+        return { progress and progress.completed, progress and progress.total }
+    elseif sortKey == "PVP" then
+        local progress = group.progress and group.progress.PVP
+        return { progress and progress.highestRank, progress and progress.score, progress and progress.completed }
+    end
+    return { group.activeMembers, group.activePlayers, group.members }
+end
+
+local function setRaceCard(card, group, forceExpanded, sortKey)
     local rules = group and group.rulesKnown and group.rules
     local rawClassColor = rules and rules.classLock == true
         and (RAID_CLASS_COLORS and RAID_CLASS_COLORS[iRC:NormalizeGuildClass(rules.guildClass)]
@@ -7601,8 +7845,9 @@ local function setRaceCard(card, group, forceExpanded)
     card.tag:SetText(getGuildCardTags(group, true))
     card.tag:SetTextColor(1, 1, 1)
     card.tag:Show()
-    local values = { group.activeMembers, group.activePlayers, group.members }
-    local columns = guildDirectoryRowColumns(card:GetWidth())
+    local values = guildDirectoryStatValues(group, sortKey)
+    local statLabels = guildDirectoryStatLabels(sortKey)
+    local columns = guildDirectoryRowColumns(card:GetWidth(), sortKey)
     local width = columns.width
     card.race:ClearAllPoints()
     card.race:SetPoint("TOPLEFT", card, "TOPLEFT", columns.nameLeft, -5)
@@ -7619,10 +7864,28 @@ local function setRaceCard(card, group, forceExpanded)
     card.tag:SetPoint("TOPLEFT", card, "TOPLEFT", columns.tagLeft, -14)
     card.tag:SetWidth(columns.tagWidth)
     for index, stat in ipairs(card.stats) do
-        stat:ClearAllPoints()
-        stat:SetPoint("TOPLEFT", card, "TOPLEFT", columns.firstStat + (index - 1) * 54, 0)
-        stat:SetWidth(columns.statWidth)
-        stat.value:SetText(values[index] ~= nil and formatNumber(values[index]) or "?")
+        local label = statLabels[index]
+        stat:SetShown(label ~= nil)
+        if label then
+            stat:ClearAllPoints()
+            stat:SetPoint("TOPLEFT", card, "TOPLEFT", columns.firstStat + (index - 1) * columns.statStep, 0)
+            stat:SetWidth(columns.statWidth)
+            stat.label:SetText(label[2])
+            stat.value:SetText(values[index] ~= nil and formatNumber(values[index]) or "-")
+            stat.tooltipValue = nil
+            if sortKey == "PVE" and index == 1 and values[index] ~= nil then
+                local full = tonumber(values[index]) or 0
+                local half = tonumber(group.progress.PVE.partial) or 0
+                stat.value:SetText((full > 0 and (iRC.Colors.Green .. full .. iRC.Colors.Reset) or "")
+                    .. (full > 0 and half > 0 and "+" or "")
+                    .. (half > 0 and (iRC.Colors.Yellow .. half .. iRC.Colors.Reset) or "")
+                    .. (full == 0 and half == 0 and "0" or ""))
+                stat.tooltipValue = full .. " full clear(s), " .. half .. " half clear(s)"
+            elseif sortKey == "PVP" and index == 1 and values[index] ~= nil then
+                stat.tooltipValue = values[index] > 0 and iRC.Progress
+                    and iRC.Progress:GetPVPRankTitle(values[index], group.faction) or "No title"
+            end
+        end
     end
     card.rowAge:ClearAllPoints()
     card.rowAge:SetShown(columns.updated ~= nil)
@@ -7657,50 +7920,54 @@ local function setRaceCard(card, group, forceExpanded)
     card.freshness:SetText(guildReportAge(group) .. (group.cached and (" · " .. iRC:Text("RL_GRID_CACHED")) or ""))
     card.expandButton:SetText(expanded and "-" or "+")
     for _, field in ipairs({ card.rulesSeparator, card.detailsGuildName, card.descriptionTitle, card.description, card.rulesTitle,
-        card.rulesText, card.classesTitle, card.detailStats, card.classText, card.classBar,
+        card.rulesText, card.progressTitle, card.progressText, card.classesTitle, card.detailStats, card.classText, card.classBar,
         card.racesTitle, card.racesText, card.contactsLabel }) do
         field:SetShown(expanded)
     end
     if expanded then
-        local function place(field, top, body)
+        local function place(field, top, column)
             field:ClearAllPoints()
-            field:SetPoint("TOPLEFT", card, "TOPLEFT", 20, -top)
-            if body then field:SetWidth(math.max(1, width - 40)) end
+            field:SetPoint("TOPLEFT", card, "TOPLEFT", column == "right" and layout.rightX or 20, -top)
+            field:SetWidth(math.max(1, column and layout.columnWidth or width - 40))
         end
-        place(card.detailsGuildName, layout.guildNameTop, true)
+        place(card.detailsGuildName, layout.guildNameTop)
         card.detailsGuildName:SetText(group.guildName or iRC:Text("GUILD_STATS_UNKNOWN_GUILD"))
         card.detailsGuildName:SetHeight(layout.guildNameHeight)
         card.metaHit:ClearAllPoints()
         card.metaHit:SetPoint("TOPLEFT", card, "TOPLEFT", 20, -layout.metadataTop)
         card.metaHit:SetPoint("TOPRIGHT", card, "TOPRIGHT", -20, -layout.metadataTop)
-        place(card.descriptionTitle, layout.descriptionTitle)
-        place(card.description, layout.descriptionTop, true)
+        place(card.descriptionTitle, layout.descriptionTitle, "left")
+        place(card.description, layout.descriptionTop, "left")
         card.description:SetText(layout.description)
         card.description:SetHeight(layout.descriptionHeight)
-        place(card.rulesTitle, layout.rulesTitle)
-        place(card.rulesText, layout.rulesTop, true)
+        place(card.rulesTitle, layout.rulesTitle, "right")
+        place(card.rulesText, layout.rulesTop, "right")
         card.rulesText:SetText(layout.rules)
         card.rulesText:SetHeight(layout.rulesHeight)
+        place(card.progressTitle, layout.progressTitle, "left")
+        place(card.progressText, layout.progressTop, "left")
+        card.progressText:SetText(layout.progress)
+        card.progressText:SetHeight(layout.progressHeight)
         place(card.classesTitle, layout.classesTitle)
         card.classesTitle:SetText(classBreakdownTitle(group))
-        place(card.detailStats, layout.statsTop, true)
-        card.detailStats:SetText(iRC:Text("GUILD_DIRECTORY_LEVEL_STATS", formatNumber(group.membersLevel60 or 0),
-            group.activeLevel60 ~= nil and formatNumber(group.activeLevel60) or "?",
-            string.format("%.1f", tonumber(group.averageLevel) or 0)))
-        place(card.classText, layout.classText, true)
+        place(card.detailStats, layout.statsTop)
+        card.detailStats:SetText(layout.stats)
+        card.detailStats:SetHeight(layout.statsHeight)
+        place(card.classText, layout.classText)
         card.classBar:ClearAllPoints()
         card.classBar:SetPoint("TOPLEFT", card, "TOPLEFT", 16, -layout.classBar)
         card.classBar:SetPoint("TOPRIGHT", card, "TOPRIGHT", -16, -layout.classBar)
         updateClassBreakdown(card, group.classBreakdownClasses or group.classes, group.members)
         place(card.racesTitle, layout.racesTitle)
-        place(card.racesText, layout.racesTop, true)
+        place(card.racesText, layout.racesTop)
         card.racesText:SetHeight(14)
         card.raceBar:ClearAllPoints()
         card.raceBar:SetPoint("TOPLEFT", card, "TOPLEFT", 16, -layout.raceBar)
         card.raceBar:SetPoint("TOPRIGHT", card, "TOPRIGHT", -16, -layout.raceBar)
         updateRaceBreakdown(card, group.races, group.members)
-        place(card.contactsLabel, layout.contactsTitle)
-        place(card.noContacts, layout.contactsTop, true)
+        place(card.contactsLabel, layout.contactsTitle, "right")
+        place(card.noContacts, layout.contactsTop, "right")
+        card.noContacts:SetHeight(layout.contactsHeight)
         card.noContacts:SetShown(#layout.contacts == 0)
         for index, contact in ipairs(layout.contacts) do
             local button = card.contactButtons[index]
@@ -7722,9 +7989,9 @@ local function setRaceCard(card, group, forceExpanded)
             local name = contact.name
             local displayName = iRC:FormatInviteContactName(name)
             button:ClearAllPoints()
-            button:SetPoint("TOPLEFT", card, "TOPLEFT", 20 + ((index - 1) % 2) * (width - 40) / 2,
-                -layout.contactsTop - math.floor((index - 1) / 2) * 23)
-            button:SetWidth((width - 52) / 2)
+            button:SetPoint("TOPLEFT", card, "TOPLEFT", layout.rightX,
+                -layout.contactsTop - (index - 1) * 23)
+            button:SetWidth(layout.columnWidth)
             button.text:SetText(displayName)
             button.onlineIcon:SetShown(contact.online)
             button:SetScript("OnClick", function()
@@ -7859,7 +8126,7 @@ function UI:CreateGuildHomepagePreview(parent)
 end
 
 local function updateRaceOverview(frame)
-    local allGroups = iRC:GetGuildDirectoryOverview(frame.guildDirectorySort or "ACTIVITY")
+    local allGroups = iRC:GetGuildDirectoryOverview(frame.guildDirectorySort or "PVE")
     local visible = {}
     for _, group in ipairs(allGroups) do
         local rules = group.rules or {}
@@ -7919,7 +8186,7 @@ local function updateRaceOverview(frame)
         allGroups = filtered
     end
     local gap, contentWidth = 9, 675
-    local usedCards, yOffset = 0, 0
+    local usedCards, yOffset, expandedTop = 0, 0, nil
 
     local playerFaction = UnitFactionGroup and UnitFactionGroup("player") or "Horde"
     local factionOrder = playerFaction == "Alliance" and { "Alliance", "Horde" } or { "Horde", "Alliance" }
@@ -7958,7 +8225,9 @@ local function updateRaceOverview(frame)
         section:SetPoint("TOPLEFT", frame.scrollContent, "TOPLEFT", 0, -yOffset)
         section:Show()
         local cardWidth = contentWidth - 24
-        local columns = guildDirectoryRowColumns(cardWidth)
+        local sortKey = frame.guildDirectorySort or "PVE"
+        local columns = guildDirectoryRowColumns(cardWidth, sortKey)
+        local statLabels = guildDirectoryStatLabels(frame.guildDirectorySort or "PVE")
         section.title:SetWidth(math.max(1, columns.tagLeft - 16))
         local function heading(key, left, width)
             local label = section.columnLabels[key]
@@ -7969,7 +8238,12 @@ local function updateRaceOverview(frame)
         end
         heading("TAGS", columns.tagLeft, columns.tagWidth)
         for index, key in ipairs({ "ACTIVE", "PEAK", "MEMBERS" }) do
-            heading(key, columns.firstStat + (index - 1) * 54, columns.statWidth)
+            if statLabels[index] then
+                section.columnLabels[key]:SetText(statLabels[index][1])
+                heading(key, columns.firstStat + (index - 1) * columns.statStep, columns.statWidth)
+            else
+                section.columnLabels[key]:Hide()
+            end
         end
         if columns.updated then
             heading("UPDATED", columns.updated.left, columns.updated.width)
@@ -7987,11 +8261,14 @@ local function updateRaceOverview(frame)
                 card:SetParent(section)
             end
             local cardHeight = guildCardHeight(group, nil, cardWidth)
+            if pendingGuildScrollKey == guildCardKey(group) then
+                expandedTop = yOffset + cardOffset
+            end
             card:ClearAllPoints()
             card:SetSize(cardWidth, cardHeight)
             card:SetPoint("TOPLEFT", section, "TOPLEFT", 12, -cardOffset)
             card.rowShade = guildIndex % 2 == 0 and 0.045 or 0.025
-            setRaceCard(card, group)
+            setRaceCard(card, group, nil, frame.guildDirectorySort or "PVE")
             cardOffset = cardOffset + cardHeight + guildCardGap(group)
         end
         yOffset = yOffset + sectionHeight + gap
@@ -8012,7 +8289,19 @@ local function updateRaceOverview(frame)
     for index = usedCards + 1, #frame.raceCards do frame.raceCards[index]:Hide() end
     for _, row in ipairs(frame.memberRows) do row:Hide() end
     frame.scrollContent:SetHeight(math.max(1, yOffset - gap))
-    frame.scroll:SetVerticalScroll(UI.preservedRaceScroll or 0)
+    local targetScroll = expandedTop and expandedTop - 8 or UI.preservedRaceScroll or 0
+    local targetGuildKey = expandedTop and pendingGuildScrollKey or nil
+    local function scrollToGuild()
+        if frame.category ~= "Race Overview"
+            or (targetGuildKey and not expandedGuildCards[targetGuildKey]) then return end
+        local maximumScroll = math.max(0, frame.scrollContent:GetHeight() - frame.scroll:GetHeight())
+        frame.scroll:SetVerticalScroll(math.min(maximumScroll, math.max(0, targetScroll)))
+    end
+    scrollToGuild()
+    -- The scroll child grows after its new height is laid out. Reapply the
+    -- target on the next frame so an expanded guild at the bottom can scroll up.
+    if expandedTop and C_Timer and C_Timer.After then C_Timer.After(0, scrollToGuild) end
+    pendingGuildScrollKey = nil
     UI.preservedRaceScroll = nil
     frame.contentTitle:SetText(iRC:Text("GUILD_STATS_TITLE"))
     frame.contentSubtitle:SetText(iRC:Text("RL_GRID_OVERVIEW_DESC"))
@@ -8094,6 +8383,21 @@ function UI:Refresh()
     frame.memberExport:SetShown(not embeddedManagement and frame.category == "Guild Members")
     frame.memberSort:SetShown(not embeddedManagement and frame.category == "Guild Members")
     frame.memberSort:Refresh()
+    for _, button in ipairs(frame.progressTabs or {}) do
+        local shown = not embeddedManagement and frame.category == "Progress"
+        button:SetShown(shown)
+        if shown then
+            local active = (frame.progressBucket or "PVE") == (button == frame.progressTabs[1] and "PVE" or "PVP")
+            button:SetBackdropColor(active and 0.18 or 0.055, active and 0.09 or 0.045,
+                active and 0.025 or 0.035, 0.96)
+            button:SetBackdropBorderColor(active and COLORS.gold[1] or 0.28,
+                active and COLORS.gold[2] or 0.23, active and COLORS.gold[3] or 0.16, 1)
+        end
+    end
+    frame.progressBack:SetShown(frame.category == "Progress" and frame.progressSelectedName ~= nil)
+    if frame.category ~= "Progress" then
+        for _, row in ipairs(frame.progressRows or {}) do row:Hide() end
+    end
     if frame.category ~= "Guild Members" then frame.memberProfessionSearch.suggestions:Hide() end
     for _, button in ipairs(frame.memberOnlineFilters or {}) do
         local shown = not embeddedManagement and frame.category == "Guild Members"
@@ -8166,7 +8470,8 @@ function UI:Refresh()
     end
     for _, button in ipairs(frame.guildDirectorySortButtons or {}) do
         button:SetShown(frame.category == "Race Overview")
-        local selected = button.sortKey == (frame.guildDirectorySort or "ACTIVITY")
+        local sort = frame.guildDirectorySort or "PVE"
+        local selected = button.sortKey == sort
         button:SetBackdropColor(selected and 0.16 or 0.055, selected and 0.09 or 0.045, 0.025, 0.98)
         button:SetBackdropBorderColor(selected and COLORS.gold[1] or 0.28,
             selected and COLORS.gold[2] or 0.23, selected and COLORS.gold[3] or 0.16, 1)
@@ -8175,8 +8480,10 @@ function UI:Refresh()
     frame.scroll:ClearAllPoints()
     local usesSearchHeader = frame.category == "Race Overview" or frame.category == "Guild Log"
         or frame.category == "Guild Members"
+        or frame.category == "Progress"
         or frame.category == "Member Management"
-    local scrollTop = memberManagement and -150 or (frame.category == "Guild Members" and -82 or (usesSearchHeader and -112 or -78))
+    local scrollTop = memberManagement and -150 or ((frame.category == "Guild Members" or frame.category == "Progress")
+        and -82 or (usesSearchHeader and -112 or -78))
     if frame.category == "Race Overview" then scrollTop = -146 end
     frame.scroll:SetPoint("TOPLEFT", frame.main, "TOPLEFT", 15, scrollTop)
     frame.scroll:SetPoint("BOTTOMRIGHT", frame.main, "BOTTOMRIGHT", -31, 14)
@@ -8209,6 +8516,10 @@ function UI:Refresh()
         updateGuildOverview(frame)
     elseif frame.category == "Guild Members" then
         updateMemberRows(frame)
+    elseif frame.category == "Progress" then
+        frame.player:SetText((connection and connection.guildName or "No guild") .. iRC.Colors.Gray
+            .. "  Character progress" .. iRC.Colors.Reset)
+        updateProgress(frame)
     elseif frame.category == "Guild Log" then
         updateGuildLog(frame)
     elseif frame.category == "Member Management" then

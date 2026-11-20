@@ -85,6 +85,9 @@ local function client(name, pvp, rp, hardcore)
     function addon:DebugMsg() end
     function addon:Text(key) return key end
     assert(loadfile("iRC_RaceGrid.lua", "t", env))("iRC", private)
+    addon.Progress = { GetRaidSize = function(_, id)
+        return ({ [684] = 40, [62034] = 20, [62035] = 10 })[id]
+    end }
     state.frame, state.grid = frames[#frames], addon.RaceGrid
     function state.grid:BuildOwnGuildReports() return {} end
     function state.grid:ObserveGuildPreferredLanguage() return "" end
@@ -113,12 +116,20 @@ end
 assert(#pvp.addon:GetGlobalRaceOverview() == 0 and pvp.env.iRCDB.globalRaceGrid.servers.forever.guildReports.old,
     "unlabelled old reports are preserved without assigning mixed data to a ruleset")
 pve.report, pvp.report = report(pve, "PvE Guild"), report(pvp, "PvP Guild")
+pvp.report.progress = { PVE = { completed = 0, total = 3, raids = {
+    { id = 684, count = 0 }, { id = 62034, count = 0 }, { id = 62035, count = 5 },
+} }, PVP = { completed = 2, total = 12, highestRank = 8, score = 27 } }
 pvp.report.races = { HUMAN = 3, SKYBORNE = 2, UNKNOWN = 1 }
 assert(pve.grid:BroadcastReport(true)); advance(2)
 assert(findGuild(pvp, "PvE Guild").serverRuleset == pve.addon:GetGuildDirectoryScope(), "public reports retain their origin across server rulesets")
 assert(pvp.grid:BroadcastReport(true)); advance(2)
 assert(findGuild(same, "PvP Guild").races.HUMAN == 3,
     "public guild reports include race counts in the expanded preview")
+assert(findGuild(same, "PvP Guild").progress.PVE.raids[3].state == "YELLOW"
+    and findGuild(same, "PvP Guild").progress.PVP.completed == 2
+    and findGuild(same, "PvP Guild").progress.PVP.highestRank == 8
+    and findGuild(same, "PvP Guild").progress.PVP.score == 27,
+    "public reports keep raid progress, highest PvP rank and guild score")
 assert(#same.addon:GetGlobalRaceOverview() == 2 and findGuild(same, "PvP Guild"),
     "matching clients still decode fragmented public reports")
 assert(#pve.addon:GetGlobalRaceOverview() == 2 and findGuild(pve, "PvP Guild"),
@@ -131,6 +142,8 @@ assert(same.grid:RequestGuildCache()); advance(12)
 assert(#same.addon:GetGlobalRaceOverview() == 2, "cached report downloads preserve guilds from both server rulesets")
 assert(findGuild(same, "PvP Guild").races.SKYBORNE == 2,
     "cached guild previews retain the optional race breakdown")
+assert(findGuild(same, "PvP Guild").progress.PVE.raids[3].count == 5,
+    "cached guild reports retain raid member counts")
 assert(#pve.addon:GetGlobalRaceOverview() == 2, "public cache discovery keeps existing reports")
 local function upvalue(callback, wanted)
     for index = 1, 100 do

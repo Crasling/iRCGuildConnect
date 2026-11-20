@@ -623,6 +623,11 @@ function Enforcement:InstallInboxAPIGuards()
         refreshingInboxGuard = false
         if not ok then iRC:DebugMsg("Guild Found inbox check failed: " .. tostring(err), 1) end
     end
+    -- Blizzard's inbox icon auto-loots on a modified click before opening
+    -- the mail. Reapply our button state after its page redraws.
+    if not inboxHooksInstalled.InboxFrame_Update and type(_G.InboxFrame_Update) == "function" then
+        inboxHooksInstalled.InboxFrame_Update = pcall(hooksecurefunc, "InboxFrame_Update", recheck)
+    end
     for _, owner in pairs({ _G.OpenMailFrame, _G.InboxFrame, _G.MailFrame and _G.MailFrame.InboxFrame }) do
         owner.iRCInboxControlHooks = owner.iRCInboxControlHooks or {}
         for _, method in ipairs({ "Update", "FocusGamepad", "RefreshFooter" }) do
@@ -683,6 +688,19 @@ function Enforcement:UpdateInboxRestriction()
     setControlRestricted(_G.OpenMailLetterButton, blocked)
     for slot = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do
         setControlRestricted(_G["OpenMailAttachmentButton" .. slot], blocked)
+    end
+    -- Keep ordinary clicks available so the letter can still be read. Only
+    -- disable the inbox icon while Blizzard's auto-loot modifier is held.
+    local autoLootClick = isGuildFoundEconomyActive() and IsModifiedClick
+        and IsModifiedClick("MAILAUTOLOOTTOGGLE")
+    for slot = 1, (INBOXITEMS_TO_DISPLAY or 7) do
+        local button = _G["MailItem" .. slot .. "Button"]
+        if button then
+            local mailIndex = button.index
+            local restricted = autoLootClick and type(mailIndex) == "number"
+                and getInboxRestriction(mailIndex) or false
+            setControlRestricted(button, restricted)
+        end
     end
     local restrictionKey = blocked and not pending and tostring(index) .. ":" .. tostring(sender or "") or nil
     if pending then
@@ -1011,6 +1029,7 @@ frame:RegisterEvent("TRADE_CLOSED")
 frame:RegisterEvent("AUCTION_HOUSE_SHOW")
 frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_INBOX_UPDATE")
+frame:RegisterEvent("MODIFIER_STATE_CHANGED")
 frame:RegisterEvent("MAIL_SEND_INFO_UPDATE")
 frame:RegisterEvent("SEND_MAIL_COD_CHANGED")
 frame:RegisterEvent("SEND_MAIL_MONEY_CHANGED")
@@ -1089,6 +1108,10 @@ frame:SetScript("OnEvent", function(_, event, unit, targetAccepted)
     elseif event == "MAIL_INBOX_UPDATE" then
         Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateInboxRestriction()
+    elseif event == "MODIFIER_STATE_CHANGED" then
+        if _G.MailFrame and _G.MailFrame.IsShown and _G.MailFrame:IsShown() then
+            Enforcement:UpdateInboxRestriction()
+        end
     elseif event == "MAIL_SEND_INFO_UPDATE" or event == "SEND_MAIL_COD_CHANGED" or event == "SEND_MAIL_MONEY_CHANGED" then
         Enforcement:InstallMailAPIGuards()
         Enforcement:UpdateMailRestriction()

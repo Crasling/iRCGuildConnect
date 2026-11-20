@@ -26,6 +26,16 @@ function SendMailNameEditBox:SetText(text)
     if self.hooks.OnTextChanged then self.hooks.OnTextChanged(self, true) end
 end
 OpenMailFrame = {}
+MailFrame = { IsShown = function() return true end }
+INBOXITEMS_TO_DISPLAY = 2
+local autoLootModifier = false
+function IsModifiedClick(action) return action == "MAILAUTOLOOTTOGGLE" and autoLootModifier end
+MailItem1Button = control(); MailItem1Button.index = 1
+MailItem2Button = control(); MailItem2Button.index = 2
+function InboxFrame_Update()
+    -- Blizzard can refresh the row after our first restriction check.
+    MailItem1Button:SetEnabled(true)
+end
 OpenMailMoneyButton = control()
 OpenMailPackageButton = control()
 OpenMailAttachmentButton1 = control()
@@ -134,6 +144,32 @@ assert(loadfile("iRC_Enforcement.lua"))("iRC", private)
 local enforcement = assert(iRC.Enforcement)
 eventFrame = frames[#frames]
 enforcement:InstallMailAPIGuards()
+
+-- A modified inbox-icon click reaches AutoLootMailItem before the letter opens.
+-- Disable that click for restricted mail without disabling ordinary opening.
+assert(MailItem1Button.active and MailItem2Button.active, "ordinary inbox clicks remain available")
+autoLootModifier = true
+eventFrame.OnEvent(nil, "MODIFIER_STATE_CHANGED")
+assert(not MailItem1Button.active and MailItem2Button.active,
+    "the auto-loot modifier blocks only restricted inbox rows")
+local beforeAutoLoot = autoLoot
+if MailItem1Button.active then AutoLootMailItem(MailItem1Button.index) end
+assert(autoLoot == beforeAutoLoot, "modified click cannot auto-loot restricted mail")
+InboxFrame_Update()
+assert(not MailItem1Button.active, "Blizzard inbox redraw cannot re-enable restricted auto-loot")
+MailItem1Button.index = 2
+enforcement:UpdateInboxRestriction()
+assert(MailItem1Button.active, "a row reused for verified mail becomes clickable")
+MailItem1Button.index = 1
+autoLootModifier = false
+eventFrame.OnEvent(nil, "MODIFIER_STATE_CHANGED")
+assert(MailItem1Button.active, "releasing the modifier restores ordinary opening")
+autoLootModifier = true
+economyActive = false
+eventFrame.OnEvent(nil, "MODIFIER_STATE_CHANGED")
+assert(MailItem1Button.active, "characters outside Guild Found retain normal auto-loot")
+economyActive = true
+autoLootModifier = false
 
 enforcement:UpdateTradeRestriction()
 assert(TradeFrameTradeButton.active == false, "external trade acceptance control is disabled")

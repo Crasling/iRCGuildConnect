@@ -37,28 +37,42 @@ local saved = {
     report("Zulu Quiet", 0, 0, 150, 150),
     report("Home Guild", 100, 40, 500, 500),
 }
+local function progress(pve, pvp, partial, pveTotal, score, rank)
+    return { PVE = { completed = pve, partial = partial or 0, total = pveTotal or 3 },
+        PVP = { completed = pvp, total = 12, score = score, highestRank = rank or 0 } }
+end
+saved[1].progress = progress(0, 0, nil, nil, 0)
+saved[2].progress = progress(1, 7, nil, nil, 18, 9)
+saved[3].progress = progress(1, 2, 1, nil, 12, 12)
+saved[4].progress = progress(0, 0, 2, nil, 0)
+saved[5].progress = progress(0, 0, 1, nil, 0)
+saved[7].progress = progress(0, 0, nil, nil, 0)
 for _, entry in ipairs(saved) do assert(grid:StoreGuildReport(entry, true, true)) end
 own = { report("Home Guild", 15, 1, 50, 0) }
+own[1].progress = progress(2, 4, nil, nil, 15, 7)
 local function names(rows)
     local result = {}
     for _, entry in ipairs(rows) do result[#result + 1] = entry.guildName end
     return table.concat(result, ",")
 end
-local activity = addon:GetGuildDirectoryOverview("ACTIVITY")
-assert(names(activity) == "Echo Twin,Gamma Busy,Delta Active,Home Guild,Beta Large,Zulu Quiet,Alpha Archive",
-    "activity uses active members, then online peak, and keeps unknown activity after known zero")
-assert(activity[4] == own[1], "the local guild report replaces its cached copy and remains in the directory")
+local pve = addon:GetGuildDirectoryOverview("PVE")
+assert(names(pve) == "Home Guild,Gamma Busy,Beta Large,Delta Active,Echo Twin,Alpha Archive,Zulu Quiet",
+    "raid clears lead, yellow half-roster clears break ties, and missing progress sorts last")
+assert(pve[1] == own[1], "the local guild report replaces its cached copy and remains in the directory")
+assert(names(addon:GetGuildDirectoryOverview("PVP"))
+    == "Beta Large,Home Guild,Gamma Busy,Alpha Archive,Delta Active,Echo Twin,Zulu Quiet",
+    "PvP progress sorts by lifetime rank score independently of challenge counts")
 assert(names(addon:GetGuildDirectoryOverview("MEMBERS"))
     == "Alpha Archive,Beta Large,Delta Active,Zulu Quiet,Echo Twin,Gamma Busy,Home Guild",
     "member sorting uses total membership with alphabetical ties")
 assert(names(addon:GetGuildDirectoryOverview("NAME"))
     == "Alpha Archive,Beta Large,Delta Active,Echo Twin,Gamma Busy,Home Guild,Zulu Quiet",
     "name sorting is alphabetical regardless of activity or max levels")
-assert(names(addon:GetGuildDirectoryOverview("invalid")) == names(activity), "invalid sort choices safely use activity")
-assert(names(addon:GetRaceGridOverview()) == names(activity), "the previous entry point also uses directory order")
+assert(names(addon:GetGuildDirectoryOverview("invalid")) == names(pve), "invalid sort choices safely use PvE progress")
+assert(names(addon:GetRaceGridOverview()) == names(pve), "the previous entry point also uses directory order")
 saved[1].activeLevel60, saved[2].activeLevel60, saved[3].activeLevel60 = 0, 0, 100
-assert(names(addon:GetGuildDirectoryOverview("ACTIVITY")) == names(activity), "max-level counts cannot change directory order")
-for _, entry in ipairs(activity) do
+assert(names(addon:GetGuildDirectoryOverview("PVE")) == names(pve), "max-level counts cannot change directory order")
+for _, entry in ipairs(pve) do
     assert(entry.rank == nil and entry.score == nil, "directory reports do not acquire competitive placements")
 end
-print("PASS: directory sort choices, unknown activity, alphabetical ties, own guild, and max-level independence")
+print("PASS: directory progress sort choices, unknown progress, alphabetical ties, own guild, and max-level independence")

@@ -2,15 +2,6 @@ local _, private = ...
 local iRC = private and private.iRC
 if not iRC then return end
 local L = iRC.L
-local COMMUNITY_INVITE_URL = "https://www.worldofwarcraft.com/invite/3d423YnU7rA?region=EU&faction=Horde"
-
-local function CanShowCommunityInvite()
-    if type(GetCurrentRegion) ~= "function" or type(UnitFactionGroup) ~= "function" then return false end
-    local regionOK, region = pcall(GetCurrentRegion)
-    if not regionOK or iRC:IsSecretValue(region) or region ~= 3 then return false end
-    local factionOK, faction = pcall(UnitFactionGroup, "player")
-    return factionOK and not iRC:IsSecretValue(faction) and faction == "Horde"
-end
 
 -- Blizzard Settings panel and guild-management pages
 --
@@ -20,6 +11,90 @@ end
 
 local ORANGE = iRC.ColorValues.Orange
 local CHECKBOX_TEMPLATE = InterfaceOptionsCheckButtonTemplate and "InterfaceOptionsCheckButtonTemplate" or "UICheckButtonTemplate"
+local settingsFrame
+local openSettingsDropdown
+
+local SETTINGS_BACKDROP = {
+    bgFile = "Interface\\BUTTONS\\WHITE8X8",
+    edgeFile = "Interface\\BUTTONS\\WHITE8X8",
+    edgeSize = 1,
+}
+
+local function StyleSettingsSurface(frame, header)
+    frame:SetBackdrop(SETTINGS_BACKDROP)
+    if header then frame:SetBackdropColor(0.075, 0.058, 0.035, 0.98)
+    else frame:SetBackdropColor(0.025, 0.023, 0.020, 0.98) end
+    frame:SetBackdropBorderColor(0.32, 0.25, 0.14, 1)
+end
+
+local function StyleSettingsButton(button)
+    if button.iRCSettingsStyled then return end
+    button.iRCSettingsStyled = true
+    for _, region in ipairs({ button:GetRegions() }) do
+        if region.IsObjectType and region:IsObjectType("Texture") then region:SetAlpha(0) end
+    end
+    local border = CreateFrame("Frame", nil, button, "BackdropTemplate")
+    border:SetAllPoints(button)
+    border:SetFrameLevel(math.max(0, button:GetFrameLevel() - 1))
+    border:SetBackdrop(SETTINGS_BACKDROP)
+    border:SetBackdropColor(0.055, 0.045, 0.03, 1)
+    border:SetBackdropBorderColor(0.52, 0.36, 0.15, 1)
+    button.iRCSettingsBorder = border
+    button:HookScript("OnEnter", function(self)
+        if self:IsEnabled() then self.iRCSettingsBorder:SetBackdropBorderColor(1, 0.65, 0.17, 1) end
+    end)
+    button:HookScript("OnLeave", function(self)
+        self.iRCSettingsBorder:SetBackdropBorderColor(0.52, 0.36, 0.15, 1)
+    end)
+    button:HookScript("OnDisable", function(self) self:SetAlpha(0.45) end)
+    button:HookScript("OnEnable", function(self) self:SetAlpha(1) end)
+end
+
+local function StyleSettingsCheckbox(checkbox)
+    checkbox:SetSize(24, 24)
+    checkbox:SetNormalTexture("Interface\\BUTTONS\\WHITE8X8")
+    checkbox:GetNormalTexture():SetVertexColor(0, 0, 0, 0)
+    checkbox:SetPushedTexture("Interface\\BUTTONS\\WHITE8X8")
+    checkbox:GetPushedTexture():SetVertexColor(0.18, 0.13, 0.06, 1)
+    checkbox:SetHighlightTexture("Interface\\BUTTONS\\WHITE8X8", "ADD")
+    checkbox:GetHighlightTexture():SetVertexColor(0.5, 0.32, 0.09, 0.25)
+    local background = CreateFrame("Frame", nil, checkbox, "BackdropTemplate")
+    background:SetAllPoints(checkbox)
+    background:SetFrameLevel(math.max(0, checkbox:GetFrameLevel() - 1))
+    background:SetBackdrop(SETTINGS_BACKDROP)
+    background:SetBackdropColor(0.035, 0.030, 0.022, 1)
+    background:SetBackdropBorderColor(0.42, 0.32, 0.15, 1)
+    checkbox:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+    checkbox:GetCheckedTexture():SetVertexColor(1, 0.76, 0.30, 1)
+    checkbox:SetDisabledCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check-Disabled")
+end
+
+local function StyleSettingsSlider(slider)
+    for _, region in ipairs({ slider:GetRegions() }) do
+        if region.IsObjectType and region:IsObjectType("Texture") then region:SetAlpha(0) end
+    end
+    local track = slider:CreateTexture(nil, "BACKGROUND")
+    track:SetHeight(4)
+    track:SetPoint("LEFT", 0, 0)
+    track:SetPoint("RIGHT", 0, 0)
+    track:SetColorTexture(0.16, 0.13, 0.09, 1)
+    local fill = slider:CreateTexture(nil, "ARTWORK")
+    fill:SetHeight(4)
+    fill:SetPoint("LEFT", track, "LEFT")
+    fill:SetColorTexture(0.85, 0.52, 0.12, 1)
+    slider:SetThumbTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
+    local thumb = slider:GetThumbTexture()
+    thumb:SetSize(14, 14)
+    thumb:SetVertexColor(1, 0.73, 0.26, 1)
+    local function UpdateFill(self, value)
+        local minimum, maximum = self:GetMinMaxValues()
+        if maximum > minimum then
+            fill:SetWidth(math.max(1, self:GetWidth() * (value - minimum) / (maximum - minimum)))
+        end
+    end
+    slider:HookScript("OnValueChanged", UpdateFill)
+    UpdateFill(slider, slider:GetValue())
+end
 
 local function IsAddonLoadedCompat(addonName)
     if C_AddOns and C_AddOns.IsAddOnLoaded then return C_AddOns.IsAddOnLoaded(addonName) end
@@ -91,7 +166,7 @@ local function CreateSectionHeader(parent, text, yOffset)
     header:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, yOffset)
     header:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -10, yOffset)
     header:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8" })
-    header:SetBackdropColor(0.15, 0.15, 0.20, 0.60)
+    header:SetBackdropColor(0.11, 0.08, 0.035, 0.60)
 
     local accent = header:CreateTexture(nil, "ARTWORK")
     accent:SetHeight(1)
@@ -102,7 +177,7 @@ local function CreateSectionHeader(parent, text, yOffset)
     local label = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     label:SetPoint("LEFT", header, "LEFT", 8, 0)
     label:SetText(text)
-    return header, yOffset - 28
+    return header, yOffset - 34
 end
 
 local function SetSimpleTooltip(frame, title, description)
@@ -142,12 +217,16 @@ end
 local function CreateSettingsCheckbox(parent, label, description, yOffset, getValue, setValue, indent, synced)
     indent = indent or 0
     local checkbox = CreateFrame("CheckButton", nil, parent, CHECKBOX_TEMPLATE)
+    StyleSettingsCheckbox(checkbox)
     local left = (synced and 48 or 20) + indent
     checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", left, yOffset)
     if synced then checkbox.syncBadge = CreateSyncBadge(parent, yOffset) end
     if not checkbox.Text then
         checkbox.Text = checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 4, 0)
+        checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 8, 0)
+    else
+        checkbox.Text:ClearAllPoints()
+        checkbox.Text:SetPoint("LEFT", checkbox, "RIGHT", 8, 0)
     end
     checkbox.Text:SetText(label)
     checkbox.Text:SetFontObject(GameFontHighlight)
@@ -176,32 +255,107 @@ local function CreateSettingsDropdown(frameName, parent, label, description, yOf
     title:SetText(label)
     if synced then CreateSyncBadge(parent, yOffset) end
 
-    -- Classic's enable/disable helpers look up template children by frame name.
-    local dropdown = CreateFrame("Frame", frameName, parent, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", left - 12, yOffset - 15)
-    UIDropDownMenu_SetWidth(dropdown, 220)
-    UIDropDownMenu_JustifyText(dropdown, "LEFT")
-    dropdown.Refresh = function()
-        UIDropDownMenu_SetText(dropdown, getOptionLabel(getValue()))
-    end
+    local dropdown = CreateFrame("Button", frameName, parent, "BackdropTemplate")
+    dropdown:SetSize(236, 28)
+    dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", left, yOffset - 17)
+    StyleSettingsButton(dropdown)
+    dropdown.text = dropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    dropdown.text:SetPoint("LEFT", 10, 0)
+    dropdown.text:SetPoint("RIGHT", -25, 0)
+    dropdown.text:SetJustifyH("LEFT")
+    dropdown.text:SetWordWrap(false)
+    dropdown.arrow = dropdown:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    dropdown.arrow:SetPoint("RIGHT", -9, 0)
+    dropdown.arrow:SetText("v")
     dropdown.title = title
-    UIDropDownMenu_Initialize(dropdown, function(_, level)
-        for _, value in ipairs(getOptions()) do
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = getOptionLabel(value)
-            info.value = value
-            info.checked = value == getValue()
-            info.func = function()
-                setValue(value)
-                dropdown:Refresh()
-                CloseDropDownMenus()
-            end
-            UIDropDownMenu_AddButton(info, level)
-        end
+    function dropdown:Refresh()
+        self.text:SetText(getOptionLabel(getValue()))
+    end
+    local menu = CreateFrame("Frame", nil, settingsFrame, "BackdropTemplate")
+    menu:SetWidth(236)
+    menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    menu:SetClampedToScreen(true)
+    menu:EnableMouse(true)
+    menu:SetToplevel(true)
+    StyleSettingsSurface(menu)
+    local dismiss = CreateFrame("Button", nil, UIParent)
+    dismiss:SetAllPoints(UIParent)
+    dismiss:SetFrameStrata("FULLSCREEN_DIALOG")
+    dismiss:SetFrameLevel(menu:GetFrameLevel())
+    menu:SetFrameLevel(dismiss:GetFrameLevel() + 1)
+    dismiss:SetScript("OnClick", function() menu:Hide() end)
+    dismiss:Hide()
+    menu:SetScript("OnHide", function()
+        dismiss:Hide()
+        if openSettingsDropdown == menu then openSettingsDropdown = nil end
     end)
+    menu:Hide()
+    dropdown.menu = menu
+    local scroll = CreateFrame("ScrollFrame", nil, menu, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 4, -4)
+    scroll:SetPoint("BOTTOMRIGHT", -20, 4)
+    iRC:StyleScrollFrame(scroll)
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetWidth(208)
+    content:SetHeight(1)
+    scroll:SetScrollChild(content)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        self:SetVerticalScroll(math.max(0, math.min(self:GetVerticalScrollRange(), self:GetVerticalScroll() - delta * 24)))
+    end)
+    local rows = {}
+    dropdown:SetScript("OnClick", function(self)
+        if menu:IsShown() then menu:Hide(); return end
+        if openSettingsDropdown then openSettingsDropdown:Hide() end
+        local options = getOptions()
+        if #options == 0 then return end
+        for index, value in ipairs(options) do
+            local row = rows[index]
+            if not row then
+                row = CreateFrame("Button", nil, content)
+                row:SetHeight(24)
+                row:SetPoint("TOPLEFT", 0, -(index - 1) * 24)
+                row:SetPoint("TOPRIGHT", 0, -(index - 1) * 24)
+                row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                row.text:SetPoint("LEFT", 8, 0)
+                row.text:SetPoint("RIGHT", -8, 0)
+                row.text:SetJustifyH("LEFT")
+                row.text:SetWordWrap(false)
+                row:SetHighlightTexture("Interface\\BUTTONS\\WHITE8X8", "ADD")
+                row:GetHighlightTexture():SetVertexColor(0.4, 0.28, 0.08, 0.4)
+                rows[index] = row
+            end
+            row.text:SetText(getOptionLabel(value))
+            if value == getValue() then row.text:SetTextColor(1, 0.72, 0.2)
+            else row.text:SetTextColor(0.9, 0.86, 0.76) end
+            row:SetScript("OnClick", function()
+                menu:Hide()
+                setValue(value)
+                self:Refresh()
+            end)
+            row:Show()
+        end
+        for index = #options + 1, #rows do rows[index]:Hide() end
+        content:SetHeight(#options * 24)
+        menu:SetHeight(math.min(#options, 10) * 24 + 8)
+        scroll:SetVerticalScroll(0)
+        menu:SetScale(self:GetEffectiveScale() / menu:GetParent():GetEffectiveScale())
+        menu:ClearAllPoints()
+        if (self:GetBottom() or 0) > menu:GetHeight() + 12 then
+            menu:SetPoint("TOPRIGHT", self, "BOTTOMRIGHT", 0, -2)
+        else
+            menu:SetPoint("BOTTOMRIGHT", self, "TOPRIGHT", 0, 2)
+        end
+        openSettingsDropdown = menu
+        dismiss:Show()
+        menu:Show()
+    end)
+    dropdown:SetScript("OnHide", function() menu:Hide() end)
+    dropdown:SetScript("OnShow", function(self) self:Refresh() end)
     SetSimpleTooltip(dropdown, label, description)
+    dropdown:Refresh()
 
-    local nextY = yOffset - 48
+    local nextY = yOffset - 52
     if description and description ~= "" then
         local desc = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         desc:SetPoint("TOPLEFT", parent, "TOPLEFT", left + 28, nextY)
@@ -236,6 +390,7 @@ end
 
 local function CreateSettingsButton(parent, text, width, yOffset, onClick, tooltip)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    StyleSettingsButton(button)
     button:SetSize(width, 26)
     button:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, yOffset)
     button:SetText(text)
@@ -729,17 +884,10 @@ local function RefreshAllManagementConnectionCards(connection)
     end
 end
 
-local settingsFrame = CreateFrame("Frame", "iRCSettingsFrame", UIParent, "BackdropTemplate")
-settingsFrame:SetSize(750, 520)
+settingsFrame = CreateFrame("Frame", "iRCSettingsFrame", UIParent, "BackdropTemplate")
+settingsFrame:SetSize(820, 580)
 settingsFrame:SetPoint("CENTER", UIParent, "CENTER")
-settingsFrame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    edgeSize = 16,
-    insets = { left = 5, right = 5, top = 5, bottom = 5 },
-})
-settingsFrame:SetBackdropColor(0.05, 0.05, 0.10, 0.95)
-settingsFrame:SetBackdropBorderColor(0.80, 0.80, 0.90, 1)
+StyleSettingsSurface(settingsFrame)
 settingsFrame:SetFrameStrata("HIGH")
 settingsFrame:SetClampedToScreen(true)
 settingsFrame:SetMovable(true)
@@ -758,55 +906,68 @@ shadow:SetBackdrop({ edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", e
 shadow:SetBackdropBorderColor(0, 0, 0, 0.80)
 
 local titleBar = CreateFrame("Frame", nil, settingsFrame, "BackdropTemplate")
-titleBar:SetHeight(31)
-titleBar:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 0, 0)
-titleBar:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", 0, 0)
-titleBar:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    edgeSize = 16,
-    insets = { left = 5, right = 5, top = 5, bottom = 5 },
-})
-titleBar:SetBackdropColor(0.07, 0.07, 0.12, 1)
+titleBar:SetHeight(40)
+titleBar:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 1, -1)
+titleBar:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", -1, -1)
+StyleSettingsSurface(titleBar, true)
 local title = titleBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-title:SetPoint("CENTER", titleBar)
-title:SetText(iRC.Colors.iRC .. iRC.DisplayName .. iRC.Colors.Reset .. " " .. iRC.Colors.Green .. "v" .. iRC:GetDisplayVersion() .. iRC.Colors.Reset)
+title:SetPoint("LEFT", titleBar, "LEFT", 15, 0)
+title:SetText(iRC.Colors.iRC .. iRC.DisplayName .. iRC.Colors.Reset .. "  |cFFAAA08CSettings|r")
 
 local closeButton = CreateFrame("Button", nil, settingsFrame, "UIPanelCloseButton")
-closeButton:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", 0, 0)
+closeButton:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", -4, -4)
 closeButton:SetScript("OnClick", function() settingsFrame:Hide() end)
 
-local sidebarWidth = 150
+local sidebarWidth = 160
 local sidebar = CreateFrame("Frame", nil, settingsFrame, "BackdropTemplate")
 sidebar:SetWidth(sidebarWidth)
-sidebar:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 10, -35)
-sidebar:SetPoint("BOTTOMLEFT", settingsFrame, "BOTTOMLEFT", 10, 10)
-sidebar:SetBackdrop({
-    bgFile = "Interface\\BUTTONS\\WHITE8X8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 12,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 },
-})
-sidebar:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
-sidebar:SetBackdropBorderColor(0.40, 0.40, 0.50, 0.60)
+sidebar:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 10, -50)
+sidebar:SetPoint("BOTTOMLEFT", settingsFrame, "BOTTOMLEFT", 10, 30)
+StyleSettingsSurface(sidebar)
+
+local footer = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+footer:SetPoint("BOTTOMLEFT", settingsFrame, "BOTTOMLEFT", 14, 11)
+footer:SetText("Personal settings save automatically")
+local versionText = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+versionText:SetPoint("BOTTOMRIGHT", settingsFrame, "BOTTOMRIGHT", -14, 11)
+versionText:SetText("v" .. iRC:GetDisplayVersion())
 
 local contentArea = CreateFrame("Frame", nil, settingsFrame, "BackdropTemplate")
-contentArea:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 6, 0)
-contentArea:SetPoint("BOTTOMRIGHT", settingsFrame, "BOTTOMRIGHT", -10, 10)
-contentArea:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 16,
-    insets = { left = 4, right = 4, top = 4, bottom = 4 },
-})
-contentArea:SetBackdropColor(0.08, 0.08, 0.10, 0.95)
-contentArea:SetBackdropBorderColor(0.60, 0.60, 0.70, 1)
+contentArea:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 10, 0)
+contentArea:SetPoint("BOTTOMRIGHT", settingsFrame, "BOTTOMRIGHT", -10, 30)
+StyleSettingsSurface(contentArea)
+
+local pageHeader = CreateFrame("Frame", nil, contentArea, "BackdropTemplate")
+pageHeader:SetPoint("TOPLEFT", 1, -1)
+pageHeader:SetPoint("TOPRIGHT", -1, -1)
+pageHeader:SetHeight(58)
+pageHeader.title = pageHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+pageHeader.title:SetPoint("TOPLEFT", 20, -12)
+pageHeader.subtitle = pageHeader:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+pageHeader.subtitle:SetPoint("TOPLEFT", 20, -34)
+pageHeader.subtitle:SetPoint("TOPRIGHT", -20, -34)
+pageHeader.subtitle:SetJustifyH("LEFT")
+local pageInfo = {
+    { "Personal Settings", "Choose how iRC looks and behaves for this character." },
+    { "Connection & Rules", "Review your guild connection and active rules." },
+    { "Roleplay", "Choose your character's chat style." },
+    { "About", "Addon information, support, and debugging." },
+    { "iWillRemember", "Player notes and shared memories." },
+    { "iNeedIfYouNeed", "Loot roll companion." },
+    { "iSealTwist", "Paladin swing timer and seal tracking." },
+    { "Guild Found", "Guild Found rules and exceptions." },
+    { L.TEST_ADMIN_TAB, "Testing and administration tools." },
+    { "Guild Notifications", "Messages shared with your guild." },
+    { "Guild Homepage", "Customize your guild's public profile." },
+    { "Diagnostic Tools", "Session troubleshooting and performance reports." },
+    { "Permissions", "Choose which guild ranks may use management tools." },
+}
 
 -- Panel construction and sidebar navigation --------------------------------
 
 local function CreateTabContent()
     local container = CreateFrame("Frame", nil, contentArea)
-    container:SetPoint("TOPLEFT", contentArea, "TOPLEFT", 5, -5)
+    container:SetPoint("TOPLEFT", contentArea, "TOPLEFT", 5, -62)
     container:SetPoint("BOTTOMRIGHT", contentArea, "BOTTOMRIGHT", -5, 5)
     container:Hide()
 
@@ -815,12 +976,16 @@ local function CreateTabContent()
     scrollFrame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
     scrollFrame:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -22, 0)
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-    scrollChild:SetWidth(550)
+    scrollChild:SetWidth(592)
     scrollChild:SetHeight(1)
     scrollFrame:SetScrollChild(scrollChild)
+    scrollFrame:HookScript("OnVerticalScroll", function()
+        if openSettingsDropdown then openSettingsDropdown:Hide() end
+    end)
     container.scrollFrame = scrollFrame
     container:EnableMouseWheel(true)
     container:SetScript("OnMouseWheel", function(_, delta)
+        if openSettingsDropdown then openSettingsDropdown:Hide() end
         local maximum = math.max(0, scrollChild:GetHeight() - scrollFrame:GetHeight())
         local position = math.max(0, math.min(maximum, scrollFrame:GetVerticalScroll() - delta * 30))
         scrollFrame:SetVerticalScroll(position)
@@ -846,22 +1011,29 @@ local sidebarButtons = {}
 local selectedTab = 2
 
 local function ShowTab(index)
+    if openSettingsDropdown then openSettingsDropdown:Hide() end
     selectedTab = index
+    pageHeader.title:SetText(pageInfo[index][1])
+    pageHeader.subtitle:SetText(pageInfo[index][2])
     for tabIndex, tab in ipairs(tabContents) do tab:SetShown(tabIndex == index) end
     for tabIndex, button in pairs(sidebarButtons) do
         if tabIndex == index then
-            button.bg:SetColorTexture(ORANGE[1], ORANGE[2], ORANGE[3], 0.25)
-            button.text:SetFontObject(GameFontHighlight)
+            button.selection:Show()
+            button.accent:Show()
+            button.text:SetTextColor(1, 0.73, 0.25)
         else
-            button.bg:SetColorTexture(0, 0, 0, 0)
-            button.text:SetFontObject(GameFontNormal)
+            button.selection:Hide()
+            button.accent:Hide()
+            button.text:SetTextColor(0.78, 0.74, 0.65)
         end
     end
 end
 
 local sidebarItems = {
     { type = "header", label = iRC.DisplayName },
+    { type = "tab", label = "Personal Settings", index = 1 },
     { type = "tab", label = "Connection & Rules", index = 2 },
+    { type = "tab", label = "Roleplay", index = 3 },
 }
 local standardSidebarItems = {
     { type = "tab", label = "About", index = 4 },
@@ -887,11 +1059,18 @@ for _, item in ipairs(sidebarItems) do
         sidebarY = sidebarY - 20
     else
         local button = CreateFrame("Button", nil, sidebar)
-        button:SetSize(sidebarWidth - 12, 26)
+        button:SetSize(sidebarWidth - 12, 30)
         button:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, sidebarY)
-        button.bg = button:CreateTexture(nil, "BACKGROUND")
-        button.bg:SetAllPoints(button)
-        button.bg:SetColorTexture(0, 0, 0, 0)
+        button.selection = button:CreateTexture(nil, "BACKGROUND")
+        button.selection:SetAllPoints(button)
+        button.selection:SetColorTexture(0.85, 0.52, 0.12, 0.14)
+        button.selection:Hide()
+        button.accent = button:CreateTexture(nil, "ARTWORK")
+        button.accent:SetPoint("TOPLEFT", 0, -3)
+        button.accent:SetPoint("BOTTOMLEFT", 0, 3)
+        button.accent:SetWidth(2)
+        button.accent:SetColorTexture(1, 0.67, 0.16, 1)
+        button.accent:Hide()
         button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         button.text:SetPoint("LEFT", button, "LEFT", 14, 0)
         button.text:SetText(item.label)
@@ -904,7 +1083,7 @@ for _, item in ipairs(sidebarItems) do
         button.homepageOnly = item.homepageOnly
         item.widget = button
         sidebarButtons[item.index] = button
-        sidebarY = sidebarY - 28
+        sidebarY = sidebarY - 32
     end
 end
 
@@ -922,7 +1101,7 @@ local function LayoutSidebar(managementAvailable)
                 offset = offset - 20
             else
                 widget:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, offset)
-                offset = offset - 28
+                offset = offset - 32
             end
         end
     end
@@ -1067,6 +1246,7 @@ do
 
     local function AddButton(text, column, yOffset, callback)
         local button = CreateFrame("Button", nil, diagnosticsContent, "UIPanelButtonTemplate")
+        StyleSettingsButton(button)
         button:SetSize(240, 25)
         button:SetPoint("TOPLEFT", diagnosticsContent, "TOPLEFT", 20 + column * 250, diagnosticY + yOffset)
         button:SetText(text)
@@ -1148,6 +1328,7 @@ do
     diagnosticOutput:SetText("Enable Diagnostic Tools, then choose a report.")
 
     local copyLogButton = CreateFrame("Button", nil, diagnosticsContent, "UIPanelButtonTemplate")
+    StyleSettingsButton(copyLogButton)
     copyLogButton:SetSize(150, 25)
     copyLogButton:SetPoint("TOPRIGHT", outputFrame, "BOTTOMRIGHT", 0, -8)
     copyLogButton:SetText("Copy Log")
@@ -1202,6 +1383,7 @@ pinSizeSlider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 pinSizeSlider:SetWidth(240)
 pinSizeSlider:SetMinMaxValues(5, 15)
 pinSizeSlider:SetValueStep(1)
+StyleSettingsSlider(pinSizeSlider)
 _G[pinSizeSlider:GetName() .. "Low"]:SetText("5")
 _G[pinSizeSlider:GetName() .. "High"]:SetText("15")
 _G[pinSizeSlider:GetName() .. "Text"]:SetText("")
@@ -1239,6 +1421,7 @@ slider:SetPoint("TOPLEFT", generalContent, "TOPLEFT", 20, y - 22)
 slider:SetWidth(240)
 slider:SetMinMaxValues(0.6, 2.0)
 slider:SetValueStep(0.05)
+StyleSettingsSlider(slider)
 _G[slider:GetName() .. "Low"]:SetText("60%")
 _G[slider:GetName() .. "High"]:SetText("200%")
 _G[slider:GetName() .. "Text"]:SetText("")
@@ -1330,6 +1513,7 @@ sameRaceLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 58, y - 22
 sameRaceLevelSlider:SetWidth(220)
 sameRaceLevelSlider:SetMinMaxValues(1, 60)
 sameRaceLevelSlider:SetValueStep(1)
+StyleSettingsSlider(sameRaceLevelSlider)
 _G[sameRaceLevelSlider:GetName() .. "Low"]:SetText("1")
 _G[sameRaceLevelSlider:GetName() .. "High"]:SetText("60")
 _G[sameRaceLevelSlider:GetName() .. "Text"]:SetText("")
@@ -1359,6 +1543,7 @@ guildGroupsLevelSlider:SetPoint("TOPLEFT", connectionContent, "TOPLEFT", 58, y -
 guildGroupsLevelSlider:SetWidth(220)
 guildGroupsLevelSlider:SetMinMaxValues(1, 60)
 guildGroupsLevelSlider:SetValueStep(1)
+StyleSettingsSlider(guildGroupsLevelSlider)
 _G[guildGroupsLevelSlider:GetName() .. "Low"]:SetText("1")
 _G[guildGroupsLevelSlider:GetName() .. "High"]:SetText("60")
 _G[guildGroupsLevelSlider:GetName() .. "Text"]:SetText("")
@@ -1569,6 +1754,7 @@ function iRC:ShowGuildFoundExceptions()
 end
 
 readOnlyRules.tradeExceptionsButton = CreateFrame("Button", nil, readOnlyRules, "UIPanelButtonTemplate")
+StyleSettingsButton(readOnlyRules.tradeExceptionsButton)
 readOnlyRules.tradeExceptionsButton:SetSize(190, 25)
 readOnlyRules.tradeExceptionsButton:SetPoint("TOPLEFT", readOnlyRules.rules, "BOTTOMLEFT", 0, -12)
 readOnlyRules.tradeExceptionsButton:SetText(L.RULES_TRADE_EXCEPTIONS_OPEN)
@@ -2410,48 +2596,10 @@ do
     local descriptionHeight = math.max(14, aboutDescription:GetStringHeight())
     y = y - descriptionHeight - 8
 
-    local communityTop = y
-    local communitySection = CreateFrame("Frame", nil, aboutContent)
-    communitySection:SetPoint("TOPLEFT", aboutContent, "TOPLEFT", 0, communityTop)
-    communitySection:SetPoint("TOPRIGHT", aboutContent, "TOPRIGHT", 0, communityTop)
-    y = 0
-    _, y = CreateSectionHeader(communitySection, L.COMMUNITY_HEADER, y)
-    _, y = CreateInfoText(communitySection, L.COMMUNITY_DESCRIPTION, y, "GameFontHighlight")
-    local communityBox = CreateFrame("EditBox", nil, communitySection, "InputBoxTemplate")
-    local communityHint
-    _, y = CreateSettingsButton(communitySection, L.COMMUNITY_JOIN, 200, y - 2, function()
-        if not CanShowCommunityInvite() then return end
-        communityHint:SetText(L.COMMUNITY_COPY_HINT)
-        communityBox:SetText(COMMUNITY_INVITE_URL)
-        communityBox:SetFocus()
-        communityBox:HighlightText()
-    end, L.COMMUNITY_JOIN_DESCRIPTION)
-    communityHint = communitySection:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    communityHint:SetPoint("TOPLEFT", communitySection, "TOPLEFT", 25, y)
-    communityHint:SetWidth(470)
-    communityHint:SetHeight(30)
-    communityHint:SetJustifyH("LEFT")
-    communityHint:SetJustifyV("TOP")
-    communityHint:SetText(L.COMMUNITY_LINK_HINT)
-    y = y - 32
-    communityBox:SetSize(470, 22)
-    communityBox:SetPoint("TOPLEFT", communitySection, "TOPLEFT", 25, y)
-    communityBox:SetAutoFocus(false)
-    communityBox:SetFontObject(GameFontHighlight)
-    communityBox:SetText(COMMUNITY_INVITE_URL)
-    communityBox:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
-    communityBox:SetScript("OnEditFocusLost", function(self)
-        self:HighlightText(0, 0)
-        self:SetText(COMMUNITY_INVITE_URL)
-    end)
-    communityBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    communityBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-    y = y - 32
-    local communityHeight = math.abs(y)
-
+    local footerTop = y
     local aboutFooter = CreateFrame("Frame", nil, aboutContent)
-    aboutFooter:SetPoint("TOPLEFT", communitySection, "BOTTOMLEFT", 0, 0)
-    aboutFooter:SetPoint("TOPRIGHT", communitySection, "BOTTOMRIGHT", 0, 0)
+    aboutFooter:SetPoint("TOPLEFT", aboutContent, "TOPLEFT", 0, footerTop)
+    aboutFooter:SetPoint("TOPRIGHT", aboutContent, "TOPRIGHT", 0, footerTop)
     y = 0
     _, y = CreateSectionHeader(aboutFooter, L.DISCORD_HEADER, y)
     y = y - 2
@@ -2492,18 +2640,7 @@ do
         function(value) iRC:GetSettings().debugMode = value and true or false end)
     local footerHeight = math.abs(y) + 20
     aboutFooter:SetHeight(footerHeight)
-    local function RefreshCommunityVisibility()
-        local shown = CanShowCommunityInvite()
-        if not shown then communityBox:ClearFocus() end
-        communitySection:SetShown(shown)
-        communitySection:SetHeight(shown and communityHeight or 1)
-        aboutContent:SetHeight(math.abs(communityTop) + (shown and communityHeight or 1) + footerHeight)
-    end
-    aboutContent:HookScript("OnShow", RefreshCommunityVisibility)
-    communitySection:RegisterEvent("PLAYER_ENTERING_WORLD")
-    communitySection:RegisterUnitEvent("UNIT_FACTION", "player")
-    communitySection:SetScript("OnEvent", RefreshCommunityVisibility)
-    RefreshCommunityVisibility()
+    aboutContent:SetHeight(math.abs(footerTop) + footerHeight)
 end
 
 local companionAddons = {
@@ -3607,33 +3744,32 @@ local function Refresh()
     raceRuleUI.lock:SetEnabled(isGuildMaster and guildActive and true or false)
     raceRuleUI.classLock:SetEnabled(isGuildMaster and guildActive and true or false)
     if isGuildMaster and raceLockEnabled then
-        UIDropDownMenu_EnableDropDown(raceRuleUI.race)
+        raceRuleUI.race:SetEnabled(true)
     else
-        UIDropDownMenu_DisableDropDown(raceRuleUI.race)
+        raceRuleUI.race:SetEnabled(false)
     end
     raceRuleUI.language:SetEnabled(isGuildMaster and raceLockEnabled and true or false)
     if isGuildMaster and guildActive then
-        UIDropDownMenu_EnableDropDown(progressionModeDropdown)
+        progressionModeDropdown:SetEnabled(true)
     else
-        UIDropDownMenu_DisableDropDown(progressionModeDropdown)
+        progressionModeDropdown:SetEnabled(false)
     end
     local maxLevelModeEnabled = isGuildMaster and guildActive and iRC:GetProgressionMode() == "SELF_FOUND"
-    if maxLevelModeEnabled then UIDropDownMenu_EnableDropDown(maxLevelProgressionDropdown)
-    else UIDropDownMenu_DisableDropDown(maxLevelProgressionDropdown) end
+    maxLevelProgressionDropdown:SetEnabled(maxLevelModeEnabled and true or false)
     local tradeExceptionsRuleEnabled = isGuildMaster and guildFoundPolicy
     guildFoundTradeExceptionsCheck:SetEnabled(tradeExceptionsRuleEnabled and true or false)
     guildMapRuleCheck:SetEnabled(isGuildMaster and guildActive and true or false)
     raceRuleUI.level60Message:SetEnabled(isGuildMaster and guildActive and true or false)
     if isGuildMaster and guildActive and iRC:GetConnectionRules().enableGuildLevel60Message then
-        UIDropDownMenu_EnableDropDown(levelAnnouncementDropdown)
+        levelAnnouncementDropdown:SetEnabled(true)
     else
-        UIDropDownMenu_DisableDropDown(levelAnnouncementDropdown)
+        levelAnnouncementDropdown:SetEnabled(false)
     end
     raceRuleUI.professionMessage:SetEnabled(isGuildMaster and guildActive and true or false)
     if isGuildMaster and guildActive and iRC:GetConnectionRules().enableGuildProfessionMessage then
-        UIDropDownMenu_EnableDropDown(professionAnnouncementDropdown)
+        professionAnnouncementDropdown:SetEnabled(true)
     else
-        UIDropDownMenu_DisableDropDown(professionAnnouncementDropdown)
+        professionAnnouncementDropdown:SetEnabled(false)
     end
     local deathMessageAvailable = iRC:IsOfficialHardcoreRealm()
     raceRuleUI.deathMessage:Show()

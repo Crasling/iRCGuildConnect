@@ -2,6 +2,17 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.12 - Guild Progress
+--------------------------------------------------------------------------------
+[ADDED] Guild Progress shows members' raid and PvP achievements
+[ADDED] Guild List shows raid clears, top PvP title and a guild PvP score
+[IMPROVED] Opening a guild scrolls its details into view
+[IMPROVED] Separate PvE and PvP sort buttons in Guild List
+[IMPROVED] Guild List columns show raid or PvP results when sorting by progress
+[IMPROVED] Expanded guild details take less vertical space
+[CHANGED] Removed the community invite from About
+[FIXED] Guild Found blocks inbox auto-loot for restricted mail
+
 v0.7.11 - Guild Improvements
 --------------------------------------------------------------------------------
 [IMPROVED] Guild member professions are easier to read
