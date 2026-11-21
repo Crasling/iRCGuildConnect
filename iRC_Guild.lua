@@ -848,7 +848,8 @@ frame:SetScript("OnEvent", function(_, event, clubId)
                 local now = GetTime and GetTime() or 0
                 if mainFrame and mainFrame:IsShown()
                     and (category == "Guild Members" or category == "Guild Overview"
-                        or category == "Guild Log" or category == "Member Management")
+                        or category == "Guild Log" or category == "Member Management"
+                        or category == "Race Overview")
                     and now - lastVisibleRosterRefreshAt >= 30 then
                     -- Forever does not reliably push another officer's roster
                     -- changes to every client. Request a current native roster
@@ -884,7 +885,8 @@ frame:SetScript("OnEvent", function(_, event, clubId)
                 and (iRC.MainUI.frame.category == "Guild Members"
                     or iRC.MainUI.frame.category == "Guild Overview"
                     or iRC.MainUI.frame.category == "Guild Log"
-                    or iRC.MainUI.frame.category == "Member Management") then
+                    or iRC.MainUI.frame.category == "Member Management"
+                    or iRC.MainUI.frame.category == "Race Overview") then
                 iRC.MainUI:RefreshIfShown()
             end
         end

@@ -7694,18 +7694,26 @@ local function measureGuildText(text, width, fontObject)
     return math.max(14, measure:GetStringHeight())
 end
 
-local RAID_PROGRESS_NAMES = { [62035] = "Barrow Deeps", [62034] = "Hyjal Summit", [684] = "Onyxia's Lair" }
+-- Legacy reports a full-clear challenge for each raid, not individual boss kills.
+local RAID_PROGRESS_INFO = {
+    [62035] = { name = "Barrow Deeps", bosses = 8 },
+    [62034] = { name = "Hyjal Summit", bosses = 13 },
+    [684] = { name = "Onyxia's Lair", bosses = 1 },
+}
 
 local function guildProgressText(group)
     local lines = {}
     local pve = group.progress and group.progress.PVE
     if pve and pve.raids and #pve.raids > 0 then
         for _, raid in ipairs(pve.raids) do
+            local info = RAID_PROGRESS_INFO[raid.id]
+            local bosses = info and info.bosses or 1
+            local clearedBosses = raid.state == "NONE" and 0 or bosses
             local color = raid.state == "CLEARED" and iRC.Colors.Green
                 or raid.state == "YELLOW" and iRC.Colors.Yellow or iRC.Colors.Gray
             local state = raid.state == "NONE" and "Not cleared" or "Cleared"
-            lines[#lines + 1] = (RAID_PROGRESS_NAMES[raid.id] or "Raid") .. ": "
-                .. color .. state .. iRC.Colors.Reset .. "  (" .. raid.count .. "/" .. raid.size .. ")"
+            lines[#lines + 1] = (info and info.name or "Raid") .. ": "
+                .. color .. state .. " (" .. clearedBosses .. "/" .. bosses .. ")" .. iRC.Colors.Reset
         end
     else
         lines[#lines + 1] = iRC.Colors.Gray .. "PvE: No raid progress reported." .. iRC.Colors.Reset
@@ -8197,7 +8205,8 @@ local function updateRaceOverview(frame)
         for _, group in ipairs(allGroups) do
             if tostring(group.guildName or ""):match("^%s*(.-)%s*$"):lower() == ownGuildKey
                 and group.serverRuleset == iRC:GetGuildDirectoryScope()
-                and (not group.serverName or group.serverName == "" or GetRealmName and group.serverName == GetRealmName()) then
+                and (iRC:IsForeverClient() or not group.serverName or group.serverName == ""
+                    or GetRealmName and group.serverName == GetRealmName()) then
                 ownGuilds[1] = group
                 break
             end

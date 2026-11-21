@@ -2,6 +2,13 @@
 iRC - Changelog
 ================================================================================
 
+v0.7.13 - Guild Notes & Directory
+--------------------------------------------------------------------------------
+[CHANGED] Guild raid progress shows boss totals instead of raid team sizes
+[CHANGED] Update officers to 0.7.13 for Member Notes to sync across Forever's internal realms
+[FIXED] Member Notes remain visible when Forever does not provide a realm name, without losing saved notes
+[FIXED] My Guild recognizes your guild across internal realm labels and refreshes after roster updates
+
 v0.7.12 - Guild Progress
 --------------------------------------------------------------------------------
 [ADDED] Guild Progress shows members' raid and PvP achievements

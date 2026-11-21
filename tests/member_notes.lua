@@ -29,6 +29,7 @@ local function client(name, permissions)
         return frame
     end
     function addon:GetConnection() return self.connection end
+    function addon:IsForeverClient() return self.forever == true end
     function addon:GetGuildKey() return self.guild end
     function addon:GetGuildDirectoryScope() return self.scope end
     function addon:IsGuildConnectionActive() return self.connection.active end
@@ -319,6 +320,39 @@ periodicAuthor.tickers[1].run(); periodicReader.tickers[1].run(); periodicMember
 assert(#sent == stopped, "periodic checks pause without notes permission or an active guild connection")
 roles[periodicAuthor.name].notesView = true
 periodicReader.connection.active = true
+
+local forever = client("Forever Officer", { notesView = true, notesAdd = true, notesManage = true })
+forever.forever = true
+forever.env.GetNormalizedRealmName = function() return nil end
+forever.env.GetRealmName = function() return nil end
+local canonicalScope = forever.scope .. ":forever:" .. forever.guild
+local oldScope = forever.scope .. ":old-internal-realm:" .. forever.guild
+local foreignScope = forever.scope .. ":old-internal-realm:another-guild"
+local oldOperation = {}
+for key, value in pairs(first) do oldOperation[key] = value end
+oldOperation.scope = oldScope
+local foreignOperation = {}
+for key, value in pairs(second) do foreignOperation[key] = value end
+foreignOperation.scope = foreignScope
+forever.connection.memberNotes = {
+    [oldScope] = { operations = { [oldOperation.id] = oldOperation }, sequence = 4, count = 1 },
+    [foreignScope] = { operations = { [foreignOperation.id] = foreignOperation }, sequence = 2, count = 1 },
+}
+assert(forever.MemberNotes:GetScope() == canonicalScope and forever.MemberNotes:CanView(),
+    "Forever member notes remain available when both realm APIs return nil")
+local otherRealm = client("Other Forever Officer", { notesView = true })
+otherRealm.forever = true
+otherRealm.env.GetNormalizedRealmName = function() return "different-internal-realm" end
+assert(otherRealm.MemberNotes:GetScope() == canonicalScope,
+    "Forever guildmates share a notes scope despite different internal realm labels")
+local migrated = assert(forever.MemberNotes:GetStore(false))
+assert(migrated.operations[oldOperation.id] and migrated.operations[oldOperation.id].scope == canonicalScope
+    and not migrated.operations[foreignOperation.id] and migrated.count == 1
+    and migrated.sequence == 4 and oldOperation.scope == oldScope,
+    "legacy realm-scoped notes migrate without changing saved originals or copying another guild")
+assert(forever.MemberNotes:GetRecord(oldOperation.noteID), "migrated notes remain visible in history")
+forever.forever = false
+assert(not forever.MemberNotes:CanView(), "non-Forever notes still require a realm")
 
 local core = read("iRC_Core.lua")
 assert(core:find('prefix == "iRCNotesV1"',1,true) and core:find('self.MemberNotes:CanSendPacket',1,true), "the real queue guards private packets")

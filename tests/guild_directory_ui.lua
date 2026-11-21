@@ -280,6 +280,26 @@ assert(card.detailsGuildName:IsVisible() and card.detailsGuildName:GetText() == 
     "the expanded details clearly identify their guild")
 assert(visibleText(card):find(live.guildDescription, 1, true), "expanded information includes the guild description")
 assert(visibleText(card):find("Saved Contact", 1, true), "expanded information includes published contacts")
+local raidPreview = deepCopy(live)
+raidPreview.progress = { PVE = { raids = {
+    { id = 684, count = 40, size = 40, state = "CLEARED" },
+    { id = 62034, count = 10, size = 20, state = "YELLOW" },
+    { id = 62035, count = 0, size = 10, state = "NONE" },
+} } }
+addon.Colors.Green, addon.Colors.Yellow, addon.Colors.Gray, addon.Colors.Reset =
+    "|cFF00FF00", "|cFFFFFF00", "|cFF808080", "|r"
+render.set(card, raidPreview, true)
+local raidRichText = card.progressText:GetText()
+local raidText = plainText(raidRichText)
+assert(raidText:find("Onyxia's Lair: Cleared (1/1)", 1, true)
+    and raidText:find("Hyjal Summit: Cleared (13/13)", 1, true)
+    and raidText:find("Barrow Deeps: Not cleared (0/8)", 1, true)
+    and not raidText:find("40/40", 1, true),
+    "raid details show boss totals while member counts still decide clear status")
+assert(raidRichText:find("|cFF00FF00Cleared (1/1)|r", 1, true)
+    and raidRichText:find("|cFFFFFF00Cleared (13/13)|r", 1, true),
+    "full guild clears are green and half-team clears remain yellow")
+addon.Colors.Green, addon.Colors.Yellow, addon.Colors.Gray, addon.Colors.Reset = nil, nil, nil, nil
 render.set(card, live, false)
 assert(not card.classBar:IsVisible() and not visibleText(card):find("Saved Contact", 1, true), "collapsing hides expanded children")
 assert(not card.details:IsVisible(), "collapsing hides the detail panel")
@@ -723,6 +743,16 @@ directory.guildStatsSearch:SetText("other realm")
 assert(render.directory(directory, "ALL", "ALL") == 1, "guild search also finds the report's realm")
 GetGuildInfo, GetRealmName = oldGuildInfo, oldRealm
 function addon:IsForeverClient() return true end
+local sameForeverGuild = deepCopy(home)
+sameForeverGuild.serverName = "CAMWOW EU4 Realm 6 PvE"
+function addon:GetGuildDirectoryOverview() return { sameForeverGuild } end
+GetGuildInfo = function() return sameForeverGuild.guildName end
+GetRealmName = function() return "CAMWOW EU4 Realm 2 PvE" end
+directory.guildStatsSearch:SetText("")
+assert(render.directory(directory, "ALL", "ALL") == 1
+    and directory.factionSections.MyGuild:IsShown(),
+    "Forever's internal realm label must not hide the player's own guild")
+GetGuildInfo, GetRealmName = oldGuildInfo, oldRealm
 local internalRealm = deepCopy(abroad)
 internalRealm.serverName = "CAMWOW EU4 Realm 6 PvP"
 render.set(card, internalRealm, false)

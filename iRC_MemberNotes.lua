@@ -12,6 +12,7 @@ local peers, transfers, requests = {}, {}, {}
 local requestTimes, manifestTimes = {}, {}
 local pendingManifests, snapshots, sessionScope = {}, {}, nil
 local lastHello, sequence = -math.huge, 0
+local migratedStores = setmetatable({}, { __mode = "k" })
 
 local function integer(value, minimum, maximum)
     return type(value) == "number" and value == value and value >= minimum
@@ -49,10 +50,23 @@ end
 function Notes:GetScope()
     if not iRC:IsGuildConnectionActive() or not iRC:GetConnection() then resetSession(nil); return nil end
     local server = iRC:GetGuildDirectoryScope()
-    local realm = GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName and GetRealmName()
     local guild = iRC:GetGuildKey()
-    if iRC:HasSecretValues(server, realm, guild) or type(server) ~= "string" or server == ""
-        or type(realm) ~= "string" or realm == "" or type(guild) ~= "string" or guild == "" then resetSession(nil); return nil end
+    if iRC:HasSecretValues(server, guild) or type(server) ~= "string" or server == ""
+        or type(guild) ~= "string" or guild == "" then resetSession(nil); return nil end
+    local realm
+    if iRC:IsForeverClient() then
+        -- Forever's internal realm label can be absent or differ between guildmates.
+        realm = "forever"
+    else
+        realm = GetNormalizedRealmName and GetNormalizedRealmName()
+        if iRC:IsSecretValue(realm) or type(realm) ~= "string" or realm == "" then
+            realm = GetRealmName and GetRealmName()
+        end
+        if iRC:IsSecretValue(realm) or type(realm) ~= "string" or realm == "" then
+            resetSession(nil)
+            return nil
+        end
+    end
     local scope = server .. ":" .. realm:lower() .. ":" .. guild
     resetSession(scope)
     return scope
@@ -66,12 +80,15 @@ function Notes:Can(permission)
     return self:CanView() and iRC:HasGuildPermission(permission) == true
 end
 
+local migrateLegacyForeverStore
+
 function Notes:GetStore(create)
     if not self:CanView() then return nil end
     local scope, connection = self:GetScope(), iRC:GetConnection()
     if not connection.memberNotes and create then connection.memberNotes = {} end
     local stores = connection.memberNotes
     if not stores then return nil end
+    if iRC:IsForeverClient() then migrateLegacyForeverStore(connection, stores, scope) end
     if not stores[scope] and create then stores[scope] = { operations = {}, sequence = 0, count = 0 } end
     return stores[scope]
 end
@@ -138,6 +155,51 @@ local function validOperation(operation, scope)
     if operation.action == "RESOLVE" then return operation.strike and operation.status == "RESOLVED" and operation.reason ~= "" end
     if operation.action == "REVOKE" then return operation.strike and operation.status == "REVOKED" and operation.reason ~= "" end
     return operation.status ~= "DELETED" and (operation.strike or operation.status == "ACTIVE")
+end
+
+migrateLegacyForeverStore = function(connection, stores, scope)
+    local seen = migratedStores[connection]
+    if seen and seen[scope] then return end
+    if not seen then seen = {}; migratedStores[connection] = seen end
+    seen[scope] = true
+    local server, guild = scope:match("^([^:]+):forever:([^:]+)$")
+    if not server or not guild then return end
+    local target = stores[scope]
+    if target and type(target.operations) ~= "table" then return end
+    if target then
+        target.count = 0
+        for _ in pairs(target.operations) do target.count = target.count + 1 end
+    end
+    local sources = {}
+    for legacyScope, source in pairs(stores) do
+        local oldServer, oldRealm, oldGuild
+        if type(legacyScope) == "string" then
+            oldServer, oldRealm, oldGuild = legacyScope:match("^([^:]+):([^:]+):([^:]+)$")
+        end
+        if legacyScope ~= scope and oldServer == server and oldRealm and oldGuild == guild
+            and type(source) == "table" and type(source.operations) == "table" then
+            sources[#sources + 1] = { scope = legacyScope, store = source }
+        end
+    end
+    for _, legacy in ipairs(sources) do
+        for id, operation in pairs(legacy.store.operations) do
+            if type(id) == "string" and type(operation) == "table" and id == operation.id
+                and validOperation(operation, legacy.scope) then
+                if not target then
+                    target = { operations = {}, sequence = 0, count = 0 }
+                    stores[scope] = target
+                end
+                if not target.operations[id] and target.count < MAX_RECORDS then
+                    local copy = {}
+                    for key, value in pairs(operation) do copy[key] = value end
+                    copy.scope = scope
+                    target.operations[id] = copy
+                    target.count = target.count + 1
+                end
+            end
+        end
+        if target then target.sequence = math.max(tonumber(target.sequence) or 0, tonumber(legacy.store.sequence) or 0) end
+    end
 end
 
 local function newer(a, b)
